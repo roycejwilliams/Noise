@@ -26,7 +26,7 @@ import { callClosing, runCallLlm, SAFETY_LINE, safetyCall, type ARequest, type A
 import { AGENT_DEFAULTS, callSituation, promptForElevenLabs, SPOKEN_ALOUD, withCallSituation, withVoiceReadRule, type CallAskedBy } from "./elevenLabsCalls.js";
 import { CUE_GUIDE, stripCues } from "./voiceCues.js";
 import { MAKER_DECLINE_RULE, NO_GRADING_LINE, OTHERS_LINE } from "./coVoice.js";
-import { HEARD_OR_HELPED } from "./coCore.js";
+import { FACTS_OVER_FEELING, HEARD_OR_HELPED } from "./coCore.js";
 import { parseModelJson } from "./modelJson.js";
 
 export const GPT_LIVE = {
@@ -335,7 +335,7 @@ export const BACKEND_FEEL = `Ask when the answer helps, one question at a time, 
 // 2026-11-07 call review: the member said "I don't know" about what another member wants, and Cue declared "It's a values mismatch",
 // then asked the same thing twice. Text has the same line (services/coVoice.ts VOICE_OTHERS). Guidance only.
 // Venting and wanting help aren't separate boxes (Royce, 2026-11-09): the same line texts read in CO_LISTENING, on calls too.
-export const BACKEND_OTHERS = `${OTHERS_LINE} ${NO_GRADING_LINE} ${HEARD_OR_HELPED}`;
+export const BACKEND_OTHERS = `${OTHERS_LINE} ${NO_GRADING_LINE} ${HEARD_OR_HELPED} ${FACTS_OVER_FEELING}`;
 export const BACKEND_NOTE = `# How this call runs
 This is a live phone call, and you are the thinking behind the voice. A voice model speaks for you: it says what you write here in its own words, so write only what Cue says next: the one thing worth saying now, usually a sentence or two, and longer only when they asked for something that needs it. A safety moment says all it needs, now, never saved for a later turn. They can't skim a phone call, and while the voice talks they wait to speak. Plain spoken sentences, no lists, no brackets, no stage directions. When it takes several steps, say the first few as short complete steps and stop there so they can say go on; never leave a step, a condition or a safety instruction half said. The conversation comes from speech recognition both ways and can hold mistakes, half phrases and later corrections: go by the latest. What you can do on this call, if anything, is in the note that comes with each turn. When they clearly are wrapping up, the voice has already said its own short goodbye: if the call should end, use your tool that ends the call and write nothing; if it shouldn't, answer as usual. Once they've said goodbye and the voice has said its goodbye, a stray trailing word or a "you too", "cool" or "thanks" isn't new conversation: end the call the same way and write nothing. Never add a second goodbye line. ${BACKEND_FEEL} ${BACKEND_OTHERS}`;
 
