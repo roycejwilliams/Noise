@@ -115,7 +115,14 @@ export function pictureEntries(k: MemberKnowledge, o: { skip?: (kind: "lesson" |
       const nm = name ? q(name) : "an event";
       const upcoming = ev.when === "upcoming";
       const when = ev.date ? `, ${ev.date}` : "";
-      if (ev.plan) {
+      if (ev.plan?.registration) {
+        // A registration Cue submitted for them: a plan, with the page's own status. Pending or waitlisted is never "going"; registered
+        // is never "attended". Their reason belongs to this event only and says whose words it is.
+        const r = ev.plan.registration;
+        const head = r.status === "registered" ? `A plan to go to ${nm}${when} (registered through Cue)` : r.status === "pending_approval" ? `Asked to go to ${nm}${when} (submitted, pending the host's approval; not confirmed)` : `On the waitlist for ${nm}${when} (not confirmed)`;
+        const reason = r.reason ? (r.reasonSource === "their_words" ? `; their reason for this event: ${q(cl(r.reason) ?? "")}` : `; a reason they approved for this event (Cue's draft): ${q(cl(r.reason) ?? "")}`) : "";
+        add({ section: "events", id: `${base}p`, src: ev.plan.source, date: day(ev.plan.on, tz), prov: "said", text: `${head}${reason}`, open: upcoming, kind: "plan" });
+      } else if (ev.plan) {
         const inferred = ev.plan.prov === "inferred";
         add({ section: "events", id: `${base}p`, src: ev.plan.source, date: day(ev.plan.on, tz), prov: ev.plan.prov, text: `${inferred ? "Seems to be a plan to go to" : "A plan to go to"} ${nm}${when}${said(ev.plan.quote)}`, open: upcoming, kind: "plan" });
       }

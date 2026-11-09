@@ -337,6 +337,7 @@
     "evals/registration/core.ts",
     "evals/registration/driver.ts",
     "evals/registration/conversation.ts",
-    "evals/registration/codeNeverKept.ts"
+    "evals/registration/codeNeverKept.ts",
+    "evals/registration/followThrough.ts"
   ]
 }

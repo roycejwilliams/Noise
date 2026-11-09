@@ -203,7 +203,7 @@ if (browser) {
   // Counts every submit any session makes, by event: the duplicate checks read it.
   const driver = { ...realDriver, open: async (url: string) => { const s = await realDriver.open(url); const sub = s.submit; s.submit = async () => { submitted.push(url); return sub(); }; return s; } };
   const finds = FIX.filter((f) => f.slug !== "brought-night").map((f) => ({ key: `event:${f.slug}`, name: f.name!, url: `https://lu.ma/${f.slug}`, details: { startAt: "2026-11-21T02:00:00.000Z", timezone: "America/Los_Angeles", hosts: [] } }));
-  const { q, rows } = fakeRegistrations(() => new Date(clock));
+  const { q, rows, plans } = fakeRegistrations(() => new Date(clock));
   let clock = Date.parse("2026-11-09T18:00:00Z");
   const tick = () => new Date((clock += 60_000));
   let latestFromThem: Date | null = null;
@@ -253,6 +253,7 @@ if (browser) {
     const yes = await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
     check("confirmed registration: registered, and said as it is", yes.ok && yes.status === "registered" && yes.sendThisWordForWord === "You're registered for Demo Night, Fri Nov 20, 6:00 PM. Luma's confirmation goes to jordan@example.com.\nhttps://luma.com/demo-night", yes);
     check("submitted exactly once", submitted.filter((u) => /demo-night/.test(u)).length === 1, submitted);
+    check("follow-through: the confirmed registration became a plan (registered), never attendance", plans.some((p) => p.event_name_raw === "Demo Night" && p.registration_status === "registered" && p.embedding === null), plans);
     const again = await turn("yes").run("registerForEvent", { registrationId: r.registrationId, theirYes: "yes" });
     check("duplicate: a second yes doesn't register again; says already registered", /already registered|You're registered/.test(again.sendThisWordForWord ?? "") && submitted.filter((u) => /demo-night/.test(u)).length === 1, again);
     const re = await turn("sign me up for demo night").run("prepareEventRegistration", { event: "Demo Night" });

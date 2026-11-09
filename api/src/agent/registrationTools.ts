@@ -306,7 +306,12 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
     }
     // The page's words are kept as the outcome's detail, but never the member's own name or email in them.
     const outcome: R.Outcome = { state: res.state, link: res.link ?? rec.eventUrl, linkKind: res.linkKind, detail: redactMember(res.detail, [c.email, ...Object.values(rec.answers).map((a) => a.value)], await factsFor(rec)), at };
-    await S.recordOutcome(userId, rec.id, outcome, res.state as R.Status, q);
+    const settled = await S.recordOutcome(userId, rec.id, outcome, res.state as R.Status, q);
+    // On (or waiting for) the guest list: a plan in their picture and, once confirmed, intent for the debrief. Never attendance.
+    if (settled && R.FINAL.has(settled.status)) {
+      const { recordRegistrationPlan } = await import("../services/eventRegistration/followThrough.js");
+      await recordRegistrationPlan(userId, settled, q).catch((err: any) => console.error("registration: recording the plan failed (non-fatal):", err?.message ?? err));
+    }
     const text = C.outcomeLine(c, res.state, { detail: res.detail, link: outcome.link });
     if (res.state === "failed") {
       notDone(`The registration for ${c.eventName} didn't go through.`);

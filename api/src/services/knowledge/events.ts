@@ -29,7 +29,10 @@ export type EventProv = "said" | "seen" | "did" | "inferred";
 export type Q = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
 
 export type RawPresence = { eventId: string; arrivedAt: Date | null; arrivedVia: string | null; notGoingAt: Date | null; metAt: Date | null; metQuote: string | null; noshowOutcome: string | null };
-export type RawPlan = { id: string; name: string; date: string | null; provenance: string | null; quote: string | null; at: Date };
+// registration: a plan that is a registration Cue submitted for them (services/eventRegistration/followThrough.ts): its status as the
+// page said it, and the reason they approved for THAT event only (their own words, or a draft of Cue's they approved), kept apart.
+export type PlanRegistration = { status: "registered" | "pending_approval" | "waitlisted"; reason: string | null; reasonSource: "their_words" | "approved_draft" | null };
+export type RawPlan = { id: string; name: string; date: string | null; provenance: string | null; quote: string | null; at: Date; registration?: PlanRegistration | null };
 export type RawOffer = { eventId: string; name: string; date: string | null; at: Date };
 export type RawOutcome = { key: string; name: string; result: string; provenance: string | null; quote: string | null; at: Date };
 export type RawFollowThrough = { eventId: string; people: number; at: Date };
@@ -42,7 +45,7 @@ export type EventItem = {
   name: string | null;
   date: string | null;
   when: "upcoming" | "passed" | "undated";
-  plan: { source: string; on: string; prov: "said" | "inferred"; quote: string | null } | null;
+  plan: { source: string; on: string; prov: "said" | "inferred"; quote: string | null; registration?: PlanRegistration | null } | null;
   offered: { source: string; on: string; prov: "did" } | null;
   attendance: { source: string; on: string; state: "attended" | "not_going"; via: "door" | "location" | "text" | "said" | null; prov: "said" | "seen"; quote: string | null } | null;
   outcomes: { source: string; on: string; result: string; prov: "said" | "inferred"; quote: string | null }[];
@@ -76,7 +79,7 @@ export async function loadEvents(userId: string, q: Q): Promise<RawEvents> {
        WHERE user_id = $1 AND (arrived_at IS NOT NULL OR not_going_at IS NOT NULL OR met_someone_at IS NOT NULL OR noshow_outcome IS NOT NULL)`,
       [userId],
     ),
-    q.query(`SELECT id, event_name_raw, event_date, provenance, quote, created_at FROM planned_event_mentions WHERE user_id = $1`, [userId]),
+    q.query(`SELECT id, event_name_raw, event_date, provenance, quote, created_at, registration_status, reason, reason_source FROM planned_event_mentions WHERE user_id = $1`, [userId]),
     q.query(
       `SELECT payload->'match'->>'event_api_id' AS event_api_id, payload->'match'->>'name' AS name, payload->'match'->>'event_date' AS event_date, COALESCE(decided_at, updated_at) AS at
        FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND payload->'match'->>'kind' IN ('co_event', 'public_event')`,
@@ -97,7 +100,7 @@ export async function loadEvents(userId: string, q: Q): Promise<RawEvents> {
   }
   return {
     presence: pres.rows.map((r) => ({ eventId: String(r.event_api_id), arrivedAt: r.arrived_at ? new Date(r.arrived_at) : null, arrivedVia: r.arrived_via ?? null, notGoingAt: r.not_going_at ? new Date(r.not_going_at) : null, metAt: r.met_someone_at ? new Date(r.met_someone_at) : null, metQuote: r.met_quote ?? null, noshowOutcome: r.noshow_outcome ?? null })),
-    plans: plans.rows.map((r) => ({ id: String(r.id), name: String(r.event_name_raw ?? ""), date: day(r.event_date), provenance: r.provenance ?? null, quote: r.quote ?? null, at: new Date(r.created_at) })),
+    plans: plans.rows.map((r) => ({ id: String(r.id), name: String(r.event_name_raw ?? ""), date: day(r.event_date), provenance: r.provenance ?? null, quote: r.quote ?? null, at: new Date(r.created_at), registration: planRegistration(r) })),
     offers: offers.rows.filter((r) => r.event_api_id && r.name).map((r) => ({ eventId: String(r.event_api_id), name: String(r.name), date: r.event_date ? String(r.event_date).slice(0, 10) : null, at: new Date(r.at) })),
     outcomes: outs.rows.map((r) => ({ key: String(r.item_key), name: String(r.item_name ?? ""), result: String(r.result), provenance: r.provenance ?? null, quote: r.quote ?? null, at: new Date(r.created_at) })),
     followThroughs: fts.rows.map((r) => ({ eventId: String(r.event_id), people: Number(r.people_count) || 0, at: new Date(r.sent_at) })),
@@ -114,6 +117,14 @@ export type EventGuards = { g: (text: string) => string | null; gone: (ref: stri
 
 // Drops what they removed and cuts what they forgot, on the raw rows, before anything is built. A removed event goes whole: by its ref,
 // or because its name says the removed thing.
+// Pure: a plan row's registration, when it is one (a known status only).
+export function planRegistration(r: { registration_status?: unknown; reason?: unknown; reason_source?: unknown }): PlanRegistration | null {
+  const s = String(r.registration_status ?? "");
+  if (s !== "registered" && s !== "pending_approval" && s !== "waitlisted") return null;
+  const src = r.reason_source === "their_words" || r.reason_source === "approved_draft" ? r.reason_source : null;
+  return { status: s, reason: src && typeof r.reason === "string" && r.reason.trim() ? r.reason : null, reasonSource: src };
+}
+
 export function guardEvents(raw: RawEvents, G: EventGuards): RawEvents {
   const nameOk = (n: string) => !!n.trim() && G.g(n) === n && !G.named?.(n);
   const words = (t: string | null) => {
@@ -126,7 +137,7 @@ export function guardEvents(raw: RawEvents, G: EventGuards): RawEvents {
   return {
     info: raw.info.filter((i) => eventOk(i.eventId)),
     presence: raw.presence.filter((p) => eventOk(p.eventId)).map((p) => ({ ...p, metQuote: words(p.metQuote) })),
-    plans: raw.plans.filter((p) => !G.gone(`plan:${p.id}`) && !G.gone(`event:${p.id}`) && nameOk(p.name)).map((p) => ({ ...p, quote: words(p.quote) })),
+    plans: raw.plans.filter((p) => !G.gone(`plan:${p.id}`) && !G.gone(`event:${p.id}`) && nameOk(p.name)).map((p) => ({ ...p, quote: words(p.quote), ...(p.registration ? { registration: { ...p.registration, reason: words(p.registration.reason) } } : {}) })),
     offers: raw.offers.filter((o) => eventOk(o.eventId) && nameOk(o.name)),
     outcomes: raw.outcomes.filter((o) => (!o.key.startsWith("event:") || eventOk(o.key.slice(6))) && !G.gone(o.key) && nameOk(o.name)).map((o) => ({ ...o, quote: words(o.quote) })),
     followThroughs: raw.followThroughs.filter((f) => eventOk(f.eventId)),
@@ -229,7 +240,8 @@ export function eventsOf(raw: RawEvents, o: { now: Date; budget?: number; timeZo
     const d = same ?? (() => { const x = blank(`plan:${p.id}`, p.name.trim(), p.date, null); standalone.push(x); return x; })();
     if (same && !d.item.date && p.date) d.item.date = p.date;
     const stated = p.provenance === "stated";
-    d.item.plan = { source: "planned_event_mentions", on: p.at.toISOString(), prov: stated ? "said" : "inferred", quote: clip(p.quote) };
+    // A registration is a plan, never attendance: its status rides on the plan, and only evidence below ever makes it "attended".
+    d.item.plan = { source: "planned_event_mentions", on: p.at.toISOString(), prov: stated ? "said" : "inferred", quote: clip(p.quote), ...(p.registration ? { registration: { ...p.registration, reason: clip(p.registration.reason) } } : {}) };
     if (stated) d.hasSaid = true;
     touch(d, p.at);
   }
