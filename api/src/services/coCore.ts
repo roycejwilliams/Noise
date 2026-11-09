@@ -13,13 +13,13 @@ import { CO_VOICE } from "./coVoice.js";
 
 // How Co listens. Written the way Co should talk (it copies the style of its
 // own instructions): short sentences, no dashes, no sample lines to copy.
-// Venting and wanting help aren't separate boxes (Royce, 2026-11-09). One line, read by texts (here) and calls (services/gptLive.ts
-// BACKEND_OTHERS, services/elevenLabsCalls.ts CALL_FROM_CORE).
+// Venting and wanting help aren't separate boxes (Royce, 2026-11-09). One line, read by texts (here) and calls (services/elevenLabsCalls.ts
+// CALL_FROM_CORE, which reaches both the ElevenLabs prompt and the GPT-Live backend prompt through promptForElevenLabs).
 export const HEARD_OR_HELPED = `Venting and wanting help aren't separate boxes. Receive the human moment first. Don't push a solution into a moment that doesn't call for one, and don't hold back useful help when they clearly want it. When they ask for direction, or keep turning a decision over, give a real answer now, not later.`;
 
 // Facts over feelings when they ask what to do (Royce, 2026-11-09: on a call Cue said an email thread doesn't protect IP the way a
 // signed agreement would, then flipped to "circle back to paperwork later" once he said his gut felt calm, though he'd said the IP was
-// exactly what he wanted to protect). Texts (here) and calls (services/gptLive.ts BACKEND_OTHERS, services/elevenLabsCalls.ts CALL_FROM_CORE).
+// exactly what he wanted to protect). Texts (here) and calls (services/elevenLabsCalls.ts CALL_FROM_CORE).
 export const FACTS_OVER_FEELING = `When they ask whether to worry or what to do, answer from the facts they gave you, not from how they feel about it: reassurance never overrides what they said matters.`;
 
 export const CO_LISTENING = `How you listen, on a text or a call:
