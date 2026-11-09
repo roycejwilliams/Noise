@@ -332,6 +332,7 @@
     "evals/docs/readDocument.ts",
     "evals/capabilities/directAsk.ts",
     "evals/member/matchPicture.ts",
-    "evals/momentFit/today.ts"
+    "evals/momentFit/today.ts",
+    "evals/registration/core.ts"
   ]
 }

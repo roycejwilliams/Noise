@@ -3331,4 +3331,11 @@ export async function concurrencyMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("member_day_summaries init failed:", err));
+  // One member's registration for one other host's Luma event (services/eventRegistration/registrationStore.ts, 2026-11-09): the form
+  // as read, the scope they were asked, their approved answers for that registration, the status and the page's real outcome. One row
+  // per member and event, so a second yes or a retried turn never registers twice. New and empty: nothing existing is touched, and
+  // nothing writes to it while live submission is off (lumaDriver.ts LUMA_LIVE_SUBMIT_APPROVED).
+  await import("../services/eventRegistration/registrationStore.js")
+    .then(({ REGISTRATION_TABLE_SQL }) => pool.query(REGISTRATION_TABLE_SQL))
+    .catch((err: Error) => console.error("event_registrations init failed:", err));
 }
