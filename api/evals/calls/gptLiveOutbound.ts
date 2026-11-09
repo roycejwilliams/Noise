@@ -326,7 +326,9 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   check("...the verdict is a machine: the message is asked for, and the held answer is dropped and logged, never spoken", earlyVm.ai.sent.some((m) => m.event_id === "voicemail") && !said(earlyVm).includes("second fund") && earlyVm.records.some((r) => r.decision === "call.gpt_live_answer_dropped" && r.action === "voicemail" && r.proposal.heldMs > 0), earlyVm.records.map((r) => r.decision + ":" + r.action));
   earlyVm.tw.close();
   // A greeting whose transcript arrives in pieces: "Hi, it's Jordan," alone looks like a person; the rest makes it a greeting.
-  const late = run("CA-late", { answer: "How did the pitch to the second fund go?", callReason: REASON, settleMs: 60 });
+  // settleMs is wide (400ms, was 60) so the second piece below always lands inside the settle window, even on a loaded machine: at 60ms
+  // the settle timer could fire before it arrived and the run read a misfire (flaky under load, 11-09).
+  const late = run("CA-late", { answer: "How did the pitch to the second fund go?", callReason: REASON, settleMs: 400 });
   await sleep(5);
   late.ai.in({ type: "session.started", session: { id: "live_late" } });
   late.ai.in({ type: "session.input_transcript.delta", delta: "Hi, it's Jordan,", start_ms: 0, end_ms: 1200 });
@@ -335,7 +337,7 @@ KA.setKeyAlertForTests(KA.createKeyAlert({ send: async (t) => (alerts.push(t), t
   G.noteAnsweredBy("CA-late", "machine_end_beep"); // the verdict lands while the transcript is still arriving
   await sleep(10);
   late.ai.in({ type: "session.input_transcript.delta", delta: " tell me what you're calling about.", start_ms: 1200, end_ms: 3000 });
-  await sleep(200);
+  await sleep(900);
   check("late greeting transcript: no person is confirmed from its first words; the verdict waits for them to settle, then leaves the message", !late.records.some((r) => r.decision === "call.gpt_live_person") && late.records.some((r) => r.decision === "call.gpt_live_amd" && r.action === "leave_message") && late.ai.sent.some((m) => m.event_id === "voicemail"), late.records.map((r) => r.decision + ":" + r.action));
   check("...and the held answer and the reason never reach GPT-Live", !late.ai.sent.some((m) => m.event_id === "answer_l1" || m.event_id === "reason") && !said(late).includes("second fund") && late.records.some((r) => r.decision === "call.gpt_live_answer_dropped"));
   late.tw.close();
