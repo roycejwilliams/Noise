@@ -1,0 +1,68 @@
+// Reply judgment (Royce, 2026-11-10): the code paths around the reply match the need, not a texting template. Zero tokens; the model's
+// own judgment is measured by evals/reply/needQuality.ts (metered, Royce runs it).
+//   npx tsx evals/reply/needMatched.ts
+// The reported shapes (synthetic): "you built it" to a request to explain matching; a one-fragment scenario; two near-identical answers
+// to "be descriptive"; a wine-spot answer in four bubbles (link, description, the description again, a question).
+import { readFileSync } from "node:fs";
+import { REPAIR_ASK, replyLengthLine, lengthLineFor } from "../../src/agent/conversationReply.js";
+import { keepTogether, toBeats } from "../../src/services/beats.js";
+import { CO_CORE, EXPLAIN_FULLY, REPAIR_ON_PUSHBACK } from "../../src/services/coCore.js";
+import { CO_TEXT_CHANNEL } from "../../src/services/coVoice.js";
+import { CALL_FROM_CORE } from "../../src/services/elevenLabsCalls.js";
+import { TEAM_EXPLAIN_LINE } from "../../src/services/extensions.js";
+import { narratesInternalState } from "../../src/services/speakable.js";
+import { CHECKIN_RULE } from "../../src/services/memberWorld.js";
+
+let total = 0;
+let failed = 0;
+const check = (label: string, ok: boolean, detail?: unknown) => {
+  total++;
+  if (!ok) {
+    failed++;
+    console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 600)}` : ""}`);
+  }
+};
+
+// ---------------------------------------------------------------- the length line follows the need
+for (const m of ["Tell me more about your matching system", "Give me a scenario", "Walk me through it step by step", "Explain it like I'm seeing it for the first time", "Describe how intros work"]) {
+  check(`a request for the whole picture is never capped: "${m}"`, replyLengthLine(m) === null, replyLengthLine(m));
+}
+for (const m of ["That doesn't explain it", "You said the same thing twice", "Be real descriptive", "Give me a larger description"]) {
+  const line = replyLengthLine(m);
+  check(`pushback gets the repair line, not a cap: "${m}"`, REPAIR_ASK.test(m) && !!line && /answer again differently/.test(line), line);
+}
+const quick = replyLengthLine("Any good wine spot near Hayes?");
+check("a quick question stays quick, with no fixed count", !!quick && /as briefly as it needs/.test(quick) && !/\b(one|two|three) (or \w+ )?sentences?\b/i.test(quick), quick);
+check("casual talk isn't turned into advice or a pitch", /don't turn it into advice, a task or a pitch/.test(quick ?? ""));
+check("a share keeps its own depth (no line)", lengthLineFor("just landed", "sharing", false) === null);
+
+// ---------------------------------------------------------------- the channel and the shared core
+check("the text channel no longer sets a sentence budget", !/Two or three short sentences/.test(CO_TEXT_CHANNEL) && /as long as the moment needs/.test(CO_TEXT_CHANNEL));
+check("the shared core asks for the substance of an explanation, labelled scenarios, today vs proposed, no deflection", CO_CORE.includes(EXPLAIN_FULLY) && /Label a made-up scenario as one/.test(EXPLAIN_FULLY) && /how something works today apart from how it could work/.test(EXPLAIN_FULLY) && /you built it/.test(EXPLAIN_FULLY));
+check("the shared core repairs on pushback, now, and names a wrong link without repeating it", CO_CORE.includes(REPAIR_ON_PUSHBACK) && /never the same answer reworded/.test(REPAIR_ON_PUSHBACK) && /in this reply, not as a promise/.test(REPAIR_ON_PUSHBACK) && /verified one/.test(REPAIR_ON_PUSHBACK));
+check("calls carry the same two lines (consistent, not identical)", CALL_FROM_CORE.includes(EXPLAIN_FULLY) && CALL_FROM_CORE.includes(REPAIR_ON_PUSHBACK) && /leave room for them to come in/.test(EXPLAIN_FULLY));
+check("no filler, no automatic agreement before the answer", /glad we're on the same page/.test(CO_CORE) && /no automatic agreement or acknowledgment before the answer/.test(CO_CORE));
+check("a teammate is still explained to, never 'you built it' (text; calls carry EXPLAIN_FULLY)", /explain it fully and concretely all the same/.test(TEAM_EXPLAIN_LINE) && /addInstruction\(rf, TEAM_EXPLAIN_LINE\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
+const reply = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+check("the reply's length rule is need-matched, with the vent-plus-ask case", /Match what the moment needs, not a length/.test(reply) && /A vent with a practical ask gets both/.test(reply) && !/reply in one or two sentences\. They: "just landed"/.test(reply));
+check("the old 'one or two sentences' line is gone", !/Reply in one or two sentences/.test(reply));
+
+// ---------------------------------------------------------------- splitting only where it helps
+const wine = ["https://example.test/the-cellar", "The Cellar on Fell: small natural-wine bar, quiet on weeknights.", "The Cellar on Fell is a small natural-wine bar that's quiet on weeknights.", "Want a backup in case it's full?"];
+const beats = toBeats(wine.join("\n\n"));
+check("a paragraph that only restates the one before it is dropped (the wine-bar fourth bubble)", beats.length === 3 && beats[0] === wine[0] && beats[2] === wine[3], beats);
+const steps = "Here's how it goes:\n\n1. You RSVP to a Noise night.\n\n2. Cue reads what you've told it and what the room needs.\n\n3. If someone fits, you both get a private yes or no.\n\n4. Only a double yes becomes an intro.";
+const sb = toBeats(steps);
+check("a walkthrough's numbered steps and its lead-in stay one text", sb.length === 1 && sb[0].includes("1.") && sb[0].includes("4."), sb);
+check("a link and a question are never dropped as repeats", keepTogether(["Here's the link: https://example.test/a", "https://example.test/a", "Is that the one?"]).length === 3);
+check("two different paragraphs both go", toBeats("That's a lot to carry.\n\nHere's what I'd do first: call the venue tomorrow morning.").length === 2);
+const tool = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+check("the send tool's split rule: only where it helps, connected explanations together, no beat quota", /keep one connected explanation or a set of steps in one paragraph/.test(tool) && !/Most replies are one to three short beats/.test(tool));
+
+// ---------------------------------------------------------------- "anything yet?" is an ask, answered honestly
+check("CHECKIN_RULE is scoped to check-ins with no ask (a direct progress question is an ask)", /^A check-in or casual opener with no ask/.test(CHECKIN_RULE));
+check("an honest 'nothing fit yet, and why' passes the narration rule", narratesInternalState("Nothing that fits the engineer search yet: the two I saw were founder programs, not ways to meet engineers.") === null);
+check("machinery talk still doesn't", narratesInternalState("Nothing new on my end yet.") !== null);
+
+console.log(`\nneed-matched replies: ${total - failed}/${total} passed`);
+if (failed) process.exit(1);

@@ -162,7 +162,7 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   check("assembleContext: no loaders of its own for asks, lessons or loops", !/FROM ask_checkins/.test(tc) && !/memory_type = 'co_lesson'/.test(tc) && !/FROM open_loops/.test(tc));
   check("text route: claims and the goal lens from member knowledge, not their own reads", /heldClaimsFrom\(turn\?\.knowledge\)/.test(sb) && /goalLens\(turn\?\.knowledge, turn\?\.profile\?\.intent\)/.test(sb) && !/liveClaimsRendered/.test(sb) && !/goalTexts\(/.test(sb));
   check("reply facts: taste from the layer when the turn has it", /addMemberKnowledge\(rf, t\?\.knowledge, t\?\.rules\)/.test(rg));
-  check("the text-channel rules stay in the reply prompt", /Reply in one or two sentences/.test(src("agent/conversationReply.ts")));
+  check("the text-channel rules stay in the reply prompt", /Match what the moment needs, not a length/.test(src("agent/conversationReply.ts")));
 }
 
 {

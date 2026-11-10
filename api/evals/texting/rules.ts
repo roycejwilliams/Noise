@@ -28,7 +28,7 @@ check("the reply prompt is written in short sentences", sentences.filter((s) => 
 check("no quoted bad openers for Cue to copy", !/"That's a big call\."|"That \[noun phrase\]/.test(prompt));
 check("texts get Cue's shared core (how Cue listens included), not the full call guide", /const sharedSystem = `\$\{CO_CORE\}\n\n\$\{MOVES_GUIDE\}\n\n\$\{MESSAGE_RHYTHM\}\n\n\$\{COACHING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
 check("the call guide isn't fetched from Hume on every text", !/renderCoPersonaPrompt\(/.test(src("routes/sendblue.ts")));
-check("the length rule is concrete", /under about 15 words and doesn't ask for a plan or detail, reply in one or two sentences/.test(reply));
+check("the length rule follows the need (2026-11-10: no sentence count)", /Match what the moment needs, not a length\./.test(reply) && /A quick question gets the useful answer first and stops\./.test(reply));
 check("say each thing once", /Say each thing once\. Don't repeat a point, an offer or a question from your last message\./.test(reply));
 
 check("the reply starts with Cue's own answer or reaction", /Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words\./.test(reply));
@@ -40,9 +40,9 @@ check("no test switches or example block left in", !/process\.env\.CO_TEXT_|SHOR
 // the sweep items below stay.
 {
   const voice = src("services/coVoice.ts");
-  check("global: CO_TEXT_CHANNEL keeps its cap and CO_VOICE says less than it could (co-test's)", /Keep it short, the way a person actually texts\. Two or three short sentences is a long reply\. If they asked/.test(voice) && /Calm, unhurried, specific\. Say less than you could\. One real thought beats three filler lines\./.test(voice));
+  check("global: CO_TEXT_CHANNEL keeps its cap and CO_VOICE says less than it could (co-test's)", /as long as the moment needs and no longer\. A quick question gets the useful answer first and stops there; a request to explain or walk through something gets the whole of it\./.test(voice) && /Calm, unhurried, specific\. Say less than you could\. One real thought beats three filler lines\./.test(voice));
   check("sweep: frustrated gets where it stands first and their decision if there is one; no 'or vague', no sentence count, no exactly-one-question", /When they're frustrated about it, skip the apology paragraph: lead with where it stands, and if a decision is theirs, ask it\./.test(voice) && !/frustrated or vague|exactly one question|end on it|in two sentences/.test(voice));
-  check("global: match the weight, the fragment line, the stalling and sharpening bullets are co-test's", /Match the weight of your reply to theirs\./.test(reply) && /The length limit covers the whole reply, however many things are listed under "For this reply"\. Develop the single most important one\. Keep the rest to a fragment or save them for later\./.test(reply) && /Keep a stalling conversation going with a question, an observation or a related thought\./.test(reply) && /ask one specific follow-up that sharpens it\./.test(reply) && !/However many things are listed/.test(reply));
+  check("global: match the weight, the fragment line, the stalling and sharpening bullets are co-test's", /Match what the moment needs, not a length\./.test(reply) && /The length limit covers the whole reply, however many things are listed under "For this reply"\. Develop the single most important one\. Keep the rest to a fragment or save them for later\./.test(reply) && /Keep a stalling conversation going with a question, an observation or a related thought\./.test(reply) && /ask one specific follow-up that sharpens it\./.test(reply) && !/However many things are listed/.test(reply));
   const offerLine = reply.split("\n").find((l) => l.includes("What they shared could benefit from talking it through by voice")) ?? "";
   check("sweep: no 1-2 sentence cap before a gesture, no 'respond briefly even if heavy', no quoted call line", !/keep the response to what they shared to one or two sentences/.test(reply) && !/Respond briefly first, even if it was heavy/.test(offerLine) && !/hop on a call|are you free today or tomorrow|I'm here if you want to talk/.test(offerLine) && /Offer a call as a warm gesture, not a logistics question\. Make it a warm, open invitation rather than a scheduling question, and name a call or the phone plainly so it's clear what you mean\./.test(reply));
   check("global: the first-words rule keeps its sample exchange (co-test's)", /never their words handed back\. They: "should I raise now or wait\?" You: "I'd wait until Monday\. You'll have the numbers\."/.test(reply));
@@ -63,7 +63,7 @@ check("no test switches or example block left in", !/process\.env\.CO_TEXT_|SHOR
   process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
   process.env.OPENAI_API_KEY ||= "unused-in-tests";
   const { replyLengthLine, lengthLineFor } = await import("../../src/agent/conversationReply.js");
-  check("length line: a short message gets it", replyLengthLine("we still can't find a venue") === "Their message was 6 words and doesn't ask for detail. Reply in one or two sentences.");
+  check("length line: a short message gets it", replyLengthLine("we still can't find a venue") === "Their message is short and doesn\'t ask for detail: answer it directly, as briefly as it needs, and don\'t turn it into advice, a task or a pitch.");
   check("length line: a request for detail doesn't", replyLengthLine("can you walk me through the plan?") === null && replyLengthLine("take the lead on this") === null);
   check("length line: a long message doesn't", replyLengthLine("so here is the thing, we had the permit lined up for the street and then the city came back and said no") === null);
   // Scoped (Royce 2026-10-29): a share or feedback turn is never capped; every other moment, and no moment read, keeps the line.

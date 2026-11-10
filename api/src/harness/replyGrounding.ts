@@ -37,7 +37,7 @@ import { answerFromRecordNote, carryingBlock, isSameFind, sentDetailHints, sentD
 import { ASKS_ABOUT_FIND } from "../services/exchangeRecord.js";
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
-import { TEAM_BUILDER_LINE, isTeamMember } from "../services/extensions.js";
+import { TEAM_BUILDER_LINE, TEAM_EXPLAIN_LINE, isTeamMember } from "../services/extensions.js";
 import { NO_COVERAGE, type SearchCoverage } from "../services/searchCoverage.js";
 import { ROW_START } from "../services/sourceFence.js";
 import { CHECKIN_RULE, CHECKIN_RULE_AT_NIGHT, LATE_NIGHT_CARE, lateNight, deadAir, keepsEverySentence, workClaimsNameThread, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
@@ -302,6 +302,7 @@ export async function gatherReplyFacts(
   if (style.length) addInstruction(rf, `How they've told you they like to be texted, follow it: ${style.join("; ")}.`);
   // The team only: that they build Co (their team-only abilities are in the sheet). Everyone else gets nothing about them.
   if (team) addInstruction(rf, TEAM_BUILDER_LINE);
+  if (team) addInstruction(rf, TEAM_EXPLAIN_LINE);
   // Abilities switched off right now (services/abilitySwitches.ts).
   for (const id of (await switchedOff().catch(() => new Map<string, string>())).keys()) {
     addFact(rf, "capability", `Cue's ${id.replace(/_/g, " ")} ability is switched off right now. If it comes up, say it isn't available at the moment.`);
