@@ -197,7 +197,9 @@ check("…not one from further back than Cue's turn before their previous messag
   console.log = quiet;
   const all = state.sentMessages.join("\n");
   check("the reply carries the line, once, in a text that was going anyway", count(state.sentMessages[0], line) === 1 && /^Done, I'll keep watching for those\. Moved the jazz nights from goals to lookouts\./.test(state.sentMessages[0]), state.sentMessages);
-  check("…never a second time this turn, even when Cue writes it again", count(all, line) === 1 && state.sentMessages.length === 2 && /Talk soon/.test(state.sentMessages[1]), state.sentMessages);
+  // Since the second-send fix (#444): the line already went, so it comes out of the later text, and what's left ("Talk soon.") is too
+  // little for a text of its own: held. Either way the line went once.
+  check("…never a second time this turn, even when Cue writes it again", count(all, line) === 1 && state.sentMessages.length === 1, state.sentMessages);
   check("…and it's marked said", state.laneNotes.length === 0 && state.laneNotesSent.length === 1);
   check("the line has no em dash or exclamation point", !/[—–!]/.test(line));
   L.setLaneStoreForTests(null);
