@@ -8,6 +8,9 @@
 // visitor could see (services/luma.ts). It's kept only when public, upcoming, inside the asked window and with a place (or online);
 // it then joins the feed's events (services/tieredRecommendation.ts eventCandidates) and goes through the same nearby filter, ranking,
 // gate and start check (#229) as a feed event, with the API's details in place of a page read, and goes out as a Luma link, tier 2.
+// When the API can't be used (2026-10-31 on: 403, no active Luma Plus plan on Noise's calendar; or no key, or a 429 pause), each link is
+// checked on its own public page instead, by the same rules (the page route below, Royce 2026-11-10); when neither can check, no paid
+// Exa search runs, and the report says so once as a source-wide failure.
 // Exa's index keeps old pages too, so most results are past (71 of 106 on 10-17): the lookup's start and end decide that first.
 // Cost: one Exa search per want, city and dates, $0.022 measured (25 results, no page text); the Luma API calls are free, cached
 // (a slug's id for days, an event an hour) and stopped at LUMA_PUBLIC_API.perMinute. What Exa found is kept for CACHE_HOURS, so a
@@ -17,6 +20,7 @@ import { nearestPlace, type DiscoveredEvent, type DiscoverPlace } from "./lumaDi
 import type { GeoPoint } from "./geocoding.js";
 import type { EventDetails } from "./eventDetails.js";
 import type { LumaApiDenial, LumaApiMiss, LumaEntity, LumaPublicEvent } from "./luma.js";
+import type { LumaPageRecord } from "./eventDetails.js";
 import type { ExaSearch } from "./exaSearch.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
 
@@ -138,9 +142,18 @@ export type ViaExaReport = {
   limited?: number;
   denied?: number;
   failed?: number;
+  // The page route (when Luma's API can't be used): missing: the link's page isn't there (404/410); cancelled: its own record says so;
+  // blocked: Luma didn't serve the page to us (403/429/503 or an access check), and the rest of the search was left unread.
+  missing?: number;
+  cancelled?: number;
+  blocked?: number;
   kept: number;
   kinds?: string[];
   sourceDown?: boolean;
+  // How the links were checked: Luma's API, or each event's own public page.
+  route?: "api" | "page";
+  // Why the API wasn't used, when the page route stood in (for the log; not a failure while the pages answer).
+  apiDown?: string;
 };
 
 // Pure: why a Luma search through Exa failed, said with its fix, from exaSearch's error (or what a call threw). Timed out, refused
@@ -175,6 +188,10 @@ export const lumaRefusingReason = (pauseMinutes: number) =>
 const mins = (ms: number) => Math.max(1, Math.round(ms / 60_000));
 export const lumaDeniedReason = (d: Pick<LumaApiDenial, "status" | "message" | "until"> | null, now: number, counts?: { denied: number; pages: number }) =>
   `Luma's API refused the key (HTTP ${d?.status ?? 403}${d?.message ? `: "${d.message}"` : ""})${counts ? `, so ${counts.denied} of ${counts.pages} Luma links went unchecked (not "no such event")` : ""}; no Luma search through Exa runs while its results can't be checked; ${FEED_ALONE}; ${d ? `a free API check runs again in ${mins(d.until - now)} minutes` : "a free API check runs on the next search"}`;
+// Luma didn't serve its pages to us (an access check, a 403, 429 or 503): the page route stops and pauses, the way the API does; nothing
+// is retried quickly and no paid search runs while neither route can check what it finds.
+export const lumaPagesBlockedReason = (why: string, until: number, now: number, apiWhy: string | null, counts?: { blocked: number; pages: number }) =>
+  `Luma's event pages weren't served to us (${why})${counts ? `, so ${counts.blocked} of ${counts.pages} Luma links went unchecked (not "no such event")` : ""}${apiWhy ? `, and its API can't be used (${apiWhy})` : ""}; no Luma search through Exa runs while its results can't be checked; ${FEED_ALONE}; the pages are tried again (one free read) in ${mins(until - now)} minutes`;
 // Some checks got no answer at all (timed out, unreachable, unreadable): those events are unchecked, not missing.
 export const lumaFailedReason = (failed: number, pages: number) =>
   `${failed} of ${pages} Luma checks got no usable answer (timed out, unreachable or unreadable): those events went unchecked, not "no such event"`;
@@ -240,6 +257,9 @@ export type LumaViaExaDeps = {
   // denial in force, for the report.
   apiState: () => Promise<"ok" | "denied" | "off">;
   denial: () => LumaApiDenial | null;
+  // An event's own public page (services/eventDetails.ts readLumaPage + lumaPageRecord), read when the API can't be used: what the
+  // page's embedded record says, or why there's no answer. A plain page fetch: no browser, no key, no model.
+  page: (slug: string) => Promise<LumaPageCheck>;
   configured: () => boolean;
   now: () => Date;
   // Luma's API answered 429 in the last LUMA_PUBLIC_API.refusalPauseMinutes (services/luma.ts).
@@ -249,6 +269,76 @@ export type LumaViaExaDeps = {
   // The catalog place for the city (lumaDiscovery.ts discoverPlaceFor), or null: the only city a query may name.
   place: (city: string | null) => Promise<{ name: string } | null>;
 };
+
+// ---------------------------------------------------------------- the page route (Royce, 2026-11-10: "add a public-page verification
+// route using existing fetching capabilities"). Luma's API needs Luma Plus on Noise's calendar (403 from 2026-10-31). An event's own
+// page carries the same record a visitor sees, in its embedded data (2026-11-10 sample of 17 real lu.ma links, read with readLumaPage):
+// visibility ("public", or "private" = anyone with the link, never listed; a private page also asks search engines not to index it and
+// has no schema.org record), start, end and zone, location type and city, whether the street is shown, registration ("open",
+// "waitlist", "sold-out"), approval, spots, and (schema.org eventStatus) whether it's cancelled. What it doesn't say stays unknown.
+// Same rules as the API: public only (fails closed), a confirmed place, upcoming, inside the window.
+export type LumaPageCheck =
+  | { kind: "event"; record: LumaPageRecord }
+  | { kind: "not_event" }
+  | { kind: "missing" }
+  | { kind: "blocked"; why: string }
+  | { kind: "failed"; why: string };
+// Luma's (Cloudflare's) access-check pages: never read as an answer.
+const CHALLENGE = /cf-chl|challenge-platform|Just a moment\.\.\.|Attention Required|cf-browser-verification/i;
+// Pure: what one page read says. A 404/410 is a page that isn't there; a 403/429/503 or an access check is Luma not serving it to us
+// (blocked, never "no such event"); no answer or an unreadable page is failed; a page with no event record is a calendar's or a city's.
+export function classifyLumaPage(r: { html: string | null; status: number | null; error: string | null }, record: (html: string) => LumaPageRecord | null): LumaPageCheck {
+  if (r.status === 404 || r.status === 410) return { kind: "missing" };
+  if (r.status === 403 || r.status === 429 || r.status === 503) return { kind: "blocked", why: `HTTP ${r.status}` };
+  if (!r.html) return { kind: "failed", why: r.error ?? "no page" };
+  const app = /<script id="__NEXT_DATA__"/.test(r.html);
+  if (!app && CHALLENGE.test(r.html)) return { kind: "blocked", why: "an access check page" };
+  if (!app) return { kind: "failed", why: "a page without Luma's event data" };
+  const rec = record(r.html);
+  if (rec) return { kind: "event", record: rec };
+  return /"event"\s*:\s*\{/.test(r.html) ? { kind: "failed", why: "its event record has no start" } : { kind: "not_event" };
+}
+export const LUMA_PAGES = { concurrency: 5, blockedPauseMinutes: 30, blockedPauseMaxMinutes: 24 * 60, okCacheMinutes: 60, okProbeMinutes: 10 } as const;
+let pagesBlocked: { at: number; until: number; why: string; streak: number } | null = null;
+export const lumaPagesBlocked = (now: number = Date.now()) => (pagesBlocked && now < pagesBlocked.until ? pagesBlocked : null);
+function notePagesBlocked(now: number, why: string): void {
+  if (pagesBlocked && now < pagesBlocked.until) return;
+  const streak = (pagesBlocked?.streak ?? 0) + 1;
+  const pause = Math.min(LUMA_PAGES.blockedPauseMinutes * 2 ** (streak - 1), LUMA_PAGES.blockedPauseMaxMinutes) * 60_000;
+  pagesBlocked = { at: now, until: now + pause, why, streak };
+}
+// For tests.
+export const resetLumaPages = () => ((pagesBlocked = null), (pagesOkAt = 0), pageCache.clear());
+// A page read that found the event (or that it isn't there) is kept an hour; a failure or a block isn't kept.
+const pageCache = new Map<string, { at: number; v: LumaPageCheck }>();
+async function checkPage(slug: string, deps: LumaViaExaDeps, now: number): Promise<LumaPageCheck> {
+  const key = slug.toLowerCase();
+  const hit = pageCache.get(key);
+  if (hit && now - hit.at < LUMA_PAGES.okCacheMinutes * 60_000) return hit.v;
+  const v = await deps.page(slug).catch((err: any): LumaPageCheck => ({ kind: "failed", why: String(err?.message ?? err).slice(0, 80) }));
+  if (v.kind === "event" || v.kind === "missing" || v.kind === "not_event") {
+    if (pageCache.size > 2000) pageCache.clear();
+    pageCache.set(key, { at: now, v });
+  }
+  return v;
+}
+// Whether the page route can be used now: blocked while its pause is in force. Otherwise, unless a page was served in the last
+// okProbeMinutes, one free read of Luma's own discover page shows whether pages are served (before any paid search depends on it).
+let pagesOkAt = 0;
+async function pagesUsable(deps: LumaViaExaDeps, now: number): Promise<boolean> {
+  if (lumaPagesBlocked(now)) return false;
+  if (!pagesBlocked && now - pagesOkAt < LUMA_PAGES.okProbeMinutes * 60_000) return true;
+  const probe = await deps.page("discover").catch((): LumaPageCheck => ({ kind: "failed", why: "threw" }));
+  if (probe.kind === "blocked") {
+    notePagesBlocked(now, probe.why);
+    return false;
+  }
+  // No answer at all: unknown, so no paid search this time (nothing is paused; the next search reads it again).
+  if (probe.kind === "failed") return false;
+  pagesBlocked = null;
+  pagesOkAt = now;
+  return true;
+}
 
 type Found = { slug: string; title: string };
 // reason: a refusal already said in full (the budget), not an Exa error to explain.
@@ -271,12 +361,16 @@ export async function lumaEventsViaExa(
 ): Promise<{ events: ViaExaEvent[]; report: ViaExaReport } | null> {
   const deps = await realDeps(o.deps);
   if (!deps.configured() || !what.trim()) return null;
-  if (!deps.lumaApi()) return { events: [], report: { cached: false, error: LUMA_API_OFF, pages: 0, read: 0, notPublic: 0, kept: 0 } };
-  // Luma's API is refusing: no search, and no checks of a cached one either (each would add to what Luma is refusing).
-  if (deps.refusing()) return { events: [], report: { cached: false, error: lumaRefusingReason(deps.pauseMinutes), pages: 0, read: 0, notPublic: 0, refused: 0, kept: 0 } };
-  // Luma's API refuses the key: no paid search whose results couldn't be checked. A source-wide failure, said once, never "nothing found".
-  if ((await deps.apiState().catch(() => "denied" as const)) === "denied")
-    return { events: [], report: { cached: false, error: lumaDeniedReason(deps.denial(), deps.now().getTime()), pages: 0, read: 0, notPublic: 0, kept: 0, sourceDown: true } };
+  // How Exa's links are checked: Luma's API when it answers this key, else each event's own public page. Neither: no paid search whose
+  // results couldn't be checked, said once as a source-wide failure, never "nothing found".
+  const nowMs = deps.now().getTime();
+  const apiState = deps.lumaApi() ? await deps.apiState().catch(() => "denied" as const) : "off";
+  const apiWhy = apiState === "off" ? "LUMA_API_KEY isn't set" : apiState === "denied" ? lumaDeniedReason(deps.denial(), nowMs).split(";")[0] : deps.refusing() ? `it answered 429 in the last ${deps.pauseMinutes} minutes` : null;
+  const route: "api" | "page" = apiWhy ? "page" : "api";
+  if (route === "page" && !(await pagesUsable(deps, nowMs))) {
+    const b = lumaPagesBlocked(nowMs) ?? pagesBlocked;
+    return { events: [], report: { cached: false, error: lumaPagesBlockedReason(b?.why ?? "no answer", b?.until ?? nowMs, nowMs, apiWhy), pages: 0, read: 0, notPublic: 0, kept: 0, sourceDown: true, route } };
+  }
   // A test account never spends on a paid search (services/testMemberSpend.ts, #271): checked before the shared cache, so its refusal
   // is never another member's answer. reserveLumaExaSearch checks again.
   if (o.userId && (await skipsPaidSearch(o.userId, "lumaViaExa"))) return { events: [], report: { cached: false, error: TEST_ACCOUNT, pages: 0, read: 0, notPublic: 0, kept: 0 } };
@@ -310,71 +404,111 @@ export async function lumaEventsViaExa(
   const { found, error, reason } = await mine.found;
   // A failed search is never kept: the next ask searches again.
   if (error && cache.get(key) === mine) cache.delete(key);
-  const n = { looked: 0, calendars: 0, past: 0, read: 0, notPublic: 0, noLocation: 0, refused: 0, limited: 0, denied: 0, failed: 0 };
+  const n = { looked: 0, calendars: 0, past: 0, read: 0, notPublic: 0, noLocation: 0, refused: 0, limited: 0, denied: 0, failed: 0, missing: 0, cancelled: 0, blocked: 0 };
   const miss = (m: LumaApiMiss) => {
     if (m === "refused") n.refused++;
     else if (m === "limited") n.limited++;
     else if (m === "denied") n.denied++;
     else if (m === "failed" || m === "off") n.failed++;
   };
-  const checked = await Promise.all(
-    found.map(async ({ slug, title }): Promise<ViaExaEvent | null> => {
-      const entity = await deps.lookup(slug).catch(() => "failed" as const);
-      if (typeof entity === "string") return miss(entity), null;
-      if (!entity) return null;
-      n.looked++;
-      if (entity.type === "calendar") return n.calendars++, null;
-      // The lookup gives the start and end: one that's over or outside the window isn't read any further.
-      const over = entity.endAt ? new Date(entity.endAt).getTime() <= now.getTime() : false;
-      if (over || (entity.startAt && (new Date(entity.startAt).getTime() <= now.getTime() || !o.inRange(entity.startAt)))) return n.past++, null;
-      const e = await deps.event(entity.id).catch(() => "failed" as const);
-      if (typeof e === "string") return miss(e), null;
-      if (!e) return null;
-      n.read++;
-      // A host's private or members-only event never goes to strangers; unknown is not public (fails closed).
-      if (e.visibility !== "public") return n.notPublic++, null;
-      // A confirmed place only (Royce 2026-10-23, "unknown" ruling): online on a meeting platform Luma's spec names (location_type
-      // enum, docs.luma.com Get Event), or in person ("offline") with a city in its own record. Anything else ("unknown", which Luma
-      // uses for an online link it doesn't recognize; no type; values outside the spec) is dropped even when it carries a city: its
-      // place can't be confirmed, so it is never offered as in the member's city, and there is no "location unconfirmed" caption.
-      const online = !!e.locationType && ONLINE_LOCATION_TYPES.has(e.locationType);
-      const inPerson = e.locationType === IN_PERSON_LOCATION_TYPE && !!e.city;
-      if (!online && !inPerson) return n.noLocation++, null;
-      // With no confirmed place (an online ask), only an online event is kept: an in-person one could be anywhere.
-      if (onlineOnly && !online) return n.noLocation++, null;
-      const shown = e.locationVisibility === "public";
-      const details: EventDetails = {
-        startAt: e.startAt,
-        endAt: e.endAt,
-        timezone: e.timezone,
-        online,
-        // The address only when the host shows it to everyone; otherwise the city alone (as the event page does).
-        venue: shown ? e.address : null,
-        address: shown ? e.fullAddress : null,
-        city: e.city,
-        hosts: e.hosts,
-        price: null,
-        spotsRemaining: e.spotsRemaining,
-        requiresApproval: e.requireApproval,
-        // Closed to new registrations, or no spots left: the gate says no, as it does for a sold-out page.
-        soldOut: e.registrationOpen === false || e.spotsRemaining === 0 ? true : false,
-        guestCount: null,
-        description: e.description ? e.description.slice(0, 900) : null,
-        apiId: e.id,
-        name: e.name || title,
-        visibility: e.visibility,
-      };
-      return { api_id: e.id, name: e.name || title, start_at: e.startAt, city: e.city, url: `https://lu.ma/${e.slug ?? entity.slug ?? slug}`, ...(online ? { online: true } : {}), details };
-    }),
-  );
+  // Over, or outside the asked window, by its own start and end.
+  const pastOrOutside = (startAt: string | null, endAt: string | null) =>
+    (endAt ? new Date(endAt).getTime() <= now.getTime() : false) || (!!startAt && (new Date(startAt).getTime() <= now.getTime() || !o.inRange(startAt)));
+  // The same keep rules whichever route read the event. extra: what only the page says (price, headcount, registration state).
+  const keep = (e: LumaPublicEvent, slug: string, title: string, extra: Partial<EventDetails> = {}): ViaExaEvent | null => {
+    // A host's private or members-only event never goes to strangers; unknown is not public (fails closed).
+    if (e.visibility !== "public") return n.notPublic++, null;
+    // A confirmed place only (Royce 2026-10-23, "unknown" ruling): online on a meeting platform Luma's spec names (location_type
+    // enum, docs.luma.com Get Event), or in person ("offline") with a city in its own record. Anything else ("unknown", which Luma
+    // uses for an online link it doesn't recognize; no type; values outside the spec) is dropped even when it carries a city: its
+    // place can't be confirmed, so it is never offered as in the member's city, and there is no "location unconfirmed" caption.
+    const online = !!e.locationType && ONLINE_LOCATION_TYPES.has(e.locationType);
+    const inPerson = e.locationType === IN_PERSON_LOCATION_TYPE && !!e.city;
+    if (!online && !inPerson) return n.noLocation++, null;
+    // With no confirmed place (an online ask), only an online event is kept: an in-person one could be anywhere.
+    if (onlineOnly && !online) return n.noLocation++, null;
+    const shown = e.locationVisibility === "public";
+    const details: EventDetails = {
+      startAt: e.startAt,
+      endAt: e.endAt,
+      timezone: e.timezone,
+      online,
+      // The address only when the host shows it to everyone; otherwise the city alone (as the event page does).
+      venue: shown ? e.address : null,
+      address: shown ? e.fullAddress : null,
+      city: e.city,
+      hosts: e.hosts,
+      price: null,
+      spotsRemaining: e.spotsRemaining,
+      requiresApproval: e.requireApproval,
+      // Closed to new registrations, or no spots left: the gate says no, as it does for a sold-out page.
+      soldOut: e.registrationOpen === false || e.spotsRemaining === 0 ? true : false,
+      guestCount: null,
+      description: e.description ? e.description.slice(0, 900) : null,
+      apiId: e.id,
+      name: e.name || title,
+      visibility: e.visibility,
+      ...extra,
+    };
+    return { api_id: e.id, name: e.name || title, start_at: e.startAt, city: e.city, url: `https://lu.ma/${e.slug ?? slug}`, ...(online ? { online: true } : {}), details };
+  };
+  const viaApi = async ({ slug, title }: Found): Promise<ViaExaEvent | null> => {
+    const entity = await deps.lookup(slug).catch(() => "failed" as const);
+    if (typeof entity === "string") return miss(entity), null;
+    if (!entity) return n.missing++, null;
+    n.looked++;
+    if (entity.type === "calendar") return n.calendars++, null;
+    // The lookup gives the start and end: one that's over or outside the window isn't read any further.
+    if (pastOrOutside(entity.startAt, entity.endAt)) return n.past++, null;
+    const e = await deps.event(entity.id).catch(() => "failed" as const);
+    if (typeof e === "string") return miss(e), null;
+    if (!e) return n.missing++, null;
+    n.read++;
+    return keep(e, entity.slug ?? slug, title);
+  };
+  let stopped: string | null = null;
+  const viaPage = async ({ slug, title }: Found): Promise<ViaExaEvent | null> => {
+    // Luma stopped serving pages to us earlier in this search: the rest is left unread (no hammering), and counted.
+    if (stopped) return n.blocked++, null;
+    const r = await checkPage(slug, deps, now.getTime());
+    if (r.kind === "blocked") {
+      stopped = r.why;
+      notePagesBlocked(now.getTime(), r.why);
+      return n.blocked++, null;
+    }
+    if (r.kind === "failed") return n.failed++, null;
+    if (r.kind === "missing") return n.missing++, null;
+    n.looked++;
+    if (r.kind === "not_event") return n.calendars++, null;
+    const rec = r.record;
+    // Cancelled by its own record: gone, not "no such event".
+    if (rec.cancelled) return n.cancelled++, null;
+    if (pastOrOutside(rec.startAt, rec.endAt)) return n.past++, null;
+    n.read++;
+    // A page that asks search engines not to list it isn't for public discovery, whatever else it says (fails closed).
+    if (rec.noindex) return n.notPublic++, null;
+    const d = rec.details;
+    return keep(rec, rec.slug ?? slug, title, {
+      price: d.price,
+      guestCount: d.guestCount,
+      // The page's own flags: sold out by any of them, or a waitlist (Luma marks a waitlisted event sold out too).
+      soldOut: d.soldOut === true || rec.registrationOpen === false || rec.spotsRemaining === 0,
+      ...(rec.registration ? { registration: rec.registration } : {}),
+    });
+  };
+  // The API answers many at once; pages are read a few at a time, so a block stops the search early instead of after every read.
+  const checked: (ViaExaEvent | null)[] = [];
+  if (route === "api") checked.push(...(await Promise.all(found.map(viaApi))));
+  else for (let i = 0; i < found.length; i += LUMA_PAGES.concurrency) checked.push(...(await Promise.all(found.slice(i, i + LUMA_PAGES.concurrency).map(viaPage))));
   const events = checked.filter((e): e is ViaExaEvent => e !== null && new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
   const why =
     reason ??
     exaFailureReason(error) ??
     (n.denied ? lumaDeniedReason(deps.denial(), now.getTime(), { denied: n.denied, pages: found.length }) : null) ??
+    (n.blocked ? lumaPagesBlockedReason(stopped ?? "no answer", lumaPagesBlocked(now.getTime())?.until ?? now.getTime(), now.getTime(), apiWhy, { blocked: n.blocked, pages: found.length }) : null) ??
     (n.refused || n.limited ? lumaRefusedReason(n.refused, n.limited, found.length, deps.pauseMinutes) : null) ??
     (n.failed ? lumaFailedReason(n.failed, found.length) : null);
-  return { events, report: { cached: !!fresh, error: why, pages: found.length, ...n, kept: events.length, kinds, ...(n.denied ? { sourceDown: true } : {}) } };
+  return { events, report: { cached: !!fresh, error: why, pages: found.length, ...n, kept: events.length, kinds, route, ...(apiWhy ? { apiDown: apiWhy } : {}), ...(n.denied || n.blocked ? { sourceDown: true } : {}) } };
 }
 
 async function search(query: string, userId: string | null, deps: LumaViaExaDeps): Promise<{ found: Found[]; error: string | null }> {
@@ -403,6 +537,12 @@ async function realDeps(d: Partial<LumaViaExaDeps> = {}): Promise<LumaViaExaDeps
     // A test that says only whether there's a key gets "ok" or "off" from it.
     apiState: d.apiState ?? (d.lumaApi ? async () => (d.lumaApi!() ? "ok" : "off") : () => A.lumaApiState()),
     denial: d.denial ?? (() => A.lumaApiDenied()),
+    page:
+      d.page ??
+      (async (slug) => {
+        const E = await import("./eventDetails.js");
+        return classifyLumaPage(await E.readLumaPage(`https://lu.ma/${slug}`), E.lumaPageRecord);
+      }),
     configured: d.configured ?? (() => X.exaConfigured()),
     now: d.now ?? (() => new Date()),
     refusing: d.refusing ?? (() => A.lumaApiRefusedRecently()),
