@@ -49,11 +49,14 @@ const STOCK_WORDS = ["let", "lemme", "look", "looking", "see", "check", "checkin
 // Royce, 2026-11-09: a holding line never opens on "Looking for"/"Looking at", and never only says their request back to them.
 // Code checks those facts (the opener, which words are theirs); whether the line is warm, playful or wry is the model's call.
 export const LOOKING_OPENER = /^\s*(?:(?:ok|okay|sure|got it|alright|all right|yep|yes|right)[\s,.!:-]+)?looking (?:for|at)\b/i;
-// Pure: a restatement: at least 80% of the line's own words are theirs (its stock words aside). Against "a wine night in SF... where
-// I can whine down and chill", "A wine night in SF to chill." is; "A wine night sounds right. Let me find you somewhere quiet." isn't.
+// Pure: a restatement: more than three words of meaning (its stock words aside; meaningWords stems them), and at least 80% of them
+// theirs. Against "a wine night in SF... where I can whine down and chill", "A wine night in SF to chill." (wine, night, sf, chill) is;
+// "A wine night sounds right. Let me find you somewhere quiet." isn't. A short warm line is never one (#440 review: "Jazz tonight, yes
+// please.", "Hikes!" and "Quiet dinner with your parents, on it." (quiet, dinner, parent: three) were refused).
+export const RESTATE_MIN_WORDS = 4;
 export function restatesThem(line: string, theirWords: string): boolean {
   const own = [...meaningWords(line, STOCK_WORDS)];
-  if (!own.length) return false;
+  if (own.length < RESTATE_MIN_WORDS) return false;
   const said = meaningWords(theirWords, STOCK_WORDS);
   return own.filter((w) => said.has(w)).length / own.length >= 0.8;
 }
