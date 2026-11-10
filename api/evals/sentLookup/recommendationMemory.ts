@@ -66,9 +66,9 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   // Review of #441 (HIGH): for "discussed" only, acronyms in any case and the organization alone count.
   const SPC = "South Park Commons Member Residency";
   check("discussed: lower-case 'spc residency'", mentionsThing("was the spc residency any good?", SPC));
-  check("discussed: 'I'm thinking about SPC'", mentionsThing("I'm thinking about SPC", SPC));
-  check("discussed: the organization only ('I applied to South Park Commons last week')", mentionsThing("I applied to South Park Commons last week", SPC) && mentionsThing("South Park Commons", SPC));
-  check("discussed: the X post's short name, organization only", mentionsThing("I applied to South Park Commons last week", "SPC Member Residency") && mentionsThing("thinking about spc", "SPC Member Residency"));
+  check("discussed: 'I'm thinking about SPC' (its own host)", mentionsThing("I'm thinking about SPC", SPC, "https://www.southparkcommons.com/r"));
+  check("discussed: the organization only ('I applied to South Park Commons last week')", mentionsThing("I applied to South Park Commons last week", SPC, "https://www.southparkcommons.com/r") && mentionsThing("South Park Commons", SPC, "https://www.southparkcommons.com/r"));
+  check("discussed: the X post's short name, organization only", mentionsThing("I applied to South Park Commons last week", "SPC Member Residency", "https://spc.example/r") && mentionsThing("thinking about spc", "SPC Member Residency", "https://spc.example/r"));
   check("discussed: another organization isn't a mention", !mentionsThing("I applied to Lattice Fund last week", SPC) && !mentionsThing("a park downtown", SPC));
   check("no two-letter acronyms anywhere (pc, mr)", !thingSearchTerms(SPC).some((t) => t.length < 3) && !hostTerms(SPC).some((t) => t.length < 3));
 }
@@ -113,7 +113,7 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   ];
   const seen: unknown[][] = [];
   const db = { query: async (sql: string, args: unknown[]) => { seen.push(args); return { rows: /co_memories/.test(sql) ? rows : [] }; } };
-  const m = await mentionsSince(db, "u1", OFFICIAL, shown, { sends: [shown] });
+  const m = await mentionsSince(db, "u1", OFFICIAL, shown, { sends: [shown], url: "https://harborpointcollective.example/residency" });
   check("the member's later lines count (a text, a call, and the organization alone)", m.member.length === 3, m);
   check("Cue's own later answer counts; the offer text itself (within the send window) doesn't", m.cue.length === 1 && m.cue[0].toISOString() === "2026-09-24T18:01:00.000Z", m);
   check("the organization alone is a mention, for discussed", m.member.some((d) => d.toISOString().startsWith("2026-10-02")));
@@ -220,6 +220,33 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("'I'm done with this search, frustrated': not closed", !closes("I'm done with this search, frustrated"));
   check("'we hired someone, stop looking': closed", closes("we hired someone, stop looking"));
   check("a closed ask's queued finds leave (existing: servesClosedAsk)", A.servesClosedAsk({ askId: "a1", reminder: false }, new Set(["a1"])) && !A.servesClosedAsk({ askId: "a1", reminder: true }, new Set(["a1"])));
+}
+
+// ---------------------------------------------------------------- re-review of #441
+{
+  const HX = "The Hacker Exchange Residency";
+  check("'the' is never an acronym: 'see you at the park tonight' doesn't name The Hacker Exchange", !namesThing("see you at the park tonight", HX) && !mentionsThing("see you at the park tonight", HX, "https://thehackerexchange.example"));
+  const best = `The best places to look for founder support:\n1. ${HX}\n2. Lattice Fund fellowship\n3. Northgate Accelerator\n4. Openbench grants`;
+  check("a roundup headed 'The best places to look...' is still a roundup", !!roundupOf(best, HX), roundupOf(best, HX));
+  const SPC = "South Park Commons Member Residency";
+  const SPC_URL = "https://www.southparkcommons.com/residency";
+  check("'spc residency' and 'what about spc' are still discussed (its own host carries the organization)", mentionsThing("spc residency", SPC, SPC_URL) && mentionsThing("what about spc", SPC, SPC_URL));
+  check("the organization-only mention is discussed on its own host", mentionsThing("I applied to South Park Commons last week", SPC, SPC_URL));
+  check("a topic isn't an organization: 'any ai builders events this week?' doesn't discuss AI Builders Residency on another host", !mentionsThing("any ai builders events this week?", "AI Builders Residency", "https://lu.ma/some-residency"));
+  check("no link known: only the name itself counts", !mentionsThing("I applied to South Park Commons last week", SPC) && mentionsThing("the spc residency", SPC));
+
+  const A = await import("../../src/services/askLifecycle.js");
+  const ask = { n: "A1", row: { id: "i1", ask_id: "a1", ask_text: "find another engineer to build with", created_at: at("2026-11-01T00:00:00Z") } };
+  const closes = (q: string) => A.verifyClosures([{ ask: "A1", how: "moved_on", quote: q }], [ask as any], [{ at: at("2026-11-08T00:00:00Z"), side: "member" as const, text: q }]).length === 1;
+  for (const q of ["found one! talk later", "we hired someone, thanks, I'll circle back later", "we found a cofounder, so for now we're set"]) check(`found or hired wins over a pause word: closes "${q}"`, closes(q));
+  for (const q of ["I'm done looking for now, too tired", "I found it draining, taking a break"]) check(`still open: "${q}"`, !closes(q));
+
+  for (const [host, label] of [["https://beondeck.com/fellowship", "On Deck"], ["https://www.joinef.com/apply", "EF"], ["https://neo.com/scholars", "Neo"], ["https://hf0.com/residency", "HF0"], ["https://aigrant.org", "AI Grant"], ["https://www.mercatus.org/emergent-ventures", "Emergent Ventures"]] as const) {
+    const r = roundupOf(`Five places to look for founder support:\n1. ${label} Fellowship ${host}\n2. Lattice Fund fellowship\n3. Northgate Accelerator\n4. Openbench grants`, `${label} Fellowship`);
+    check(`an official site on its own line is a candidate again: ${host}`, !!r && r.links.includes(host), r);
+  }
+  const excluded = roundupOf(`Five places to look for founder support:\n1. On Deck Fellowship https://www.pcmag.com/x https://medium.com/@a/b\n2. Lattice Fund fellowship https://mrbeast.com/x\n3. Northgate Accelerator\n4. Openbench grants`, "On Deck Fellowship");
+  check("pcmag, Medium and mrbeast are still excluded", !!excluded && excluded.links.length === 0, excluded);
 }
 
 console.log(`\nrecommendation memory: ${total - failed}/${total} passed`);
