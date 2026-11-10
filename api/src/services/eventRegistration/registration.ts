@@ -66,6 +66,9 @@ export type FormRead = {
   gateDetail?: string | null;
   // The page says this email is already registered (after a submit), or a signed-in page says so (never in a fresh session).
   alreadyRegistered?: boolean;
+  // Who the event's own description says it is for, or what it requires to attend ("open to Stanford students and affiliates", "21+",
+  // "invite only"), as its own sentences: put in front of the member as a fact to confirm. Cue never judges whether they qualify.
+  restrictions?: string[];
   // How the page signs a guest in, when it asks: Luma's email code (the member reads it from their inbox), or anything else.
   signIn?: "email_code" | "other" | null;
   // The form continues on another step ("Next", "Continue"): what that step asks is read only after this one is filled.
@@ -256,6 +259,24 @@ export function optionsMatch(value: string, options: string[], multi = false): b
 // Pure: whether the plan can go to the one yes (nothing stops it and nothing is missing). Drafts and attestations ride in the ask.
 export const readyForYes = (p: Plan) => !p.blockers.length && !p.missing.length && p.open.every((o) => !!o.draft);
 
+// ---------------------------------------------------------------- who the event is for (pure)
+
+// Pure: the sentences of the event's own description that say who it's for or what attending requires, verbatim and clipped (live test
+// 2026-11-09: "This event is open to Stanford students and affiliates. You must RSVP to attend." was never asked by the form, and a
+// non-affiliate was registered). Cue puts them in front of the member as a fact to confirm; it never decides whether they qualify.
+const RESTRICTION = /\b(?:open (?:only )?to|only (?:open )?(?:to|for)|exclusively (?:for|to)|restricted to|limited to|reserved for|invite[- ]only|invitation[- ]only|by invitation|(?:students|members|employees|alumni|affiliates|faculty|staff|founders|investors) only|must be (?:\d{2}\+|over|at least|a (?:current )?(?:member|student|employee)|an? (?:alumn|affiliate|employee|member|student))|(?:\d{2}\+|21 and over|18 and over)(?: only| event)?\b|ages? \d{2}(?:\+| and (?:up|over))|(?:valid |student |government |photo )?id (?:is )?required|bring (?:a |your )?(?:valid |student |photo )?id|proof of (?:enrollment|employment|membership)|you must (?:be|have|show|bring|hold))/i;
+export function restrictionsIn(description: string | null | undefined): string[] {
+  const text = String(description ?? "").replace(/[\u200b\u00a0]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  const out: string[] = [];
+  for (const s of text.split(/(?<=[.!?])\s+/)) {
+    const t = s.trim();
+    if (t && RESTRICTION.test(t) && !out.includes(t)) out.push(t.length > 220 ? `${t.slice(0, 219).trimEnd()}…` : t);
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- tailored answers stay with their registration (pure)
 
 // Pure: facts a later registration may propose from earlier ones: factual details they approved on an earlier signup (their company,
@@ -309,6 +330,8 @@ export function draftProblem(d: Draft, theirWords: string): string | null {
 // What the ask put in front of them: the event, the ticket, what happens on submit, every value that goes on the form, every term they
 // agree to, and that marketing boxes stay unticked. Hashed, so the page read right before submitting can be held to the same scope.
 export type Scope = {
+  // Who the event says it's for (FormRead.restrictions), as their yes saw it.
+  restrictions?: string[];
   eventUrl: string;
   eventName: string | null;
   when: string | null;
@@ -329,6 +352,7 @@ export function scopeOf(form: FormRead, plan: Plan): Scope {
     price: price.free === true ? "free" : price.why,
     expect: plan.expect,
     shares: [...plan.fill.map((f) => ({ label: f.label, value: f.value }))].sort((a, b) => a.label.localeCompare(b.label)),
+    ...(form.restrictions?.length ? { restrictions: [...form.restrictions] } : {}),
     agrees: plan.attestations.map((a) => ({ label: a.label, termsText: a.termsText })).sort((a, b) => a.label.localeCompare(b.label)),
   };
 }
@@ -348,6 +372,8 @@ export function scopeChanges(asked: Scope, now: Scope): string[] {
   const askedAgrees = new Set(asked.agrees.map((a) => `${a.label}|${a.termsText ?? ""}`));
   for (const a of now.agrees) if (!askedAgrees.has(`${a.label}|${a.termsText ?? ""}`)) out.push(`there are new terms to agree to ("${a.label.slice(0, 80)}")`);
   if (asked.eventName && now.eventName && asked.eventName !== now.eventName) out.push("the event's name changed");
+  const askedR = new Set(asked.restrictions ?? []);
+  if ((now.restrictions ?? []).some((r) => !askedR.has(r))) out.push("the page now says more about who it's for");
   return out;
 }
 
