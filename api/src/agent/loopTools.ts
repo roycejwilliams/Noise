@@ -30,23 +30,45 @@ import pool from "../db/db.js";
 // nothing until its page is read again.
 // viaPost: a link an X post pointed to (checked for a private event page again before it's shared, batched review of #299).
 export type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null; stored?: boolean; checkedAt?: string | null; freshUntil?: number | null; viaPost?: boolean };
-// The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, saying what it's looking for
-// in their terms, never a status message. Never praise or a recap either (2026-11-06 live test: "founder dinners before an investor
-// meeting, good instinct").
-export const WHILE_LOOKING = "Optional, and only on your first search: when a lookup is really starting, it will take a moment, and a word to them would help, give one short, natural line in your own voice that says what you're looking for, in their terms (its subject, their place or timing), like \"Looking at what's on in SF this week.\" Leave it empty when the answer will be quick or a line wouldn't help; it is never required and never filler. No praise, no recap of what they said, no tools or machinery, and never anything that implies you've found something. Not a bare label (\"SF events this week\"), not a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
+// The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, never a status message.
+// Never praise or a recap either (2026-11-06 live test: "founder dinners before an investor meeting, good instinct"). Royce,
+// 2026-11-09: "Looking for a low key wine night in SF." read like a system status restating his ask ("a wine night in SF... where I
+// can whine down and chill"): "Let Cue say it in its own voice. Give it different variations, let it be creative." The old anchor
+// example ("Looking at what's on in SF this week.") is gone; the examples below are kinds of line from different moments.
+export const WHILE_LOOKING = "Optional, and only on your first search: when a lookup is really starting, it will take a moment, and a word to them would help, give one short line in your own voice that answers them the way a person would, never a status. React to what they asked or how they put it (their mood, a word they chose, the occasion), warm, playful or wry as fits them and the moment, and different every time. The kind of line, from different moments (never a template, never these words): someone who wants a wine night to wind down gets \"A wine night sounds right. Let me find you somewhere quiet.\"; someone nervous about a first date gets \"Somewhere easy to talk, then. Nothing too loud for a first one.\"; someone after founders at the end of a rough week gets \"After the week you've had, a room of people who get it.\"; someone with their parents in town gets \"Good food, nowhere too loud, nothing that needs explaining.\" Leave it empty when the answer will be quick or a line wouldn't help; it is never required and never filler. Never open with \"Looking for\" or \"Looking at\", and never just say their request back to them. No praise, no tools or machinery, never anything that implies you've found something, and never knowledge you don't have (\"I know just the place\"). Not a bare label (\"SF events this week\"), not a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
 // Tests only (golden cases): a fixed set of real events a stubbed search returns, the way a live one would.
 export type StubEvent = { name: string; url: string; tier?: 1 | 2; lines: string[] };
 export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; holdAsked?: boolean };
 // A stock holding line (Royce, 2026-10-17: "Let me look" is bland; golden 55 still said "Let me see what's good this week").
 // Openers only, after an optional "ok,", "sure,", "got it,"; Royce 2026-10-17 asked for the wider list, and what it doesn't cover is in
 // evals/reply/usesItsFinds.ts.
-// A stock opener that names something of theirs ("Looking at founder dinners in SF for Saturday") reacts to what they asked: only one
-// that names nothing from their words is stock (review of the finds batch, 2026-10-17: the wider list caught lines like that).
+// A stock opener that names something of theirs ("Let me see if the Angel Island run still has spots") reacts to what they asked: only
+// one that names nothing from their words is stock (review of the finds batch, 2026-10-17: the wider list caught lines like that).
+// "Looking for"/"Looking at" is the exception since 2026-11-09 (LOOKING_OPENER below).
 const STOCK_WORDS = ["let", "lemme", "look", "looking", "see", "check", "checking", "dig", "digging", "find", "pull", "pulling", "search", "searching", "hunt", "hunting", "scout", "poke", "around", "take", "have", "into", "sec", "second", "moment", "minute", "min", "hang", "hold", "tight", "bear", "back", "right", "sure", "okay", "ok", "got", "alright", "yes", "yep", "working", "gonna", "just", "give", "gimme", "now", "one", "good", "what", "for", "you", "your", "something", "some", "anything", "thing", "things", "options", "go", "going", "out", "there", "happen", "happening", "on"];
-export function stockLine(line: string, theirWords: string): boolean {
-  if (!STOCK_HOLD.test(line)) return false;
+// Royce, 2026-11-09: a holding line never opens on "Looking for"/"Looking at", and never only says their request back to them.
+// Code checks those facts (the opener, which words are theirs); whether the line is warm, playful or wry is the model's call.
+export const LOOKING_OPENER = /^\s*(?:(?:ok|okay|sure|got it|alright|all right|yep|yes|right)[\s,.!:-]+)?looking (?:for|at)\b/i;
+// Pure: a restatement: at least 80% of the line's own words are theirs (its stock words aside). Against "a wine night in SF... where
+// I can whine down and chill", "A wine night in SF to chill." is; "A wine night sounds right. Let me find you somewhere quiet." isn't.
+export function restatesThem(line: string, theirWords: string): boolean {
+  const own = [...meaningWords(line, STOCK_WORDS)];
+  if (!own.length) return false;
   const said = meaningWords(theirWords, STOCK_WORDS);
-  return ![...meaningWords(line, STOCK_WORDS)].some((w) => said.has(w));
+  return own.filter((w) => said.has(w)).length / own.length >= 0.8;
+}
+// Pure: why a holding line can't go, or null when it can.
+export function holdProblem(line: string, theirWords: string): string | null {
+  if (LOOKING_OPENER.test(line)) return "it opens on \"Looking for\" or \"Looking at\", a status that says their request back";
+  if (STOCK_HOLD.test(line)) {
+    const said = meaningWords(theirWords, STOCK_WORDS);
+    if (![...meaningWords(line, STOCK_WORDS)].some((w) => said.has(w))) return "it is a generic status line";
+  }
+  if (restatesThem(line, theirWords)) return "it only says their request back to them";
+  return null;
+}
+export function stockLine(line: string, theirWords: string): boolean {
+  return holdProblem(line, theirWords) !== null;
 }
 export const STOCK_HOLD = /^\s*(?:(?:ok|okay|sure|got it|alright|all right|yep|yes|right)[\s,.!:-]+)?(?:(?:let me|lemme|i'?ll|gonna) (?:look|see|check|dig|find|pull|search|hunt|scout|poke around|have a look|take a look|look around|look into|check around)|let'?s see|let'?s (?:look|check|find out)|looking(?! forward)|checking|searching|digging|hunting|on it|working on it|one (?:sec|second|moment|min|minute)|(?:give|gimme) (?:me )?a (?:sec|second|minute|moment|min)|hang (?:on|tight)|hold on|bear with me|just a (?:sec|second|moment|minute|min)|be right back|brb|back in a (?:sec|second|moment|minute|bit))\b/i;
 
@@ -174,9 +196,10 @@ export function loopTools(
   // A stock opener is asked for once more (stockHold below); one that's still stock is never sent: the search goes on without it.
   const stockHold = (line?: string) => {
     // On a call the line is never sent (services/callTools.ts), so asking again only spends one of the call's few rounds.
-    if (ctx.onCall || !line?.trim() || loop.holdSent || state.sent || !stockLine(line, theirWords()) || loop.holdAsked) return null;
+    const problem = ctx.onCall || !line?.trim() || loop.holdSent || state.sent || loop.holdAsked ? null : holdProblem(line, theirWords());
+    if (!problem) return null;
     loop.holdAsked = true;
-    return { ok: false, error: `Not searched yet: "${line.trim().slice(0, 80)}" is a stock line. Call this again with a whileLooking that is one short, natural line saying what you are looking for in the terms of what they asked (\"Looking at what's on in SF this week.\"), with no praise, no recap and nothing that implies a result, or leave whileLooking out.` };
+    return { ok: false, error: `Not searched yet: "${line!.trim().slice(0, 80)}" can't go: ${problem}. Call this again with a whileLooking that answers them in your own voice, reacting to what they asked or how they put it, never opening on "Looking for" or "Looking at", never just their request said back, never a generic status, with no praise and nothing that implies a result or knowledge you don't have; or leave whileLooking out.` };
   };
   const hold = async (line?: string) => {
     if (!line?.trim() || loop.holdSent || state.sent || stockLine(line, theirWords())) return;
