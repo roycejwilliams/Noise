@@ -185,9 +185,9 @@ export function roundupOf(text: string, name: string, o: { page?: boolean } = {}
   if (!isRoundup) return null;
   const line = named[0] ?? lines.find((l) => namesThing(l, name)) ?? null;
   const clean = (u: string) => u.replace(/[.,;!?]+$/, "");
-  // A candidate for its own page carries a whole word of its name (five letters or more) or its organization's acronym in its address
-  // (knowledge/sent.ts hostTerms), on the line that names it or anywhere in the text. Never a shortened link, another post, or a
-  // write-up on a publishing or news site (review of #441: pcmag.com and mrbeast.com matched two-letter pieces).
+  // Elsewhere in the text, a candidate for its own page carries a whole word of its name (five letters or more) or its organization's
+  // acronym in its address (knowledge/sent.ts hostTerms). Never a shortened link, another post, or a write-up on a publishing or news
+  // site (review of #441: pcmag.com and mrbeast.com matched two-letter pieces).
   const terms = hostTerms(name).map((w) => w.replace(/[^a-z0-9]/g, "")).filter((w) => w.length >= 3);
   const bare = (u: string) => (hostOf(u) ?? "").replace(/[^a-z0-9.]/g, "");
   const ownPage = (u: string) => {
@@ -196,9 +196,13 @@ export function roundupOf(text: string, name: string, o: { page?: boolean } = {}
     const label = h.split(".").slice(0, -1).join("");
     return terms.some((w) => label.includes(w));
   };
+  // On the line that names it, any link that isn't a post, a shortener or a write-up is a candidate (re-review of #441: beondeck.com,
+  // joinef.com, neo.com, hf0.com, aigrant.org and mercatus.org were refused for not carrying a five-letter name word). The page read
+  // still requires its name near the top. Elsewhere in the text, the address must carry its name or acronym.
+  const allowed = (u: string) => { const h = bare(u); return !!h && !isX(u) && !SHORTENER.test(h) && !WRITE_UP.test(h); };
   const all = (t.match(URLS) ?? []).map(clean);
-  const onLine = (line?.match(URLS) ?? []).map(clean);
-  const links = [...new Set([...onLine, ...all])].filter(ownPage);
+  const onLine = (line?.match(URLS) ?? []).map(clean).filter(allowed);
+  const links = [...new Set([...onLine, ...all.filter(ownPage)])];
   return { items: items.length, line: line ? line.slice(0, 200) : null, links };
 }
 // Hosts that shorten links, and hosts where a third party writes about things: never a thing's own page.
