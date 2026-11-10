@@ -1,0 +1,102 @@
+{
+  "hash": "362c52d3054e9dc1",
+  "case": "status-check",
+  "recorded_at": "2026-11-10T03:44:54.431Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you dr...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you draft the planning docs for Sequin?\".\n\nCue's text:\n\"\"\"Already on it. I've got the launch timeline outlined, venue walk-through Nov 3, invites out Nov 10.\"\"\"\n\nDoes the text tell them Cue is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Already on it. I've got the launch timeline outlined, venue walk-through Nov 3, invites out Nov 10\\\" shows ongoing work and status without offering, stopping, or new task claims.\"}",
+      "usage": {
+        "input_tokens": 342,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 199,
+        "output_tokens_details": {
+          "thinking_tokens": 118
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgtZPKHxZJPe2HyZ83gtJ",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EokGCsQCCBMYAipAAIE7ibRj9sWowki4ZWYO18vV9UaCRovSY2KT8kpWH71M6pqKFTbKA+wd7nMvfniqqVUKiIxsWr3LIeDZ1iLidDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBtabK1wbCAToIBBAAGgwC2ooDTzcFpDwEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDN0VwwEIVn8wkyxlOTVU4a0G91d6eNioysGk8s9GUrFiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgz4T8Lt0prYyCCjD44aDIzQCQLP3Kf9Ewon+SIwtRkAp4r/wOCEs34mL9MeBaKmaxZrKNuNmp3usiwnZjrF7NRfIYRWbo8FJhDraVM8KvEC1s0kEkOxfcMjpmoilLZKwBkzKPbIajVTBy7LD68lHgUTKf62shCzNlHNRCsyANbS9LW9OVE6kpAfmEx+nBLnzvu+CQ86TwkrxKGnfHU1jQOE14cnVTVC7/Mxpf/Lx39TUOFUyDKTYjdcAWJMaMLZqFA1iPNRQklaZaOeFPlP13oQFVuRAoOuLu2x0Phjc57tzLVu3FvzQa8AqbTQ0lXYYmYMGC2igEOnlZwnIj/Jay9O/D1PdLppZdCf9NSOxLvqqFeb8ZkmYQmR0IrSRx/A/L+O6iW7MN60TUu2ndwKUdd0Gv95FjZP3xImrHjamxTpBa3mq1urBziOHzXzTbCr97fCaxMOyNh1SFeXIx6z8WJHBb52Fl0Rm9Q2gQ6stsqVVkKIBtnj0yUE3gCZJ5BY+2rcv8/GN0hBnbw1kqqrjpgiiO5PgMfOwJ0iURbiej2J1u8NsJArdupFOFwj3a2oMmfMBdKFntpMmTrY50aKHBnTGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Already on it. I've got the launch timeline outlined, venue walk-through Nov 3, invites out Nov 10\\\" shows ongoing work and status without offering, stopping, or new task claims.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 342,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 199,
+          "output_tokens_details": {
+            "thinking_tokens": 118
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "362c52d3054e9dc1",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "hash": "10f74ee2eb20b6cf",
+  "case": "double-offer",
+  "recorded_at": "2026-11-10T03:42:18.806Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Meaning I haven't actually started looking yet, nothing's been searched. Want me to kick it off now?\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 169,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 51,
+        "output_tokens_details": {
+          "thinking_tokens": 48
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgtZBwy1Jv69owts3PyGS",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQShQYKEAgTGAI4AUIIdGhpbmtpbmcSDPjHtsvDSaRx1WfbxhoMKP07QemHHqPD7pobIjBzHo+DqJHXr4pmpT0CC0i84h+UDYUzcSudrWC7epzHY82YOoMZxjf1M4afxyh/RTYqogVhXFfc7nt/tT5/WKx2BqnbOGGovWgFBQHiT7vLUrkPqcT1Ru2GOqPDeiHw7G99cU/94nXfKnSH6Qmz2m7Q5HS24QOg0Jux6Q6O++Dk6pQOP5l3/6fEl5QYXU0hsNUlu7mKK1SN8Opk2KF0x9VM6wiu6Y/ec1T094WktlmYK6KL4MYyQCDIwN2bsnpDy61TJQFT8/aK9g1NQvmjGcftQ6PlEqpuuvyyjEI2FufGjo8kqrUcU2mJ9hpbSwp+rOhhUiMD6+UpJghJFGZ9+zjZqET4CJpdmHvHi0mG9AdOGhnLLmoHoezNCijAWj/IarK8wr1s/hD6L8cS9RA87TbUyFii3MiNAR98DDCM+xNudM6TsLErde58s7YHrmH48QYpH09PkHkgUZ+bbLDVlosRch21K71SDY7v3fUfUk+2BXUNeIolbXCEcer6e/HeWqSoH8D0OFFrr/MndbQRbEIQQbmfnPkjmS6vOW2vXsTH5xH50MYZIMT0jfLfTDpzWbdhxOeFy5k6AVlKKaBS6inuhwn+dKzmNjty2+CYHvKPwBFqSGkWWLVkrTwazmmIfNF/+QjsWzyMBjxdJioiffAgLEdHS1+ZcTC2xXO2XsfHCxiZIqtGB1U5JNgqDpBsJK/z4aB5teBRbJUm7s7lOqPeO1DcIxs3Z0PZZGCj5UM+zadHuuOBWTRjjdzK6uQi+FHV9AlZTCDHKwUs6Crcsdxlt3nEtS/F/+74VORsoXdtHDQTVE/WHDtmrRGL6fkg8nxeACiirLWDPO/ae8yMPJLy4biqfyrQ/AMcGH3f1aE5w1V3WaE8ty//ltrvuwqbVxFyQJddc8ibEog+Ld+SBgIZYTpzb1QQKauzAiOS88HNRHVXH5vmPqyU5TVvzqXw1dUEm0mhXRgB"
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 169,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 51,
+          "output_tokens_details": {
+            "thinking_tokens": 48
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "10f74ee2eb20b6cf",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

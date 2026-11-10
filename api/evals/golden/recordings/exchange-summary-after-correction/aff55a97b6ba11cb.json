@@ -1,7 +1,7 @@
 {
   "hash": "aff55a97b6ba11cb",
   "case": "exchange-summary-after-correction",
-  "recorded_at": "2026-11-09T20:43:03.297Z",
+  "recorded_at": "2026-11-10T03:50:13.496Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\":\"They're redirecting Cue to give the problem statement about Theo, not accepting the one Cue just gave about something else\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants problem statement framed around Theo situation\",\"pushback\":\"Cue gave the wrong problem statement (about matching/product, not Theo)\",\"lesson\":\"when they ask for 'my problem statement', ground it in the specific situation they just raised, not an unrelated one\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"goals_challenges\"],\"missing\":[\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
+      "text": "{\"reason\":\"They reject the problem statement Cue gave and ask for one about Theo instead\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants a problem statement about Theo situation\",\"pushback\":\"rejected the given problem statement as not about Theo\",\"lesson\":\"When they ask for 'my problem statement,' give one tied to what they were actually discussing, not an unrelated prior topic.\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"goals_challenges\"],\"missing\":[\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
       "usage": {
         "input_tokens": 6553,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 429,
+        "output_tokens": 407,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgt1DR11U2eQoh3DqNzL8",
+        "id": "msg_011CgtZnjA3trDCw43UDNiGj",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\":\"They're redirecting Cue to give the problem statement about Theo, not accepting the one Cue just gave about something else\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants problem statement framed around Theo situation\",\"pushback\":\"Cue gave the wrong problem statement (about matching/product, not Theo)\",\"lesson\":\"when they ask for 'my problem statement', ground it in the specific situation they just raised, not an unrelated one\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"goals_challenges\"],\"missing\":[\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
+            "text": "{\"reason\":\"They reject the problem statement Cue gave and ask for one about Theo instead\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants a problem statement about Theo situation\",\"pushback\":\"rejected the given problem statement as not about Theo\",\"lesson\":\"When they ask for 'my problem statement,' give one tied to what they were actually discussing, not an unrelated prior topic.\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"goals_challenges\"],\"missing\":[\"current_situation\",\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 429,
+          "output_tokens": 407,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

@@ -1,0 +1,102 @@
+{
+  "hash": "d6950bcbcf02161c",
+  "case": "checkin-waiting-on-them",
+  "recorded_at": "2026-11-10T03:45:25.353Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop venue. The member texted \"Just checking in\".\n\nCue's text:\n\"\"\"Good to hear from you. The Harbor Light fellowship is still sitting there if you want to weigh it before locking funding timing, no rush though.\"\"\"\n\nDoes the text give presence AND bring up the Harbor Light Fellowship as the one item, as something there for them to pick up if they want, WITHOUT implying they owe Cue an answer or that Cue is waiting on them (no \"still waiting to hear what you think\", no \"get back to me\"), and without a status report? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"no rush though\\\" removes any pressure while mentioning only the Harbor Light fellowship as a single open item.\"}",
+      "usage": {
+        "input_tokens": 386,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 310,
+        "output_tokens_details": {
+          "thinking_tokens": 255
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgtZRXcvkfCyEqqqaGwn5",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EpAJCsQCCBMYAipAYDeODzGgfCMvnCQphk7JZGH7TiOeisxx10qssKWxpyDYCl+95BCuTxZSjD0KNG3JmTnYOZZaUYC9bxCZCbUXCjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB1KbK1wbCAToIBBAAGgwC2ooDTzcFTbgEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCoAzYL6VkB7/RJQFWfxhcy63QOuirw+jAy55hnp4zeuSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxH2O2x2yrCWBzF+SMaDCUm+ej1oOSfoNIxMyIwqsbk+AWRT+2pb5lbkeiPuVX3wAP5uWSQr75x8cq19vTenNVzosdZB0KvPzkCMbTGKvgFHn9vFlrLE+v3ud5ngwNE/q/zJ0r6K/e7dSv/DoHpYVUhUI1TVn2mrWSeJxBREO7uiIVlqAZyHdJMXAqlwvfsqMMcN5svemJv3f8gg+JsosTKM8VZCRFGucUn70+S+nmY+t4ZGHH+sBb5vLnJuBbv7Hcoh3n5UuAE6+i0he0k3izbY3B9OBSda7RAuz1XrOh7hnR+Rt2Ix6/uAXCseZH7MtOZtmhmX4fg5W/DN3a+H+CTcZWOoPf5R/Qret6B98bxTLW7s/NzfnjEY0z04PIyvN64pUKNuFrRegIJG6HDKoF4mWZF57QEcPxE1EBnxb92fOl4GYbbd5fr+Dl53L+OobvUxeeRqg8ocXn5JduBLArOPcML2E80j6oioUZDZWEXxWrc8UCZuuhsFVzWNyChRyY+WhkIZnfc34lPg9MwIvrMqO844LODD1XUytk+qHSBelOWCwQ+eLdTpG+Z9nx6xz7+oYRQj60GrO+z2YDqMFSKenEMhLJDnAjL6ZDAEZ9dYnHzSyhl40CkgOv1ttMBTsVUG1k8OenPOarUuMgy9Od24exadfpU6yqbTFJjLgNiIg3oWlQCdZv38b5jsr24DtDLavuzf0Fzd9oxDJByhAi3OQ7EjK06GtMBP6rJr7M6MCE4uG/ABGQdM2KJm9SBlAIJcIAak5ObA8mILE7XmxikiR0x0ZFvU9WwSuYtkrsm61W0gIax7m/MoZiTSpraQSwdElwtnDy0o8PAxEVnibpbIPcClR8z8FycwQTLnCeaafNnEyfB7dCGSAFJ51W43dTI6K6Bj2zXy22xm2lAuNUH97E0B9I3ImxapTha7moGpmGLEfkU1aOAc8k6EDg243xvDuK85IU27/M53LyNutraP0B/ESILrcx48Jdz9G+O4fnpC9MC54TG6vjZAIXCj+c8ks0jUDPoX2K+iOudKJu3W2X4lzvAiJCbHF8Jr2iKqDQX20Egr4eJPc8cuu/lkT1abWnzHyz3rpaiY/tWJq86Bg7eobAfiBgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"no rush though\\\" removes any pressure while mentioning only the Harbor Light fellowship as a single open item.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 386,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 310,
+          "output_tokens_details": {
+            "thinking_tokens": 255
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "d6950bcbcf02161c",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
