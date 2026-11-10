@@ -2442,6 +2442,8 @@ export async function sendExempt(opts: {
   safety?: boolean;
   // It brings them into an event (away holds it); an intro ask for an event is read from its key when this isn't said.
   eventBound?: boolean;
+  // When it was first queued (a held row the deferred runner sends): the send-time read is told how long it waited. Now otherwise.
+  queuedAt?: Date | null;
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date; queued?: boolean; door?: boolean }> {
   if (proactivePaused() && !opts.requested) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
@@ -2461,6 +2463,28 @@ export async function sendExempt(opts: {
   if (opts.respectHours && !localHourOk(opts.now ?? new Date(), opts.timezone ?? null)) {
     await record("skip", "blocked_hours", "outside local hours");
     return { sent: false, reason: "outside local hours" };
+  }
+  // Cue's own event announcement or an intro ask that never reached the dispatch (no door, the door bypassed, a held one the deferred
+  // runner sends): on a hard day the send-time read judges this message, told of the hard stretch, the same read the dispatch asks for
+  // a find (harness/momentFit.ts exemptMomentRead; Royce, 2026-11-08/09: never a class hold, and at the cap a fresh judgment, never an
+  // automatic release). Asked before the send lock, so the model call never holds it. The recheck in the lock then skips its mood hold
+  // for it (judged); the safety hold and away still apply there. Requested sends, replies, safety sends and relays are never read.
+  const judgedNow = opts.now ?? new Date();
+  const preCls: SendClass = opts.requested ? "requested" : (opts.cls ?? (opts.coInitiated ? "unsolicited" : (PROACTIVE_CLASS[opts.type] ?? "unsolicited")));
+  let judged = STR.exemptHardDayRead({ cls: preCls, type: opts.type, targetKey: opts.targetKey, safety: opts.safety });
+  if (judged) {
+    const preReply = !!opts.answers && answersLastText(opts.answers.askedAt, await loadLastWrittenInbound(pool, opts.userId).catch(() => null), judgedNow);
+    const r = preReply ? null : await STR.exemptMomentRead({ userId: opts.userId, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, cls: preCls, safety: opts.safety, now: judgedNow, queuedAt: opts.queuedAt ?? null });
+    // Their state couldn't be read here: nothing was judged, so the recheck in the lock keeps its holds (fail closed).
+    if (r && !r.read && r.unreadable) judged = false;
+    if (r?.read && r.action.act === "drop") {
+      await record("skip", "moment_drop", r.action.why);
+      return { sent: false, reason: `doesn't fit now: ${r.action.why}` };
+    }
+    if (r?.read && r.action.act === "wait") {
+      await record("skip", "moment_wait", r.action.why);
+      return { sent: false, reason: `held: ${r.action.why}`, retryAt: r.action.retryAt };
+    }
   }
   const client = await pool.connect();
   const delivered: string[] = [];
@@ -2489,7 +2513,7 @@ export async function sendExempt(opts: {
     // again, never dropped. A reply to their latest message skips the holds, never the close.
     const re = await sendTimeRecheck(
       opts.userId,
-      { kind: opts.type, cls: opts.requested ? "requested" : cls, reply: answersLast, targetKey: opts.targetKey, eventBound: opts.eventBound ?? eventBoundSend(opts.type, opts.targetKey), eventId: directAskEvent(opts.targetKey, opts.userId), safety: opts.safety },
+      { kind: opts.type, cls: opts.requested ? "requested" : cls, reply: answersLast, targetKey: opts.targetKey, eventBound: opts.eventBound ?? eventBoundSend(opts.type, opts.targetKey), eventId: directAskEvent(opts.targetKey, opts.userId), safety: opts.safety, judged },
       { now, stage: "exempt_lock", closed: (uid) => closedInLock(client, uid, [{ type: opts.type, targetKey: opts.targetKey, payload: {} }]) },
     );
     if (!re.go) {

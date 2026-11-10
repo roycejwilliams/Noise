@@ -17,7 +17,8 @@
 //
 // Who is held (the doctrine the pick already keeps, candidateChecks):
 //   safety hold  Cue's own sends (unsolicited): no offers, nudges or asks. What they asked for (requested) and answers (reply) go.
-//   mood hold    Cue's own sends and check-ins, capped (MOOD_HOLD_CAP_HOURS). Requested and replies go.
+//   mood hold    Cue's own sends and check-ins, capped (MOOD_HOLD_CAP_HOURS). Requested and replies go. Not Cue's own event
+//                announcement or an intro ask (judged): the send-time read judges each one, told of the hard stretch (2026-11-09).
 //   away         Cue's own sends that bring them into an event (eventBound), not the end-of-night close.
 //   safety       A send whose PURPOSE is safety is never held by the safety hold (or anything else here).
 // The end-of-night close is a goodbye (Royce 2026-10-14: one line, once): only the safety hold holds it.
@@ -48,6 +49,10 @@ export type RecheckWhat = {
   changedMind?: boolean;
   // The event it is about (an in-room text, an intro ask for an event): arriving there ends an away hold for it.
   eventId?: string | null;
+  // The send-time read (harness/momentFit.ts exemptMomentRead) judges this one on a hard day, told of the hard stretch: Cue's own event
+  // announcement or an intro ask (Royce, 2026-11-08/09: a hard day informs, it never blanket-silences, and at the cap it's a fresh
+  // judgment). The mood hold doesn't apply to it; the safety hold, away and a changed mind still do.
+  judged?: boolean;
 };
 
 // Pure: whether an exempt send brings them into an event, from its own key (eventGuestMatchHandoff's directAskKey) or type.
@@ -96,7 +101,8 @@ export function recheckVerdict(what: RecheckWhat, state: HoldState | null, close
     if (own || what.cls === "checkin") return { go: false, hold: "unreadable", held: true, reason: "the member's state couldn't be read; waits", retryAt: new Date(now.getTime() + UNREADABLE_RETRY_MINUTES * 60_000) };
   } else {
     if (state.safetyHold && own) return { go: false, hold: "safety", held: true, reason: "a safety hold is on: Cue's own texts wait", retryAt: new Date(now.getTime() + SAFETY_RETRY_HOURS * HOUR) };
-    if (state.mood.hold && (own || what.cls === "checkin") && !what.close) {
+    // Not a class hold for what the send-time read judges (judged): that read decides send, wait or drop for this message.
+    if (state.mood.hold && (own || what.cls === "checkin") && !what.close && !what.judged) {
       return { go: false, hold: "mood", held: true, reason: `they're in a hard stretch (mood hold, at most ${MOOD_HOLD_CAP_HOURS}h): this waits`, retryAt: new Date(now.getTime() + MOOD_RETRY_HOURS * HOUR) };
     }
     if (state.away && own && what.eventBound && !what.close && !(what.eventId && state.arrived)) {

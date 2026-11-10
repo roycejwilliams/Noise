@@ -91,8 +91,11 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
   if ((r.reason ?? "").startsWith(PAST_WINDOW)) return "skipped";
   // What it served closed at their word since it was queued (harness/closedSubject.ts): skipped, never retried.
   if ((r.reason ?? "").startsWith(SUBJECT_CLOSED)) return "skipped";
+  // The send-time read on a hard day said it no longer fits (harness/momentFit.ts exemptMomentRead): ended, never retried.
+  if ((r.reason ?? "").startsWith(MOMENT_DROPPED)) return "skipped";
   return "failed";
 }
+export const MOMENT_DROPPED = "doesn't fit now:";
 
 // What a send changes in the record, by kind. Run once the outcome is known: on "sent" it writes what Co did; on
 // "skipped"/"failed" it records that it didn't. Each handler is idempotent (a row re-claimed after a crash may run it twice).
@@ -343,7 +346,8 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     else {
       result = await deps
         // A reminder they set is a delivery they asked for (requested), whatever its send type (harness/notifyGate.ts).
-        .send({ userId: row.user_id, phoneNumber: row.phone_number, type: row.type, targetKey: row.target_key, messages, timezone: row.timezone, respectHours: true, now, ...(/^reminder:/.test(String(row.target_key)) ? { cls: "requested" as const } : {}) })
+        // queuedAt: the send-time read on a hard day is told how long it waited (harness/momentFit.ts exemptMomentRead).
+        .send({ userId: row.user_id, phoneNumber: row.phone_number, type: row.type, targetKey: row.target_key, messages, timezone: row.timezone, respectHours: true, now, queuedAt, ...(/^reminder:/.test(String(row.target_key)) ? { cls: "requested" as const } : {}) })
         .catch((err: any) => ({ sent: false, reason: `error: ${String(err?.message ?? err)}` }));
     }
     // A Cue-started text held past its event or its window is dropped with the reason, and its after step hears it didn't go.
