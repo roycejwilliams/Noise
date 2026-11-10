@@ -107,6 +107,32 @@ for (const [name, c] of [["matching walkthrough", MATCHING], ["vent + ask", VENT
   const both = await Promise.all([(r.t.tools as any).sendReply.execute({ message: MATCHING.first }, { toolCallId: "1", messages: [] }), (r.t.tools as any).sendReply.execute({ message: MATCHING.first }, { toolCallId: "2", messages: [] })]);
   check("two identical calls in one step: one text", r.t.state.sentMessages.length === 1 && both.filter((x: any) => x.note === T.ONE_REPLY_NOTE).length === 1, r.t.state.sentMessages);
 }
+// Review of #444.
+{
+  // A correction that changes only a number goes (numbers kept whatever their length).
+  const r = real("what time does it start?");
+  await r.send("It starts at 7:30 at the pier.", "1");
+  const fix = await r.send("Sorry, it starts at 8:30 at the pier.", "2");
+  check("a number-only correction (7:30 -> 8:30) goes out", fix.note !== T.ONE_REPLY_NOTE && r.t.state.sentMessages.length === 2, r.t.state.sentMessages);
+  check("whole words: 'Yes.' isn't contained in 'yesterday', 'ok' isn't in 'booking'", !T.repeatsSent("Yes.", ["I booked it yesterday."]) && !T.repeatsSent("ok", ["Your booking is set."]));
+  check("…while the same words again still are", T.repeatsSent("It starts at 7:30 at the pier.", ["It starts at 7:30 at the pier."]));
+}
+{
+  const share = real("guess what? I got the job!");
+  await share.send("That's huge. Congratulations.", "1");
+  await share.send("You've wanted this one for a long time.", "2");
+  check("a share with a rhetorical 'guess what?' stays one text", share.t.state.sentMessages.length === 1, share.t.state.sentMessages);
+  const rec = real("recommend a good book on hiring");
+  await rec.send("One I'd start with: Who by Geoff Smart.", "1");
+  await rec.send("It's built around scorecards, which fits how you're hiring for the backend role.", "2");
+  check("'recommend a good book on hiring': the second text goes", rec.t.state.sentMessages.length === 2, rec.t.state.sentMessages);
+  const nah = real('nah [Replying to Cue\'s text: "Want me to keep looking for engineers this week?"]');
+  await nah.send("Got it, I'll leave it.", "1");
+  await nah.send("Say the word if that changes.", "2");
+  check("'nah' replying to a Cue question (its quoted text set aside) stays one text", nah.t.state.sentMessages.length === 1, nah.t.state.sentMessages);
+  check("asked: find, recommend, suggest, send me, I need, need a, thoughts, ideas", ["find me a quiet bar", "recommend a book", "suggest somewhere", "send me the link", "I need a cofounder", "need a venue", "any thoughts", "ideas for saturday"].every((m) => T.askedForSomething(m)));
+  check("not asked: guess what / you know what shares, quoted lines", !T.askedForSomething("guess what? I got the job!") && !T.askedForSomething("you know what? we did it") && !T.askedForSomething("> Want me to look?\nnah"));
+}
 // Pure.
 check("asked: a question or a request", T.askedForSomething(VENT_ASK.message) && T.askedForSomething(MATCHING.message) && !T.askedForSomething(COMPLETE.message) && !T.askedForSomething(PRIYA.message));
 check("repeatsSent: same, contained, or nearly all the same words", T.repeatsSent("Hi there.", ["Hi there. How are you?"]) && !T.repeatsSent(MATCHING.second, [MATCHING.first]));
