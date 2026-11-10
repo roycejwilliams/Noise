@@ -178,7 +178,7 @@ check("pure: nothing sent yet, a send is always allowed", T.anotherSendAllowed({
 
 // Wiring: the real tool set is wrapped before the guard, and the turn rule says the same thing.
 const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
-check("the real tool set is wrapped for one reply, outermost (after the tool guard)", /guardTools\(tools, \{[^\n]*\}\);\n(?:\s*\/\/[^\n]*\n)+\s*wrapSendsForOneReply\(tools as Record<string, any>, state, \(\) => !!ctx\.answerOwed, ctx\.dryRun\);\n\s*return \{ tools: orderForCache\(tools\)/.test(ct));
+check("the real tool set is wrapped for one reply, outermost (after the tool guard)", /guardTools\(tools, \{[^\n]*\}\);\n(?:\s*\/\/[^\n]*\n)+\s*wrapSendsForOneReply\(tools as Record<string, any>, state, \(\) => !!ctx\.answerOwed, ctx\.dryRun, \(\) => askedForSomething\(ctx\.resolvedContent\)\);\n\s*return \{ tools: orderForCache\(tools\)/.test(ct));
 check("the guard marks every refusal it returns", /return markGuardRefusal\(\{ ok: false, error: tell \}\);/.test(fs.readFileSync(new URL("../../src/agent/toolGuard.ts", import.meta.url), "utf8")));
 check("the send wrap counts only a declared tool's result, or a refusal that tells them", /if \(resultIsNewForThem\(name, out\)\) news\(\);/.test(ct) && /if \(isGuardRefusal\(out\)\) return guardRefusalTellsThem\(out\);\s+return NEW_FOR_THEM\.has\(name\);/.test(ct));
 const cr = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
