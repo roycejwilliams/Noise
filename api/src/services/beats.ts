@@ -12,8 +12,6 @@ export const MAX_BEATS = 5;
 export const asksThem = (p: string) => /\?/.test(p);
 // A list item: a number, a bullet or "Step N" at its start. Consecutive items, and the line that introduces them (ending in a colon),
 // are one connected explanation: one text, never a fragment per step (Royce, 2026-11-10: split only when it helps them read or use it).
-// A list item: a number, a bullet or "Step N" at its start. Consecutive items, and the line that introduces them (ending in a colon),
-// are one connected explanation: one text, never a fragment per step (Royce, 2026-11-10: split only when it helps them read or use it).
 // Nothing is ever dropped here (review of #443: a code-level "restates an earlier paragraph" rule dropped drafts, alternative versions
 // and should / should-not pairs); a repeat is the prompt's to avoid (the send tool's description).
 const LIST_ITEM = /^\s*(?:\d{1,2}[.)]|[-*\u2022]|step \d{1,2}\b)/i;
