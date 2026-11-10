@@ -283,20 +283,29 @@ export function anotherSendAllowed(state: SendState, answerOwed: boolean, o: { c
 export const MAX_CONTINUING_SENDS = 2;
 const STOP = new Set(["the", "and", "that", "this", "with", "for", "you", "your", "its", "it's", "are", "was", "but", "not", "just", "they", "them", "then", "there", "what", "when", "have", "has", "had", "from", "into", "about", "like", "really", "very", "also", "can", "will", "would", "could", "should"]);
 // Numbers are kept whatever their length ("7:30" vs "8:30": the "30" and the "7" or "8" both count; review of #444).
-const tokens = (t: string) => t.toLowerCase().replace(/[\u2019']/g, "").match(/[a-z0-9]+/g) ?? [];
+// Digits split from letters, so "7:30pm" and "7:30 pm" read the same (re-review of #444).
+const tokens = (t: string) => t.toLowerCase().replace(/[\u2019']/g, "").replace(/(\d)([a-z])/g, "$1 $2").replace(/([a-z])(\d)/g, "$1 $2").match(/[a-z0-9]+/g) ?? [];
 const contentWords = (t: string) => tokens(t).filter((w) => /\d/.test(w) || (w.length > 2 && !STOP.has(w)));
 const numbersIn = (t: string) => new Set(tokens(t).filter((w) => /\d/.test(w)));
 // Pure: a send that repeats what already went (or is going) this turn: the same words in a row (whole words, never inside another word:
 // "Yes." isn't in "yesterday"), or nearly all of its words already said (85%). A text whose numbers differ from what went is never a
 // repeat: that's a correction ("starts at 7:30" -> "starts at 8:30"). An actual duplicate is always held; a second take is held by the
 // one-reply rule above.
-// Judged on what the text adds: its sentences already said word for word are set aside first (a carried line said again is stripped
-// downstream; new content around it still goes).
+// Pure: what a text adds after the reply went: its sentences already said word for word are taken out (re-review of #444: set aside but
+// still sent, "The plan is dinner at Nopa Tuesday with Maya. Exactly." repeated the plan). dropped: some were.
+export function freshPart(message: string, said: readonly string[]): { text: string; dropped: boolean } {
+  const whole = ` ${tokens(said.join(" ")).join(" ")} `;
+  const parts = message.split(/(?<=[.!?])\s+|\n+/);
+  const kept = parts.filter((x) => { const t = tokens(x); return t.length > 0 && !whole.includes(` ${t.join(" ")} `); });
+  return { text: kept.join(" ").trim(), dropped: kept.length < parts.filter((x) => tokens(x).length > 0).length };
+}
+// Fewer than three words of substance (numbers count): nothing worth a text of its own.
+export const trivialText = (t: string): boolean => contentWords(t).length < 3;
 export function repeatsSent(message: string, said: readonly string[]): boolean {
   if (!tokens(message).length) return true;
   const theirs = tokens(said.join(" "));
   const whole = ` ${theirs.join(" ")} `;
-  const fresh = message.split(/(?<=[.!?])\s+|\n+/).filter((x) => { const t = tokens(x); return t.length && !whole.includes(` ${t.join(" ")} `); }).join(" ");
+  const fresh = freshPart(message, said).text;
   const mine = tokens(fresh);
   if (!mine.length) return true;
   const had = new Set(theirs.filter((w) => /\d/.test(w)));
@@ -310,7 +319,8 @@ export function repeatsSent(message: string, said: readonly string[]): boolean {
 }
 // Pure: their message asks for something (a question or a request), so the answer may run to a second text. A share or a reaction
 // never does.
-const ASKS = /\?|\b(?:tell me|explain|walk me|describe|show me|give me|send me|help me|find (?:me|a|an|some|someone|somewhere)|recommend|suggest|i need|need an? |thoughts|any thoughts|ideas|how (?:do|does|did|should|would|can|could|to)|what (?:should|would|do|does|is|are|can)|why|which|can you|could you|would you|should i|any (?:good |ideas|tips|advice))/i;
+// Re-review of #444: requests only ("I need a nap", "so many thoughts", "I find these boring", "whichever works" ask nothing).
+const ASKS = /\?|\b(?:tell me|explain|walk me|describe|show me|give me|send me|help me|find me|can you find|recommend|suggest|i need (?:help|someone|somebody|a recommendation|recommendations|ideas|advice|to find|you to)|any thoughts|your thoughts|ideas|how (?:do|does|did|should|would|can|could|to)|what (?:should|would|do|does|is|are|can)|why|which (?:one|is|should|would|do)|can you|could you|would you|should i|any (?:good |ideas|tips|advice))\b/i;
 // Rhetorical openers and tags that ask nothing ("guess what? I got the job!", "you know what?", "right?"), and what they quoted or replied
 // to (an inline reply's note, a ">" quoted line: Cue's words, not their ask).
 const RHETORICAL = /\b(?:guess what|you know what|can you believe (?:it|that)|right|huh|isn'?t it|ya know|you know)\s*\?/gi;
@@ -346,9 +356,23 @@ export function wrapSendsForOneReply(tools: Record<string, any>, state: SendStat
   if (typeof send !== "function") return;
   tools.sendReply.execute = async (...args: any[]) => {
     // Checked and claimed before any await, so a second call in the same step sees the first.
-    const message = String(args[0]?.message ?? "");
+    let message = String(args[0]?.message ?? "");
     const replied = state.sent || state.sendsInFlight > 0;
     const said = [...state.sentMessages, ...going];
+    // After the reply, only what's new goes: sentences already said word for word are taken out of the outgoing text; with nothing of
+    // substance left, it's held (re-review of #444).
+    if (replied) {
+      const f = freshPart(message, said);
+      if (f.dropped) {
+        if (!f.text || trivialText(f.text)) {
+          state.extraSendsRefused += 1;
+          if (dryRun) console.log(`[conversationReply dryRun] held a second text that only repeats the reply: "${message.slice(0, 160)}"`);
+          return { ok: true, note: ONE_REPLY_NOTE };
+        }
+        message = f.text;
+        args[0] = { ...args[0], message };
+      }
+    }
     // An actual duplicate of what already went (a retry of the same text, the plain text after the same reply) is held whatever else holds.
     const duplicate = replied && repeatsSent(message, said);
     const continues = replied && !duplicate && asked() && continuing < MAX_CONTINUING_SENDS;
