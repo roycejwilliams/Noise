@@ -178,7 +178,8 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
       }
       let res: Awaited<ReturnType<RegistrationSession["submit"]>>;
       try {
-        res = await session.submit();
+        // Their email and name, so the result is tied to them where the page shows them.
+        res = await session.submit({ email: c.email, name: plan.fill.find((f) => f.kind === "name")?.value ?? null });
       } catch (err: any) {
         // The browser died or the page broke mid-submit. Before the click nothing was sent: it stops, with the real link. After it the
         // result is unknown: uncertain, reconciled before anything else, never retried on a guess.
@@ -264,7 +265,7 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
     if (after) {
       let keep = false;
       try {
-        const res = await session.readResult();
+        const res = await session.readResult({ email: c.email, name: null });
         return await settle(rec, session, c, res, () => { keep = true; });
       } finally {
         if (!keep) await session.close();
