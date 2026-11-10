@@ -27,6 +27,7 @@ check("a 503 that didn't go: not sent (the reply may try again)", (await wentDes
 check("unreadable record: unknown (null), never claimed sent", (await wentDespiteError(new Error("socket hang up"), q, { went: record(null), settleMs: 0 })) === null);
 reads = 0;
 check("a 4xx never went: false with no read", (await wentDespiteError(Object.assign(new Error("400 Bad Request"), { status: 400 }), q, { went: record(true), settleMs: 0 })) === false && reads === 0);
+check("a 4xx said only in the message ('Sendblue 400: ...'): false with no read", (await wentDespiteError(new Error("Sendblue 400: not a valid iMessage recipient"), q, { went: record(true), settleMs: 0 })) === false && reads === 0);
 check("the send layer's own refusal (breaker, placeholder, bad number): false with no read", (await wentDespiteError(new Error("sendblue: send breaker open for ...0123, refusing to send"), q, { went: record(true), settleMs: 0 })) === false && reads === 0);
 
 const route = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");

@@ -298,7 +298,7 @@ export async function wentDespiteError(
   const e = err as { status?: unknown; message?: unknown } | null;
   // Refused here, before anything left (the wrapper's own refusals all say so).
   if (refusedBySendLayer(err) || /refusing to send/.test(String(e?.message ?? ""))) return false;
-  const status = typeof e?.status === "number" ? e.status : Number(String(e?.message ?? "").match(/^(?:\w*Error:\s*)?(\d{3})\b/)?.[1] ?? NaN);
+  const status = typeof e?.status === "number" ? e.status : Number(String(e?.message ?? "").match(/^(?:\w*Error:\s*)?(?:sendblue:?\s*)?(\d{3})\b/i)?.[1] ?? NaN);
   if (status >= 400 && status < 500) return false;
   if (!q.content.trim()) return null;
   await new Promise((r) => setTimeout(r, deps.settleMs ?? WENT_SETTLE_MS));
