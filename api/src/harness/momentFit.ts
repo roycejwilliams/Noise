@@ -234,3 +234,69 @@ export function carriesCallCorrection(type: string, meta: unknown): boolean {
 }
 // Pure: the same text, whitespace aside.
 export const sameDraft = (a: string | null, b: string): boolean => !!a && a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
+
+// ---------------------------------------------------------------- the same read for a send that never reaches the dispatch
+// Cue's own event announcement (co_event) and an intro ask (direct_ask) mostly wait at the door and are judged in the dispatch like any
+// find (hardDayRead above). Some never get there: an in-room intro ask (services/eventGuestMatchHandoff.ts has no door), one that
+// bypasses the door (it's about something within hours), a held one the deferred runner sends, the event's own "no rush" note. Before
+// 2026-11-09 those were held as a whole class on a hard day by the send-time recheck's mood hold and let go at its 48h cap with no read
+// at all, so their HARD_DAY_READ_TYPES entries never applied to them (Royce, 2026-11-08/09: a hard day informs whether a particular
+// message helps now; it never blanket-silences, and at the cap it's a fresh judgment, never an automatic release). Now sendExempt
+// (harness/proactive.ts) asks this read before it takes the send lock, told of the hard stretch, and the recheck's mood hold no longer
+// applies to them (RecheckWhat.judged). The safety hold and away are untouched. What they asked for (class "requested"), a reply, a
+// safety send and another member's relayed words (relay:<id>, which keep their own capped hold) never come through here.
+// While the hard-day read isn't on (no needsCare), nothing is read, as in the dispatch: no extra call on an ordinary day. Past the hold's
+// 48h cap, needsCare still on: still read (a fresh judgment).
+// A wait is a hold (the caller re-queues it: the deferred runner, bounded by its own window, services/deferredSends.ts heldPastWindow);
+// a drop ends it; a read that fails or had no context waits (never sends).
+export function exemptHardDayRead(o: { cls: SendClass; type: string; targetKey: string; reply?: boolean; safety?: boolean }): boolean {
+  if (o.reply || o.safety || /^relay:/.test(String(o.targetKey ?? ""))) return false;
+  return hardDayRead(o.cls, o.type, {});
+}
+export type ExemptReadContext = { firstName: string; zone: string | null; recent: string | null; call: ReturnType<typeof callContextFor> | null; queued: string[] | null };
+export type ExemptReadDeps = {
+  // The hard-day read and the safety hold, now. A failed read: null (nothing is judged here; the recheck in the lock reads it again).
+  state?: (userId: string, now: Date) => Promise<{ needsCare: boolean; safetyHold: boolean } | null>;
+  // What the read sees: the same context the dispatch hands it (their latest stamped texts, the latest call, what else is waiting).
+  context?: (userId: string, now: Date) => Promise<ExemptReadContext>;
+  record?: typeof recordDecision;
+};
+// unreadable: their state couldn't be read here, so nothing was judged: the recheck in the lock keeps its holds for it (fail closed).
+export type ExemptRead = { read: false; why: string; unreadable?: true } | { read: true; v: MomentVerdict; action: MomentAction };
+const exemptState = async (userId: string, now: Date): Promise<{ needsCare: boolean; safetyHold: boolean } | null> => {
+  const [E, S] = await Promise.all([import("./emotion.js"), import("../services/safety.js")]);
+  const [emotional, safetyHold] = await Promise.all([E.getEmotionalContext(userId, now), S.safetyHoldActive(userId)]);
+  return { needsCare: !!emotional?.needsCare, safetyHold }; // mood: carries the read to the send-time judgment, never a hold
+};
+const exemptContext = async (userId: string, now: Date): Promise<ExemptReadContext> => {
+  const [{ default: pool }, MK, P, T] = await Promise.all([import("../db/db.js"), import("../services/memberKnowledge.js"), import("./proactive.js"), import("../services/memberTime.js")]);
+  const [first, zone, known] = await Promise.all([
+    pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]).then((r) => String(r.rows[0]?.first_name ?? "")).catch(() => ""),
+    T.memberZone(userId).catch(() => null),
+    MK.memberKnowledge(userId, { now, include: ["exchanges"], ...P.DISPATCH_EXCHANGES }).catch(() => null),
+  ]);
+  const z = known?.identity.zone ?? zone;
+  const call = await loadCallContext(userId).then((r) => callContextFor(r, now, (d) => T.localStamp(d.toISOString(), z))).catch(() => null);
+  const queued = await loadQueuedFor(pool, userId, "");
+  return { firstName: first, zone: z, recent: known ? P.exchangeTranscript(known, { stamped: true }).split("\n").slice(-P.MOMENT_RECENT_LINES).join("\n") : null, call, queued };
+};
+// Replaced in tests only (the real send code reads through these).
+let exemptDeps: ExemptReadDeps | null = null;
+export function setExemptReadDepsForTests(d: ExemptReadDeps | null): void {
+  exemptDeps = d;
+}
+export async function exemptMomentRead(o: { userId: string; type: string; targetKey: string; messages: string[]; cls: SendClass; reply?: boolean; safety?: boolean; now: Date; queuedAt?: Date | null }, given?: ExemptReadDeps): Promise<ExemptRead> {
+  const deps = given ?? exemptDeps ?? {};
+  if (!exemptHardDayRead(o)) return { read: false, why: "not a find or an offer Cue started" };
+  const state = await (deps.state ?? exemptState)(o.userId, o.now).catch(() => null);
+  if (!state) return { read: false, why: "their state couldn't be read here (the recheck in the lock reads it again)", unreadable: true };
+  if (state.safetyHold) return { read: false, why: "a safety hold is on (the recheck in the lock holds it)" };
+  if (!state.needsCare) return { read: false, why: "the hard-day read isn't on" }; // mood: carries the read (on: the judgment below decides; off: nothing is read, as in the dispatch)
+  const none: ExemptReadContext = { firstName: "", zone: null, recent: null, call: null, queued: null };
+  const ctx = await (deps.context ?? exemptContext)(o.userId, o.now).catch(() => none);
+  const v = await momentFit({ userId: o.userId, firstName: ctx.firstName, message: o.messages.join("\n"), recent: ctx.recent, call: ctx.call, queuedAt: o.queuedAt ?? o.now, now: o.now, kind: o.type, hardDay: true, queued: ctx.queued, zone: ctx.zone });
+  // No candidate row counts its waits: a wait is bounded by the caller's own window (the deferred runner's heldPastWindow, an event's end).
+  const action = momentAction(v, { waits: 0, unread: 0 }, o.now);
+  await (deps.record ?? recordDecision)(momentDecision({ userId: o.userId, candidateId: `exempt:${o.type}`, kind: o.type, targetKey: o.targetKey, v, action, waits: 0 })).catch(() => {});
+  return { read: true, v, action };
+}

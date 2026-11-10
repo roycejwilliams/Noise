@@ -1,6 +1,7 @@
 // One send-time recheck (harness/sendTimeRecheck.ts, Cue Memory Spec step 8). Anything Cue starts that waited is read against the member as
 // they are now: a safety hold, a hard stretch (mood hold), an away claim, and whether what it serves is still wanted.
 //   - each path is held under safety, mood and away: sendExempt (the direct event ask), inRoomSendAllowed, the deferred runner, a Cue-started call
+//     (since 2026-11-09 the direct event ask under mood is held by the send-time read's wait, not by its class: evals/proactive/hardDayExempt.ts)
 //   - a safety message is exempt; what they asked for and replies go
 //   - a changed mind stops a queued send
 //   - a hold writes no taste signal (no memory, preference, kind restraint or ledger row), and only a decision row
@@ -26,6 +27,7 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 
 const R = await import("../../src/harness/sendTimeRecheck.js");
+const MF = await import("../../src/harness/momentFit.js");
 const P = await import("../../src/harness/proactive.js");
 const CS = await import("../../src/harness/closedSubject.js");
 const D = await import("../../src/services/deferredSends.js");
@@ -141,16 +143,26 @@ function harness() {
 const zone = (() => { let off = (13 - new Date().getUTCHours() + 24) % 24; if (off > 14) off -= 24; return off === 0 ? "Etc/GMT" : `Etc/GMT${off > 0 ? "-" : "+"}${Math.abs(off)}`; })();
 const KEY = "direct_ask:ev1:cand1:rowan";
 const ask = () => ({ userId: ROWAN, phoneNumber: "+15035550177", type: "direct_ask" as const, targetKey: KEY, messages: ["Sam is also going to the supper club tonight and would like to meet you. Open to it?"], timezone: zone });
+// The send-time read sendExempt asks on a hard day (harness/momentFit.ts exemptMomentRead, 2026-11-09): stubbed state and context; the
+// verdict is the stub's. Under mood the direct event ask is no longer held by its class: the read's wait holds it.
+const READ_CTX = { firstName: "Rowan", zone: null, recent: "[Mon 9:10am] User said: long week, honestly", call: { ready: true as const, line: null }, queued: [] };
+const exemptReadFor = (name: string, verdict: "send" | "wait" | "drop" = "wait") => {
+  MF.setExemptReadDepsForTests({ state: async () => ({ needsCare: name === "mood", safetyHold: name === "safety" }), context: async () => READ_CTX });
+  MF.setMomentModelForTests(async () => JSON.stringify({ verdict, why: "not the moment for an intro" }));
+};
+const exemptReadOff = () => { MF.setExemptReadDepsForTests(null); MF.setMomentModelForTests(null); };
 const TASTE = /member_preferences|kind_restraint|INSERT INTO co_memories|INSERT INTO co_facts|INSERT INTO proactive_sends|member_claims|co_profiles SET|UPDATE co_profiles/;
 
 for (const [name, s] of Object.entries(STATES)) {
   R.setSendHoldReaderForTests(async () => s);
+  exemptReadFor(name);
   const h = harness();
   try {
     // sendExempt: the direct event ask (no door).
     const r = await P.sendExempt(ask());
     check(`sendExempt: the direct event ask is held under ${name}, with when to look again`, !r.sent && /^held: /.test(String(r.reason)) && !!r.retryAt && h.ledger.outbox.length === 0 && h.ledger.sends.length === 0, r);
-    check(`sendExempt: held under ${name} is logged with its reason, ids only`, h.decisions.some((d) => d.decision === R.SEND_RECHECK && d.action === `held_${name}` && d.proposal?.kind === "direct_ask" && !/supper|Sam/.test(JSON.stringify(d))), h.decisions);
+    // Under mood it's the send-time read's wait (moment_wait), never the class hold (held_mood).
+    check(`sendExempt: held under ${name} is logged with its reason, ids only`, h.decisions.some((d) => d.decision === R.SEND_RECHECK && d.action === (name === "mood" ? "moment_wait" : `held_${name}`) && d.proposal?.kind === "direct_ask" && !/supper|Sam/.test(JSON.stringify(d))), h.decisions);
     check(`taste: a hold under ${name} writes no memory, preference, claim, kind restraint or ledger row`, !h.sql.some((q) => TASTE.test(q)), h.sql.filter((q) => TASTE.test(q)));
     // sendExemptWhenAllowed queues it (held, never dropped).
     const wa = await P.sendExemptWhenAllowed({ ...ask(), timezone: zone });
@@ -169,17 +181,18 @@ for (const [name, s] of Object.entries(STATES)) {
     check(`inRoomSendAllowed: an in-room nudge is held under ${name} and claims nothing`, inRoom === false && !claimed, { inRoom, claimed });
     const close = await P.inRoomSendAllowed(ROWAN, "ev1", { close: true });
     check(`inRoomSendAllowed: the close ${name === "safety" ? "is held by the safety hold" : "still goes (a goodbye)"} under ${name}`, close === (name !== "safety"), close);
-  } finally { h.restore(); R.setSendHoldReaderForTests(null); }
+  } finally { h.restore(); R.setSendHoldReaderForTests(null); exemptReadOff(); }
 }
 {
-  // Calm: nothing changes.
+  // Calm: nothing changes (no hard-day read, so no send-time read either).
   R.setSendHoldReaderForTests(async () => calm);
+  exemptReadFor("calm");
   const h = harness();
   try {
     const r = await P.sendExempt(ask());
     check("calm: the direct event ask goes as before", r.sent && h.ledger.outbox.length === 1, r);
     check("calm: an in-room nudge claims and goes as before", (await P.inRoomSendAllowed(ROWAN, "ev1", { claim: { targetKey: "in_room:match:ev1", message: "x" } })) === true && h.sql.some((q) => /^INSERT INTO proactive_sends/.test(q)));
-  } finally { h.restore(); R.setSendHoldReaderForTests(null); }
+  } finally { h.restore(); R.setSendHoldReaderForTests(null); exemptReadOff(); }
 }
 
 // Arrival at that event, through the real send code: the reader is asked about this event only.
@@ -213,13 +226,14 @@ for (const [name, s] of Object.entries(STATES)) {
 const row = (over: Record<string, unknown> = {}) => ({ id: 1, user_id: ROWAN, phone_number: "+15035550177", type: "direct_ask", target_key: KEY, messages: ["Sam would like to meet you. Open to it?"], timezone: zone, after_kind: null, after_payload: null, due_at: new Date(Date.now() - 60_000), status: "queued", attempts: 0, created_at: new Date(Date.now() - 6 * 3_600_000), error: null, archived: false, ...over });
 for (const [name, s] of Object.entries(STATES)) {
   R.setSendHoldReaderForTests(async () => s);
+  exemptReadFor(name);
   const h = harness();
   h.setRow(row());
   try {
     const out = await D.runDueDeferredSends(new Date(), { send: P.sendExempt, handlers: D.afterHandlers });
     check(`deferred: a row queued before ${name} is requeued, not sent and not dropped`, out.requeued === 1 && out.sent === 0 && out.skipped === 0 && out.failed === 0 && h.ledger.outbox.length === 0, out);
     check(`deferred: the requeue under ${name} moves it later`, h.deferred.some((d) => d.status === "queued" && d.args[1] instanceof Date && d.args[1].getTime() > Date.now()), h.deferred);
-  } finally { h.restore(); R.setSendHoldReaderForTests(null); }
+  } finally { h.restore(); R.setSendHoldReaderForTests(null); exemptReadOff(); }
 }
 {
   R.setSendHoldReaderForTests(async () => calm);
