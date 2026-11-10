@@ -1478,7 +1478,7 @@ Claims to find (one type each):
 - prediction: what Cue says will or won't happen in the world, or how likely it is ("it'll probably sell out", "nothing else is coming this week")
 
 Never claims (don't list these):
-- The member's own words and choices from this conversation, restated or built on ("you already called the daytonaio night your pick", "since you said you're in"). The member is never "another person".
+- The member's own words and choices from this conversation, restated or built on ("you already called the daytonaio night your pick", "since you said you're in"). The member is never "another person". Restating never upgrades what they said: a hope, guess, plan or worry of theirs said back as done, true or as how it turned out ("the slide held", "they loved it") when they haven't said so is a member_life claim, and so is a detail added to it.
 - Opinions, feelings, questions (an offer asked as a question, "Want me to look now?", is a question), encouragement, and how Cue will talk ("I'll keep it short").
 - Warmth: wishing them well, congratulating them, or reacting to what they just told you ("glad you're back", "hope the week back is kind to you"), and a question about what they shared. When a wish, reaction or question carries a specific about their life they haven't told Cue (an activity, a place, a plan, a date, a person, a reason), list only that specific, as member_life.
 - Saying yes to what they just asked ("Happy to.", "Sure.", "Glad to help.", "Let's do it."): that's agreeing, not a capability. Inviting them to send or share something ("Send it over", "Walk me through the key slides") is a request, not a claim.
