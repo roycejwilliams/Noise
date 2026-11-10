@@ -148,6 +148,27 @@ for (const [name, c] of [["matching walkthrough", MATCHING], ["vent + ask", VENT
   for (const m of ["Finally shipped it. I need a nap.", "so many thoughts", "I find a lot of these boring", "whichever works"]) check(`not an ask, one text: "${m}"`, !T.askedForSomething(m));
   check("'recommend a good book on hiring' still asks", T.askedForSomething("recommend a good book on hiring") && T.askedForSomething("I need help finding a venue") && T.askedForSomething("any thoughts on this?") && T.askedForSomething("can you find a quiet bar"));
 }
+// Re-review of #444 at e7818a38: whole sentences only, separators kept, real follow-ups go.
+{
+  const doc = "Dr. Smith can walk you through the clinical side.";
+  const f1 = T.freshPart(doc, ["Dr. Lee can walk you through the clinical side."]);
+  check("'Dr. Smith…' after 'Dr. Lee…' is unchanged (never split at 'Dr.')", f1.text === doc && !f1.dropped && T.sentencesOf(doc).length === 1, f1);
+  const numbered = "1. Bring your ID.\n2. Arrive by 7 at the side door.";
+  const f2 = T.freshPart(numbered, ["Bring your ID."]);
+  check("a numbered set repeating 'Bring your ID.' is unchanged and intact", f2.text === numbered && !f2.dropped, f2);
+  const r = real("can Maya do Thursday?");
+  await r.send("Yes, Thursday works for Maya, she's free after six.", "1");
+  await r.send("Yes. Want me to book it?", "2");
+  check("'Yes. Want me to book it?' after 'Yes, Thursday works for Maya…' goes", r.t.state.sentMessages.length === 2 && r.t.state.sentMessages[1] === "Yes. Want me to book it?", r.t.state.sentMessages);
+  const r2 = real("what should I bring?");
+  await r2.send("Your ID and the signed lease.", "1");
+  await r2.send("Sounds good. Also bring a check for the first month's rent.", "2");
+  check("'Sounds good. <new>' goes as written", r2.t.state.sentMessages[1] === "Sounds good. Also bring a check for the first month's rent.", r2.t.state.sentMessages);
+  const list = "Here's the list:\nBring the signed lease to the meeting.\nPay the deposit by Friday.\nConfirm the move-in date with the landlord.";
+  const f3 = T.freshPart(list, ["Bring the signed lease to the meeting."]);
+  check("a multi-line list with one exact repeated sentence: only that line goes, line breaks kept", f3.dropped && f3.text === "Here's the list:\nPay the deposit by Friday.\nConfirm the move-in date with the landlord.", f3);
+  check("decimals and links aren't split", T.sentencesOf("It's 2.5 miles, see https://example.test/a.b for the map.").length === 1);
+}
 // Pure.
 check("asked: a question or a request", T.askedForSomething(VENT_ASK.message) && T.askedForSomething(MATCHING.message) && !T.askedForSomething(COMPLETE.message) && !T.askedForSomething(PRIYA.message));
 check("repeatsSent: same, contained, or nearly all the same words", T.repeatsSent("Hi there.", ["Hi there. How are you?"]) && !T.repeatsSent(MATCHING.second, [MATCHING.first]));

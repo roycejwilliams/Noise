@@ -293,11 +293,46 @@ const numbersIn = (t: string) => new Set(tokens(t).filter((w) => /\d/.test(w)));
 // one-reply rule above.
 // Pure: what a text adds after the reply went: its sentences already said word for word are taken out (re-review of #444: set aside but
 // still sent, "The plan is dinner at Nopa Tuesday with Maya. Exactly." repeated the plan). dropped: some were.
+// Abbreviations a period doesn't end a sentence after (re-review of #444: "Dr. Smith" was split and the halves matched another text).
+const ABBREV = /(?:^|\s)(?:dr|st|mr|mrs|ms|vs|jr|sr|prof|etc|e\.g|i\.e|approx|no)\.$/i;
+// Pure: a text as sentences, each with the separator that followed it (spaces, a newline, a paragraph break), so it can be rebuilt as
+// written. A sentence ends at . ! or ? followed by whitespace, or at a line break; never after an abbreviation, a list number at the
+// start of a line ("1.", "2)"), or inside a decimal or a link (no whitespace there).
+export function sentencesOf(text: string): { text: string; sep: string }[] {
+  const out: { text: string; sep: string }[] = [];
+  const re = /([.!?]+)([ \t]+)|(\r?\n+[ \t]*)/g;
+  let start = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const end = m.index + (m[1] ? m[1].length : 0);
+    const piece = text.slice(start, end);
+    if (m[1]) {
+      const lineStart = piece.slice(piece.lastIndexOf("\n") + 1);
+      if (ABBREV.test(piece) || /^\s*\d{1,2}[.)]$/.test(lineStart)) continue;
+    }
+    out.push({ text: piece, sep: m[0].slice(m[1] ? m[1].length : 0) });
+    start = m.index + m[0].length;
+  }
+  if (start < text.length || !out.length) out.push({ text: text.slice(start), sep: "" });
+  return out;
+}
+const normSentence = (t: string) => tokens(t.replace(/^\s*(?:\d{1,2}[.)]|[-*\u2022])\s+/, "")).join(" ");
+// Pure: what a text adds after the reply went (re-review of #444). A sentence is taken out only when it is a WHOLE earlier sentence
+// (case and punctuation aside) of three or more words of substance; the rest is rebuilt with its own separators (line and paragraph
+// breaks kept). dropped: something of substance was taken out.
 export function freshPart(message: string, said: readonly string[]): { text: string; dropped: boolean } {
-  const whole = ` ${tokens(said.join(" ")).join(" ")} `;
-  const parts = message.split(/(?<=[.!?])\s+|\n+/);
-  const kept = parts.filter((x) => { const t = tokens(x); return t.length > 0 && !whole.includes(` ${t.join(" ")} `); });
-  return { text: kept.join(" ").trim(), dropped: kept.length < parts.filter((x) => tokens(x).length > 0).length };
+  const before = new Set(said.flatMap((t) => sentencesOf(t)).filter((x) => contentWords(x.text).length >= 3).map((x) => normSentence(x.text)));
+  const parts = sentencesOf(message);
+  let dropped = false;
+  let out = "";
+  for (const x of parts) {
+    if (contentWords(x.text).length >= 3 && before.has(normSentence(x.text))) {
+      dropped = true;
+      continue;
+    }
+    out += x.text + x.sep;
+  }
+  return { text: dropped ? out.trim() : message, dropped };
 }
 // Fewer than three words of substance (numbers count): nothing worth a text of its own.
 export const trivialText = (t: string): boolean => contentWords(t).length < 3;
