@@ -325,6 +325,35 @@ if (browser) {
     check("pure: a ticket link in the region is the confirmation link and ties it to them", (() => { const r = D.resultFrom({ ...base, text: "You're In", ticket: "https://luma.com/ticket/abc", tied: true }, "https://luma.com/x"); return r.state === "registered" && r.link === "https://luma.com/ticket/abc" && r.linkKind === "confirmation"; })());
     check("pure: no read at all is unknown", D.resultFrom(null, "https://luma.com/x").state === "unknown");
   }
+  {
+    // Luma's real registered page (captured 2026-11-09 from a registration that already existed, signed in, read only; name and email
+    // redacted to Jordan Ellis / member@example.com, scripts removed). It shows BOTH "You're In … canceling your registration" and,
+    // further down, an inert "Registration / Welcome, Jordan! … Register" block: a whole-page read can't tell registered from not.
+    const capture = fs.readFileSync(new URL("./fixtures/luma-registered-capture.html", import.meta.url), "utf8");
+    const ctx = await browser.newContext();
+    await ctx.route("**/*", (r) => r.abort()); // nothing in the capture (images, fonts) leaves the browser
+    const page = await ctx.newPage();
+    const regionOf = async (html: string) => {
+      await page.setContent(html, { waitUntil: "domcontentloaded" });
+      return (await page.evaluate(D.regionCall({ email: "member@example.com", name: "Jordan Ellis" }))) as D.RegionRead;
+    };
+    const r = await regionOf(capture);
+    check("captured page: the result is read from the guest-status block, not the whole page", r.region === "status" && /You’re In/.test(r.text) && /canceling your registration/.test(r.text) && !/Welcome, Jordan! To join/.test(r.text) && !/Discover/.test(r.text), r);
+    check("captured page: the lower 'Registration … Register' block is not a state (it's inert; no live register button)", r.registerButton === false, r);
+    check("captured page: Luma's own state reads registered from the status block (ownState no longer leans on a button count)", D.ownStateFromRegion(r).state === "registered", D.ownStateFromRegion(r));
+    check("captured page: a submit's result on it reads registered", D.resultFrom(r, "https://luma.com/example-event").state === "registered");
+    // The same page with no registration: the status block gone and the Registration block live.
+    const notYet = capture.replace(/You’re In/g, "").replace(/No longer able to attend\?[\s\S]*?registration<\/span>\.<\/div>/, "").replace(/<div inert="">(<div><div><div>Registration)/, "<div>$1");
+    const n = await regionOf(notYet);
+    check("captured page, not registered: no status block, a live register button: not registered", n.region !== "status" && n.registerButton === true && D.ownStateFromRegion(n).state === "not_registered", { region: n.region, registerButton: n.registerButton, own: D.ownStateFromRegion(n) });
+    await ctx.close();
+    // Who it's for, read from the captured page's own description.
+    const dc = D.lumaDriver({ ...deps, fixtures: { "https://luma.com/example-event": capture } });
+    const s = await dc.open("https://luma.com/example-event");
+    const form = await s.read();
+    await s.close();
+    check("captured page: 'open to Stanford students and affiliates' read from its description as a restriction to confirm", (form.restrictions ?? []).includes("This event is open to Stanford students and affiliates.") && !(form.restrictions ?? []).some((x) => /Northwind/.test(x)), form.restrictions);
+  }
   check("page slots: every session released", open === 0, open);
   await browser.close();
 }
