@@ -298,6 +298,39 @@ export async function recordClosestMissMentioned(userId: string, name: string, a
 // from eventCheckinFollowUp.ts and the walk-in call offer), due the morning
 // after at 10am their time. Live before this: three follow-ups all at 4am
 // Pacific, one a duplicate two seconds after the other.
+// A registration Cue made for them (services/eventRegistration: on the guest list, waiting on the host or a spot) for any of these keys
+// or this link: evidence they meant to go (Royce, 2026-11-10). Read by the enqueue below and the debrief's own send-time read.
+export const REGISTERED_STATUSES = ["registered", "already_registered", "pending_approval", "waitlisted"];
+export async function registeredFor(userId: string, keys: string[], url: string | null = null): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM event_registrations WHERE user_id = $1 AND status = ANY($2::text[]) AND (item_key = ANY($3::text[]) OR ($4::text IS NOT NULL AND event_url = $4)) LIMIT 1`,
+    [userId, REGISTERED_STATUSES, keys, url],
+  );
+  return rows.length > 0;
+}
+
+// Pure: a follow-up row's keys, the same ones its outcomes and reactions are recorded under.
+export function followUpKeys(row: { id: string; match_name: string; match: any }): string[] {
+  const id = row.match?.event_api_id;
+  return [...new Set([`followup:${row.id}`, id ? `event:${id}` : `name:${String(row.match_name ?? "").toLowerCase()}`])];
+}
+
+// What the record says about one follow-up row (services/followUpEvidence.ts): a yes or a stated plan, a registration, a check-in or a
+// walk-in, their stated word. "Cue sent it" and silence are never evidence (Royce, 2026-11-10: a 10-30 send with no reply queued a
+// morning-after debrief on 11-10). Throws when it can't be read: the caller holds the row.
+export async function rowEvidence(userId: string, row: { id: string; match_name: string; match: any }): Promise<import("./followUpEvidence.js").Evidence> {
+  const { followUpEvidence } = await import("./followUpEvidence.js");
+  const keys = followUpKeys(row);
+  const [outcomes, reactions, registered] = await Promise.all([
+    pool.query(`SELECT result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [userId, keys]).then((r) => r.rows),
+    pool.query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [userId, keys]).then((r) => r.rows.map((x: any) => String(x.reaction))),
+    registeredFor(userId, keys, row.match?.url ?? null),
+  ]);
+  // "already_did_it" from the reaction router is a stated plan or going (outcomes.ts records it as acted).
+  const rows = [...outcomes, ...reactions.filter((x) => x === "already_did_it").map(() => ({ result: "acted", provenance: "stated" }))];
+  return followUpEvidence({ rows, reactions, registered });
+}
+
 export async function enqueueDueOutcomeFollowUps(): Promise<void> {
   await expireParkedFollowUps().catch((err: any) => console.error("recommendationOutcome: expiring parked finds failed (non-fatal):", err?.message ?? err));
   const { rows } = await pool.query(
@@ -323,6 +356,15 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
     }
     if (!eventDate && !anchor) {
       await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
+      continue;
+    }
+    // No evidence they meant to go: never queued (Royce's rule, 2026-11-04; 2026-11-10: rows from before the parked design, created when
+    // Cue sent a find, were still queued with no reply). A no is dropped with its reason; nothing yet goes back to waiting for a sign
+    // (parked), where a later yes, registration or check-in can still arm it. Unreadable: left for the next run.
+    const ev = await rowEvidence(row.user_id, row).catch(() => null);
+    if (!ev) continue;
+    if (ev.level === "none") {
+      await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = $2, drop_reason = $3 WHERE id = $1`, [row.id, ev.declined ? "dropped" : AWAITING_EVIDENCE, ev.declined ? ev.why : null]);
       continue;
     }
     const timezone = await memberZone(row.user_id);

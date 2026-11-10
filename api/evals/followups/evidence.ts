@@ -21,8 +21,8 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 // ---------------------------------------------------------------- the fake store
 const u = "00000000-0000-4000-8000-0000000000e1";
 type Row = { id: string; user_id: string; ask_text: string; tier: number; match_name: string; match: any; created_at: Date; send_at: Date; harness_status: string | null; drop_reason: string | null };
-const world = { rof: [] as Row[], outcomes: [] as { item_key: string; result: string; provenance: string | null; created_at: Date }[], reactions: [] as string[], queued: [] as any[], presence: false, walkin: false, nextId: 1 };
-const reset = () => Object.assign(world, { rof: [], outcomes: [], reactions: [], queued: [], presence: false, walkin: false, nextId: 1 });
+const world = { rof: [] as Row[], outcomes: [] as { item_key: string; result: string; provenance: string | null; created_at: Date }[], reactions: [] as string[], queued: [] as any[], presence: false, walkin: false, nextId: 1, registered: [] as string[] };
+const reset = () => Object.assign(world, { rof: [], outcomes: [], reactions: [], queued: [], presence: false, walkin: false, nextId: 1, registered: [] });
 const keyOf = (r: Row) => [r.match.event_api_id ? `event:${r.match.event_api_id}` : null, `name:${r.match_name.toLowerCase()}`];
 // The arm's key rule (recommendationOutcome.ts armOutcomeFollowUp): a name arms a row with no event id, or the one row of that name that has one.
 const armKeys = (r: Row) => {
@@ -67,6 +67,8 @@ const handle = async (sql: string, p: any[] = []) => {
   if (/FROM revealed_offers WHERE user_id = \$1 AND item_key = ANY/.test(sql)) return { rows: world.reactions.map((reaction) => ({ reaction })) };
   if (/FROM users u LEFT JOIN event_presence/.test(sql)) return { rows: [{ email: "jordan@example.com", phone_number: "+14155550101", not_going_at: null, noshow_asked_at: null }] };
   if (/SELECT email, phone_number FROM users/.test(sql)) return { rows: [{ email: "jordan@example.com", phone_number: "+14155550101" }] };
+  if (/FROM event_registrations WHERE user_id = \$1 AND status = ANY/.test(sql)) return { rows: (p[2] as string[]).some((k) => world.registered.includes(k)) ? [{ x: 1 }] : [] };
+  if (/UPDATE recommendation_outcome_followups SET harness_status = \$2, drop_reason = \$3 WHERE id = \$1/.test(sql)) { const r = world.rof.find((x) => x.id === p[0]); if (r) { r.harness_status = p[1]; r.drop_reason = p[2]; } return { rows: [], rowCount: 1 }; }
   if (/arrived_at IS NOT NULL/.test(sql)) return { rows: world.presence ? [{ x: 1 }] : [] };
   if (/event_walkin_checkins/.test(sql)) return { rows: world.walkin ? [{ x: 1 }] : [] };
   return { rows: [] };
@@ -329,6 +331,43 @@ CF.setDoorDepsForTests({ ours: async () => false });
   presumptuous = false;
   const e: any = await CC.draftCompanionCheckin("Jordan", "", { ...thread, dueDate: null }, null);
   check("companion thread with no date: unchanged (how it's going)", e?.text === "How's the pitch coming along?", e);
+}
+
+// ================================================================ 8. a find Cue only sent, queued by an older row (2026-11-10: the Michelin dinner)
+// A follow-up row from before the parked design (harness_status NULL from the start), created when Cue sent the find. Cue sent it in a
+// two-event offer; no reply about it, no registration, no plan: no debrief. Synthetic names.
+{
+  const legacy = (over: any = {}) => { const r: Row = { id: `rof-${world.nextId++}`, user_id: u, ask_text: "Seeking smaller founder mixers or dinners in the Bay Area", tier: 2, match_name: "Founder Table", match: eventFind(), created_at: new Date(Date.now() - 11 * 86_400_000), send_at: new Date(Date.now() - 3_600_000), harness_status: null, drop_reason: null, ...over }; world.rof.push(r); return r; };
+  reset();
+  const r1 = legacy();
+  check("sent + no reply: no debrief is queued", (await dueRows()).length === 0, world.queued);
+  check("…the row goes back to waiting for a sign (parked), not dropped", r1.harness_status === "awaiting_evidence", r1);
+  reset();
+  const r2 = legacy();
+  world.outcomes.push({ item_key: "event:evt-ft", result: "acted", provenance: "stated", created_at: new Date() });
+  const q2 = await dueRows();
+  check("sent + 'yes I'll go': queued", q2.length === 1 && r2.harness_status === "queued", { q2, r2 });
+  CF.setDoorDepsForTests({ ours: async () => false });
+  const d2 = await draft(payloadFor(q2[0]));
+  check("…and it asks the neutral 'did you make it?', never 'how was it'", kind(d2) === "neutral", { r: d2.r, p: (d2.prompts[0] ?? "").slice(-300) });
+  reset();
+  const r3 = legacy();
+  world.registered = ["event:evt-ft"];
+  const q3 = await dueRows();
+  check("a registration Cue made: queued", q3.length === 1 && r3.harness_status === "queued", { q3, r3 });
+  const d3 = await draft(payloadFor(q3[0]));
+  check("…as a debrief that asks whether they made it (registered is intent, not going)", kind(d3) === "neutral", { r: d3.r, p: (d3.prompts[0] ?? "").slice(-300) });
+  reset();
+  const r4 = legacy();
+  world.reactions = ["not_interested"];
+  await dueRows();
+  check("a no: dropped with its reason", r4.harness_status === "dropped" && /isn't for them/.test(r4.drop_reason ?? ""), r4);
+  // Already queued before this fix (the Michelin-dinner shape): dropped at send, with a specific reason, and no model asked.
+  reset();
+  const r5 = legacy({ harness_status: "queued" });
+  const d5 = await draft({ eventApiId: "evt-ft", eventName: "Founder Table", eventDate: yesterday, outcomeFollowupIds: [r5.id], checkinFollowupIds: [], walkinCheckinIds: [], askText: "Seeking smaller founder mixers or dinners in the Bay Area" });
+  check("an already-queued debrief with no evidence: dropped at send, specific reason, no model call", kind(d5) === "skip" && /Cue sending it isn't one/.test(String(d5.r.skip ?? d5.r.reason ?? JSON.stringify(d5.r))) && d5.prompts.length === 0, d5.r);
+  check("…its row is dropped with the reason kept", r5.harness_status === "dropped" && /no sign/.test(r5.drop_reason ?? ""), r5);
 }
 
 console.log(`${total - failed}/${total} passed`);
