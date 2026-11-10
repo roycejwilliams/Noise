@@ -69,14 +69,23 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
 }
 
 // Pure: a page's words with the member's own name and email taken out (the outcome detail is kept; who they are isn't).
-export function redactMember(text: string | null, values: (string | null | undefined)[], facts: R.MemberFacts = {}): string | null {
+// Any case ("JORDAN ELLIS" on the page is still their name). labels: what stands in for them (the stored detail's "[member]"; the
+// "didn't go through" line they read says "[your name]" / "[your email]"); any other email on the page is "[email]".
+export function redactMember(text: string | null, values: (string | null | undefined)[], facts: R.MemberFacts = {}, labels: { name: string; email: string } = { name: "[member]", email: "[member]" }): string | null {
   if (text == null) return null;
   const known = [...values, facts.email?.value, facts.first_name?.value, facts.last_name?.value, facts.first_name && facts.last_name ? `${facts.first_name.value} ${facts.last_name.value}` : null]
     .filter((v): v is string => typeof v === "string" && v.trim().length >= 2)
     .sort((a, b) => b.length - a.length);
   let out = text;
-  for (const v of known) out = out.split(v).join("[member]");
+  for (const v of known) out = out.replace(new RegExp(v.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), v.includes("@") ? labels.email : labels.name);
   return out.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]");
+}
+// The page's words as the "didn't go through" line quotes them to the member: their name and email out, at most this long.
+export const FAILED_QUOTE_CHARS = 140;
+export function failedQuote(text: string | null, values: (string | null | undefined)[], facts: R.MemberFacts = {}): string | null {
+  const red = redactMember(text, values, facts, { name: "[your name]", email: "[your email]" })?.replace(/\s+/g, " ").trim() ?? "";
+  if (!red) return null;
+  return red.length > FAILED_QUOTE_CHARS ? `${red.slice(0, FAILED_QUOTE_CHARS - 1).trimEnd()}…` : red;
 }
 
 // Their emailed code, caught before the ordinary reply (routes/sendblue.ts): entered once in the held session, and the line to send.
@@ -294,25 +303,25 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
   async function settle(rec: R.RegistrationRecord, session: RegistrationSession, c: C.Ctx, res: Awaited<ReturnType<RegistrationSession["submit"]>>, kept: () => void): Promise<Record<string, unknown>> {
     const at = env.now().toISOString();
     if (res.state === "needs_code") return waitForCode(rec, session, c, "code", "after_submit", kept);
-    if (res.state === "unknown" || res.state === "uncertain") {
+    // A "blocked" read after a click is uncertain too (the driver's resultFrom never returns it: review 2026-11-09 removed its own
+    // branch, which kept the page's raw words). The page's words aren't kept: who they are never lands in the record.
+    if (res.state === "unknown" || res.state === "uncertain" || res.state === "blocked") {
       await S.recordOutcome(userId, rec.id, { state: "uncertain", link: rec.eventUrl, linkKind: "event_page", detail: null, at }, "uncertain", q);
       notDone("The registration was submitted but the page never confirmed it: it is NOT confirmed.");
       return { ok: false, made: "a submitted signup the page didn't confirm", ...said(C.outcomeLine(c, "uncertain")) };
     }
-    if (res.state === "blocked") {
-      const b = R.resultBlocker(res.detail ?? "") ?? { kind: "unreadable" as const, detail: res.detail ?? "the page stopped it" };
-      await S.recordOutcome(userId, rec.id, { state: "uncertain", link: rec.eventUrl, linkKind: "event_page", detail: res.detail, blocker: b, at }, "uncertain", q);
-      return { ok: false, ...said(C.outcomeLine(c, "uncertain")) };
-    }
     // The page's words are kept as the outcome's detail, but never the member's own name or email in them.
-    const outcome: R.Outcome = { state: res.state, link: res.link ?? rec.eventUrl, linkKind: res.linkKind, detail: redactMember(res.detail, [c.email, ...Object.values(rec.answers).map((a) => a.value)], await factsFor(rec)), at };
+    const theirs = [c.email, ...Object.values(rec.answers).map((a) => a.value)];
+    const facts = await factsFor(rec);
+    const outcome: R.Outcome = { state: res.state, link: res.link ?? rec.eventUrl, linkKind: res.linkKind, detail: redactMember(res.detail, theirs, facts), at };
     const settled = await S.recordOutcome(userId, rec.id, outcome, res.state as R.Status, q);
     // On (or waiting for) the guest list: a plan in their picture and, once confirmed, intent for the debrief. Never attendance.
     if (settled && R.FINAL.has(settled.status)) {
       const { recordRegistrationPlan } = await import("../services/eventRegistration/followThrough.js");
       await recordRegistrationPlan(userId, settled, q).catch((err: any) => console.error("registration: recording the plan failed (non-fatal):", err?.message ?? err));
     }
-    const text = C.outcomeLine(c, res.state, { detail: res.detail, link: outcome.link });
+    // The "didn't go through" line quotes the page: their name and email taken out, capped (failedQuote).
+    const text = C.outcomeLine(c, res.state, { detail: res.state === "failed" ? failedQuote(res.detail, theirs, facts) : null, link: outcome.link });
     if (res.state === "failed") {
       notDone(`The registration for ${c.eventName} didn't go through.`);
       return { ok: false, ...said(text) };
