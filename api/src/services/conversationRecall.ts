@@ -677,6 +677,25 @@ export async function realRecallDeps(): Promise<RecallDeps> {
 // lookup reads, the same member boundary in the SQL, no window and no row cap past `since`. Only times come back, never words. The
 // thing is named when a line carries its words of substance or its organization (knowledge/sent.ts mentionsThing; "the SPC residency" names "South Park
 // Commons Member Residency"). Throws when the record can't be read: the caller treats that as unknown, never as "never discussed".
+// Which of several places were talked about in their conversation, ever (a roundup's places, services/sendCheck.ts roundupShare): ONE
+// owner-bound query over the same rows and labels, then each line read by name (knowledge/sent.ts namesThing). Throws when unreadable.
+export async function talkedAboutAmong(db: RecallDb, userId: string, names: string[]): Promise<Set<string>> {
+  const { namesThing, thingSearchTerms } = await import("./knowledge/sent.js");
+  const out = new Set<string>();
+  const terms = [...new Set(names.flatMap((n) => thingSearchTerms(n)))];
+  if (!terms.length) return out;
+  const { rows } = await db.query(
+    `SELECT memory_type, content, created_at FROM co_memories WHERE user_id = $1 AND ${kindFilter("any")} AND content ~* $2`,
+    [userId, terms.map((t) => `\\m${reEscape(t)}`).join("|")],
+  );
+  for (const r of rows as Row[]) {
+    const at = new Date(r.created_at);
+    const lines = r.memory_type === "call_transcript" ? labelCallTranscript(r.content, at, "UTC") : [labelTextRow(r.content, at, "UTC")].filter((l): l is RecallLine => !!l);
+    for (const l of lines) for (const n of names) if (!out.has(n) && namesThing(l.text, n)) out.add(n);
+  }
+  return out;
+}
+
 // sends: when it was sent; Cue's own lines within SEND_ECHO_HOURS after a send are the send itself (the offer's text), not a later
 // conversation.
 export const SEND_ECHO_HOURS = 6;
