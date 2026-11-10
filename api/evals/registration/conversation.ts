@@ -102,7 +102,7 @@ check("not a code: a time, money, a zip, an address, a phone number, a sentence"
 }
 
 // ---- today: nothing exists for members, nothing in any prompt changes
-check("approvals: live submission and copy both unapproved (code constants)", A.LUMA_LIVE_SUBMIT_APPROVED === false && A.REGISTRATION_COPY_APPROVED === false && !A.registrationLive());
+check("approvals: copy approved, live submission still off, so registration stays off for members (code constants)", A.LUMA_LIVE_SUBMIT_APPROVED === false && A.REGISTRATION_COPY_APPROVED === true && !A.registrationLive());
 check("today: no registration ability in the registry Cue reads (no sheet line, no tool, no prompt change)", !Cap.ABILITIES.some((a) => Cap.REGISTRATION_ABILITIES.some((r) => r.id === a.id)) && !Cap.capabilitySheet().some((l) => /register them for a free Luma/i.test(l)));
 check("today: the sheet still says Cue can't register them", Cap.LIMITS.some((l) => /can't book, buy, register them for events/.test(l)));
 {
