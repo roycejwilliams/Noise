@@ -104,7 +104,7 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("an unconfirmed event's debrief is told to ask whether they made it", /nothing says they went\. Ask, lightly, whether they ended up making it/.test(reg));
   check("code backstop: an unconfirmed debrief that assumes they went is skipped", /if \(\(!went \|\| isOpportunity\) && PRESUMES_THEY_WENT\.test\(text\)\) return skip/.test(reg));
   const draft = reg.slice(reg.indexOf("async function draftDebrief("), reg.indexOf("async function debriefItemKeys("));
-  check("the debrief decides went from the record only: this debrief's stated outcomes, never their texts", /followUpEvidence\(\{ rows, reactions, came/.test(draft) && /FROM suggestion_outcomes WHERE user_id = \$1 AND item_key = ANY\(\$2::text\[\]\)/.test(draft) && !/text_exchange|attendanceConfirmed\(/.test(draft));
+  check("the debrief decides went from the record only: this debrief's stated outcomes, never their texts", /RO\.evidenceOf\(\{ rows, reactions, came/.test(draft) && /FROM suggestion_outcomes WHERE user_id = \$1 AND item_key = ANY\(\$2::text\[\]\)/.test(draft) && !/text_exchange|attendanceConfirmed\(/.test(draft));
   check("the went rule reads only a stated helped / didn't help", /\(r\.result === "helped" \|\| r\.result === "didnt_help"\) && isStated\(r\.provenance\)/.test(reg));
 }
 
