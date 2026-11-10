@@ -79,7 +79,17 @@ const day = (d: string, items: { kind: string; id: string; status: string }[]) =
   check("send-time read: it is judged (momentFit) like any optional message", MF.momentFitApplies(cls, {}, { type: "search_failed" }));
   check("send-time read: not in a pull either way changes nothing unexpected (a pull of a check-in isn't read, as for every check-in)", !MF.momentFitApplies(cls, {}, { type: "search_failed", pulled: true }));
   check("the safety hold delays it (news about their ask)", P.SAFETY_HOLD_ALSO.has("search_failed"));
-  check("never class-held on a hard day (the read hears the hard stretch instead)", !P.HOLD_WHILE_STRUGGLING.has("search_failed"));
+  // What a hard day does to it, as the code stands: it goes through the dispatch (sendWithLedger, which doesn't call the send-time
+  // recheck), isn't on HOLD_WHILE_STRUGGLING, so no pick check holds it on the mood; the send-time read judges it and is told of the
+  // hard stretch (hardDayLineFor: held). (The recheck's capped mood hold would hold a check-in class send, but this one never goes
+  // through sendExempt.) Pinned as is, unchanged.
+  const now = new Date();
+  const fc: any = { id: "sf1", userId: U, type: "search_failed", targetKey: "search_failed:a-41:2026-11-08", topicKey: null, summary: N.SEARCH_FAILED_SUMMARY, priority: 47, dueAt: new Date(now.getTime() - 60_000), expiresAt: new Date(now.getTime() + 3_600_000), payload: { askCheckinId: "a-41", askText: ASK.text }, attempts: 0, createdAt: now };
+  const evHard = P.evaluateCandidates({ now, timezone: ZONE, optedOut: false, sends: [], lastInboundAt: new Date(now.getTime() - 3_600_000), joinedAt: new Date("2026-10-01T00:00:00Z"), needsCare: true, moodHold: { state: "held", hold: true, heldHours: 3 }, candidates: [fc] } as any);
+  const moodChecks = (evHard.perCandidate.find((p) => p.candidate.id === "sf1")?.checks ?? []).filter((k) => !k.pass && /mood|hard_day|emotional/.test(k.name)).map((k) => k.name);
+  check("on a hard day: no mood class hold in the pick (not on HOLD_WHILE_STRUGGLING)", !P.HOLD_WHILE_STRUGGLING.has("search_failed") && moodChecks.length === 0, moodChecks);
+  check("on a hard day: the send-time read is told of the hard stretch", MF.hardDayLineFor({ held: true, on: true, cls: "checkin", type: "search_failed", payload: {} }));
+  check("it never goes through sendExempt (so the recheck's mood hold isn't on its path)", !/type: "search_failed"[^\n]*sendExempt|sendExempt\([^\n]*search_failed/.test(src("services/dailySweep.ts") + src("services/searchFailedNotice.ts")));
   check("registered with a policy and a purpose", !!P.TYPE_POLICY.search_failed && !!proactiveRegistry.search_failed);
   check("wiring: the day's last failed retry queues it, for a 9am run only", /if \(last && base\.trigger !== "manual"\) await flagFailingAgain\(userId, base\.day, items, base\.zone, now\)/.test(src("services/dailySweep.ts")) && /N\.searchFailedNotices\(\{ userId, day, zone, items: repeated, failedMin: SWEEP_FAILING_DAYS, now \}\)/.test(src("services/dailySweep.ts")) && /enqueueCandidate\(n\)/.test(src("services/dailySweep.ts")));
 }

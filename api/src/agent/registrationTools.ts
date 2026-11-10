@@ -69,23 +69,42 @@ export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv |
 }
 
 // Pure: a page's words with the member's own name and email taken out (the outcome detail is kept; who they are isn't).
-// Any case ("JORDAN ELLIS" on the page is still their name). labels: what stands in for them (the stored detail's "[member]"; the
-// "didn't go through" line they read says "[your name]" / "[your email]"); any other email on the page is "[email]".
+// Only who they are: their name (the name they gave the form, and their account's first and last name) and their email, as whole words
+// in any case ("JORDAN ELLIS" is still their name). Never their other answers, and never inside another word: an answer "No" once
+// turned "not available" into "[your name]t available" (review of #438). values: their own name and email as given to this signup.
+// labels: what stands in for them in the stored detail ("[member]"); any other email on the page is "[email]". The line the member
+// reads never carries a stand-in (failedQuote drops a quote that names them).
 export function redactMember(text: string | null, values: (string | null | undefined)[], facts: R.MemberFacts = {}, labels: { name: string; email: string } = { name: "[member]", email: "[member]" }): string | null {
   if (text == null) return null;
   const known = [...values, facts.email?.value, facts.first_name?.value, facts.last_name?.value, facts.first_name && facts.last_name ? `${facts.first_name.value} ${facts.last_name.value}` : null]
     .filter((v): v is string => typeof v === "string" && v.trim().length >= 2)
+    .map((v) => v.trim())
     .sort((a, b) => b.length - a.length);
   let out = text;
-  for (const v of known) out = out.replace(new RegExp(v.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), v.includes("@") ? labels.email : labels.name);
+  for (const v of known) {
+    const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    // Whole words: no letter, digit or email character on either side.
+    out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}._%+@-])${esc}(?![\\p{L}\\p{N}_%+@-]|\\.[\\p{L}\\p{N}])`, "giu"), v.includes("@") ? labels.email : labels.name);
+  }
   return out.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]");
 }
-// The page's words as the "didn't go through" line quotes them to the member: their name and email out, at most this long.
+// Pure: the member's own name and email as given to this signup (the answers to its name and email fields), never another answer.
+export function whoTheyAre(rec: Pick<R.RegistrationRecord, "answers" | "form">, email: string | null): string[] {
+  const kinds = new Map((rec.form?.fields ?? []).map((f) => [f.id, f.kind]));
+  const own = Object.entries(rec.answers ?? {}).filter(([id]) => ["name", "first_name", "last_name", "email"].includes(String(kinds.get(id) ?? id))).map(([, a]) => a.value);
+  // The context's email falls back to the words "your email" when none is known: only a real address counts.
+  return [email && email.includes("@") ? email : null, ...own].filter((v): v is string => typeof v === "string" && !!v.trim());
+}
+// The page's words as the "didn't go through" line quotes them to the member: at most this long, and never when they name the member.
 export const FAILED_QUOTE_CHARS = 140;
+// Royce, 2026-11-09: when the page's words name them (their name or email, whole words, any case), the quote is dropped and the line
+// just says it didn't go through, with the link: no stand-in tokens. Otherwise the page's words, as they are, capped.
 export function failedQuote(text: string | null, values: (string | null | undefined)[], facts: R.MemberFacts = {}): string | null {
-  const red = redactMember(text, values, facts, { name: "[your name]", email: "[your email]" })?.replace(/\s+/g, " ").trim() ?? "";
-  if (!red) return null;
-  return red.length > FAILED_QUOTE_CHARS ? `${red.slice(0, FAILED_QUOTE_CHARS - 1).trimEnd()}…` : red;
+  const flat = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!flat) return null;
+  const SEEN = "\u0000";
+  if (redactMember(flat, values, facts, { name: SEEN, email: SEEN })!.includes(SEEN)) return null;
+  return flat.length > FAILED_QUOTE_CHARS ? `${flat.slice(0, FAILED_QUOTE_CHARS - 1).trimEnd()}…` : flat;
 }
 
 // Their emailed code, caught before the ordinary reply (routes/sendblue.ts): entered once in the held session, and the line to send.
@@ -311,7 +330,7 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
       return { ok: false, made: "a submitted signup the page didn't confirm", ...said(C.outcomeLine(c, "uncertain")) };
     }
     // The page's words are kept as the outcome's detail, but never the member's own name or email in them.
-    const theirs = [c.email, ...Object.values(rec.answers).map((a) => a.value)];
+    const theirs = whoTheyAre(rec, c.email);
     const facts = await factsFor(rec);
     const outcome: R.Outcome = { state: res.state, link: res.link ?? rec.eventUrl, linkKind: res.linkKind, detail: redactMember(res.detail, theirs, facts), at };
     const settled = await S.recordOutcome(userId, rec.id, outcome, res.state as R.Status, q);

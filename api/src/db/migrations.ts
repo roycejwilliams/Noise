@@ -2528,6 +2528,9 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS deferred_sends_due ON deferred_sends (due_at) WHERE status IN ('queued','sending')`))
+    // The send's class when its caller gave one (an intro both people agreed to is "requested"): the re-send keeps it, so a held
+    // requested send is never read or dropped as Cue's own (review of #438). Null on older rows: the runner reads it from the key.
+    .then(() => pool.query(`ALTER TABLE deferred_sends ADD COLUMN IF NOT EXISTS cls TEXT`))
     .catch((err: Error) => console.error("deferred_sends table init failed:", err));
 
   // Google Calendar and Gmail, read-only (services/googleAuth.ts, 2026-09-28).

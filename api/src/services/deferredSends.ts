@@ -48,7 +48,19 @@ export type DeferredRow = {
   created_at?: Date | string | null;
   // "recheck: ..." when a correction marked it (services/whatCoKnows.ts cancelQueued): re-read against the correction before it goes.
   error?: string | null;
+  // The class its caller gave it (null: none given, or a row from before the column).
+  cls?: string | null;
 };
+
+// Pure: the class a held row is re-sent with. The one it was queued with wins; an older row with none is read from its key: a reminder
+// they set and an intro both people agreed to (services/introByText.ts, network-intro:/event-intro: keys) are requested, so a hard day's
+// send-time read never judges or drops them (review of #438). Anything else: none (its type's own class, as before).
+export const SEND_CLASSES = new Set(["requested", "unsolicited", "checkin", "reply"]);
+export function rowClass(row: Pick<DeferredRow, "cls" | "target_key">): "requested" | "unsolicited" | "checkin" | "reply" | null {
+  if (row.cls && SEND_CLASSES.has(row.cls)) return row.cls as "requested" | "unsolicited" | "checkin" | "reply";
+  if (/^(?:reminder|network-intro|event-intro):/.test(String(row.target_key ?? ""))) return "requested";
+  return null;
+}
 
 // Queue a send for `dueAt`. One row per (user, target_key): queueing the same thing twice keeps the first.
 export async function enqueueDeferredSend(o: {
@@ -60,12 +72,14 @@ export async function enqueueDeferredSend(o: {
   timezone: string | null;
   dueAt: Date;
   after?: AfterSend;
+  // Its class when the caller gave one (sendExempt cls / requested): kept on the row so the re-send keeps it.
+  cls?: string | null;
 }): Promise<{ queued: boolean; id?: number; reason?: string }> {
   const ins = await pool.query(
-    `INSERT INTO deferred_sends (user_id, phone_number, type, target_key, messages, timezone, after_kind, after_payload, due_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9)
+    `INSERT INTO deferred_sends (user_id, phone_number, type, target_key, messages, timezone, after_kind, after_payload, due_at, cls)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9, $10)
      ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-    [o.userId, o.phoneNumber, o.type, o.targetKey, JSON.stringify(o.messages), o.timezone, o.after?.kind ?? null, o.after ? JSON.stringify(o.after.payload) : null, o.dueAt],
+    [o.userId, o.phoneNumber, o.type, o.targetKey, JSON.stringify(o.messages), o.timezone, o.after?.kind ?? null, o.after ? JSON.stringify(o.after.payload) : null, o.dueAt, o.cls ?? null],
   );
   if (ins.rows[0]) {
     await recordDecision({ layer: 7, decision: "proactive.deferredSend", userId: o.userId, outcome: "act", action: "queued", proposal: { type: o.type, targetKey: o.targetKey, dueAt: o.dueAt.toISOString() } }).catch(() => {});
@@ -271,7 +285,7 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
   const out = { claimed: 0, sent: 0, requeued: 0, skipped: 0, failed: 0 };
   const { rows } = await pool.query(
     `SELECT d.id, d.user_id, COALESCE(u.phone_number, d.phone_number) AS phone_number, d.type, d.target_key, d.messages, d.timezone,
-            d.after_kind, d.after_payload, d.due_at, d.status, d.attempts, d.created_at, d.error, (u.archived_at IS NOT NULL) AS archived
+            d.after_kind, d.after_payload, d.due_at, d.status, d.attempts, d.created_at, d.error, d.cls, (u.archived_at IS NOT NULL) AS archived
      FROM deferred_sends d JOIN users u ON u.id = d.user_id
      WHERE (d.status = 'queued' AND d.due_at <= $1) OR (d.status = 'sending' AND d.claimed_at < $2)
      ORDER BY d.due_at LIMIT ${DEFERRED_LIMITS.perRun}`,
@@ -345,9 +359,9 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     else if (!localHourOk(now, row.timezone)) result = { sent: false, reason: "outside local hours" };
     else {
       result = await deps
-        // A reminder they set is a delivery they asked for (requested), whatever its send type (harness/notifyGate.ts).
+        // Its class as queued (rowClass): a reminder they set and an intro both people agreed to are requested, whatever the send type.
         // queuedAt: the send-time read on a hard day is told how long it waited (harness/momentFit.ts exemptMomentRead).
-        .send({ userId: row.user_id, phoneNumber: row.phone_number, type: row.type, targetKey: row.target_key, messages, timezone: row.timezone, respectHours: true, now, queuedAt, ...(/^reminder:/.test(String(row.target_key)) ? { cls: "requested" as const } : {}) })
+        .send({ userId: row.user_id, phoneNumber: row.phone_number, type: row.type, targetKey: row.target_key, messages, timezone: row.timezone, respectHours: true, now, queuedAt, ...(rowClass(row) ? { cls: rowClass(row)! } : {}) })
         .catch((err: any) => ({ sent: false, reason: `error: ${String(err?.message ?? err)}` }));
     }
     // A Cue-started text held past its event or its window is dropped with the reason, and its after step hears it didn't go.

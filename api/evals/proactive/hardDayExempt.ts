@@ -200,6 +200,40 @@ for (const [label, holds, recent] of [["calm words", HELD, calmWords], ["distres
   } finally { h.restore(); reset(); }
 }
 
+// ---------------------------------------------------------------- 4b. a requested intro held overnight keeps its class (review of #438)
+// services/introByText.ts sends an intro both people agreed to as direct_ask, cls "requested". Held (night, their rule), the row used to
+// keep no class, so the re-send read it as Cue's own: on a hard day the read could drop it for good.
+{
+  check("row class: the class it was queued with wins", D.rowClass({ cls: "requested", target_key: "x:1" }) === "requested" && D.rowClass({ cls: "unsolicited", target_key: "network-intro:a:b:text:u" }) === "unsolicited");
+  check("row class: an older row with none: an agreed intro (network-intro:/event-intro:) and a reminder are requested", D.rowClass({ cls: null, target_key: "network-intro:a:b:text:u-rowan" }) === "requested" && D.rowClass({ cls: null, target_key: "event-intro:ev1:a:b:text:u-rowan" }) === "requested" && D.rowClass({ cls: null, target_key: "reminder:4" }) === "requested");
+  check("row class: anything else keeps its type's class (none given)", D.rowClass({ cls: null, target_key: KEY }) === null && D.rowClass({ cls: "bogus", target_key: KEY }) === null);
+  for (const [label, rowCls] of [["queued with its class", "requested"], ["an older row (no class stored)", null]] as const) {
+    current = "drop";
+    R.setSendHoldReaderForTests(async () => HELD as any);
+    MF.setExemptReadDepsForTests({ state: async () => onHardDay, context: ctx(distressWords) });
+    const h = harness();
+    h.setRow({ id: 1, user_id: ROWAN, phone_number: "+15035550177", type: "direct_ask", target_key: "network-intro:u-rowan:u-sam:text:u-rowan", messages: ["You and Sam both said yes: here's the intro."], timezone: zone, after_kind: null, after_payload: null, due_at: new Date(Date.now() - 60_000), status: "queued", attempts: 0, created_at: new Date(Date.now() - 10 * 3_600_000), error: null, archived: false, cls: rowCls });
+    try {
+      const out = await D.runDueDeferredSends(new Date(), { send: P.sendExempt, handlers: D.afterHandlers });
+      check(`deferred (${label}): a requested intro on a hard day is never read and never dropped: it goes`, prompts.length === 0 && out.sent === 1 && out.skipped === 0 && h.ledger.outbox.length === 1, { out, n: prompts.length });
+    } finally { h.restore(); reset(); }
+  }
+  {
+    // The class rides on the row when it's queued (sendExemptWhenAllowed at night).
+    const h = harness();
+    const inserted: any[] = [];
+    const before = (pool as any).query;
+    (pool as any).query = async (s: string, a: any[] = []) => { if (/^\s*INSERT INTO deferred_sends/.test(s)) inserted.push(a); return before(s, a); };
+    try {
+      const night = (() => { let off = (3 - new Date().getUTCHours() + 24) % 24; if (off > 14) off -= 24; return off === 0 ? "Etc/GMT" : `Etc/GMT${off > 0 ? "-" : "+"}${Math.abs(off)}`; })();
+      await P.sendExemptWhenAllowed({ userId: ROWAN, phoneNumber: "+15035550177", type: "direct_ask", targetKey: "network-intro:u-rowan:u-sam:text:u-rowan", messages: ["intro"], timezone: night, cls: "requested" });
+      check("queue: a requested send held for the night stores its class on the row", inserted.length === 1 && inserted[0][9] === "requested", inserted.map((a) => a[9]));
+    } finally { (pool as any).query = before; h.restore(); reset(); }
+  }
+  check("queue: sendExempt's own hold (queueIfHeld) stores the class too", /dueAt: at, cls: opts\.requested \? "requested" : \(opts\.cls \?\? null\)/.test(src("harness/proactive.ts")));
+  check("migration: the column is added once, nullable", /ALTER TABLE deferred_sends ADD COLUMN IF NOT EXISTS cls TEXT/.test(src("db/migrations.ts")));
+}
+
 // ---------------------------------------------------------------- 5. the wiring
 {
   const px = src("harness/proactive.ts");

@@ -98,14 +98,26 @@ check("not a code: a time, money, a zip, an address, a phone number, a sentence"
   check("outcome detail: name and email redacted (and any other email)", red === "You’re In [member] · [member] Add to Calendar [email]", red);
   check("outcome detail: nothing to redact stays as it is", T.redactMember("You’re In", [], facts) === "You’re In" && T.redactMember(null, [], facts) === null);
   check("outcome detail: their name in another case is still theirs", T.redactMember("Welcome, JORDAN ELLIS (Member@Example.com)", ["member@example.com"], facts) === "Welcome, [member] ([member])", T.redactMember("Welcome, JORDAN ELLIS (Member@Example.com)", ["member@example.com"], facts));
-  // Review 2026-11-09: the "didn't go through" line quoted the page's raw words to the member. Now their name and email are out, capped.
-  const raw = "Sorry Jordan Ellis, we couldn't register member@example.com: this event is at capacity and the waitlist is closed. Contact host@example.org with questions about future dates and other events in the series this winter.";
-  const qt = T.failedQuote(raw, ["member@example.com"], facts);
-  check("failed quote: their name and email are out of it", !!qt && !/Jordan|Ellis|member@example\.com/i.test(qt) && qt.includes("[your name]") && qt.includes("[your email]"), qt);
-  check("failed quote: capped at FAILED_QUOTE_CHARS, ending in an ellipsis", !!qt && qt.length <= T.FAILED_QUOTE_CHARS && qt.endsWith("…"), qt);
+  // Review of #438: only their name and email, as whole words, never another answer: an answer "No" turned "not available" into
+  // "[your name]t available".
+  check("redaction: another answer is never redacted, and nothing inside a word", T.redactMember("Sorry, that time is not available. Northwind guests: no walk-ins.", ["member@example.com"], facts) === "Sorry, that time is not available. Northwind guests: no walk-ins.", T.redactMember("Sorry, that time is not available. Northwind guests: no walk-ins.", ["member@example.com"], facts));
+  check("redaction: their name inside another word stays ('Jordanian', 'Ellison')", T.redactMember("Jordanian food by Ellison Catering", [], facts) === "Jordanian food by Ellison Catering");
+  check("redaction: their email at a sentence's end is still theirs", T.redactMember("We emailed member@example.com.", [], facts) === "We emailed [member].");
+  const recW: any = { answers: { name: { value: "Jordan Ellis" }, email: { value: "member@example.com" }, q1: { value: "No" }, company: { value: "Northwind" } }, form: { fields: [{ id: "name", kind: "name" }, { id: "email", kind: "email" }, { id: "q1", kind: "yes_no" }, { id: "company", kind: "company" }] } };
+  check("who they are: the name and email answers only, never 'No' or their company", JSON.stringify(T.whoTheyAre(recW, "member@example.com")) === JSON.stringify(["member@example.com", "Jordan Ellis", "member@example.com"]), T.whoTheyAre(recW, "member@example.com"));
+  check("who they are: the context's placeholder 'your email' is never a value", !T.whoTheyAre({ answers: {}, form: null } as any, "your email").length);
+  // Royce 2026-11-09: a page error that names them drops the quote (no stand-in tokens); one that doesn't is quoted as is, capped.
   const ctxF = { eventName: "Demo Night", when: null, email: "member@example.com", link: "https://luma.com/demo-night" };
-  const line = C.outcomeLine(ctxF, "failed", { detail: qt, link: ctxF.link });
-  check("failed line: the quote in the member's line carries no name or page email of theirs", line.startsWith("The signup for Demo Night didn't go through: the page said \"Sorry [your name], we couldn't register [your email]") && !/Jordan|Ellis/.test(line), line);
+  const naming = ["Sorry Jordan Ellis, this event is at capacity.", "We couldn't register member@example.com.", "Sorry JORDAN, the waitlist is closed."];
+  check("failed quote: page words that name them (name or email, any case) are not quoted", naming.every((t) => T.failedQuote(t, T.whoTheyAre(recW, ctxF.email), facts) === null), naming.map((t) => T.failedQuote(t, [ctxF.email], facts)));
+  const dropped = C.outcomeLine(ctxF, "failed", { detail: T.failedQuote(naming[0], [ctxF.email], facts), link: ctxF.link });
+  check("failed line, quote dropped: it just says it didn't go through, with the link", dropped === "The signup for Demo Night didn't go through. Nothing is confirmed. Here's the page if you'd like to try it yourself:\nhttps://luma.com/demo-night" && !/\[your/.test(dropped), dropped);
+  const plain = "This event is at capacity and the waitlist is closed, so no more registrations are accepted. Contact host@example.org with questions about future dates in the series.";
+  const qt = T.failedQuote(plain, T.whoTheyAre(recW, ctxF.email), facts);
+  check("failed quote: page words that don't name them are quoted as they are (an answer 'No' doesn't garble 'no more')", !!qt && qt.startsWith("This event is at capacity and the waitlist is closed, so no more registrations") && !/\[/.test(qt), qt);
+  check("failed quote: capped at FAILED_QUOTE_CHARS, ending in an ellipsis", !!qt && qt.length <= T.FAILED_QUOTE_CHARS && qt.endsWith("…"), qt);
+  const quoted = C.outcomeLine(ctxF, "failed", { detail: qt, link: ctxF.link });
+  check("failed line, quoted: the page's own words, no stand-in tokens", quoted.startsWith("The signup for Demo Night didn't go through: the page said \"This event is at capacity") && !/\[your/.test(quoted), quoted);
   check("failed quote: nothing on the page, no quote", T.failedQuote(null, [], facts) === null && T.failedQuote("   ", [], facts) === null);
   const st = src("agent/registrationTools.ts");
   const settleFn = st.slice(st.indexOf("async function settle("), st.indexOf("async function settleFound("));

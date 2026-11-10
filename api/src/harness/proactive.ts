@@ -2562,7 +2562,8 @@ export async function sendExempt(opts: {
       const at = retryAt ?? new Date(now.getTime() + 60 * 60_000);
       if (opts.queueIfHeld) {
         const D = await import("../services/deferredSends.js");
-        const q = await D.enqueueDeferredSend({ userId: opts.userId, phoneNumber: opts.phoneNumber, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, timezone: opts.timezone ?? null, dueAt: at }).catch(() => ({ queued: false }));
+        // Its class rides on the row (a requested send stays requested when it's re-sent: review of #438).
+        const q = await D.enqueueDeferredSend({ userId: opts.userId, phoneNumber: opts.phoneNumber, type: opts.type, targetKey: opts.targetKey, messages: opts.messages, timezone: opts.timezone ?? null, dueAt: at, cls: opts.requested ? "requested" : (opts.cls ?? null) }).catch(() => ({ queued: false }));
         return { sent: false, reason: `held: ${reason}`, retryAt: at, queued: q.queued };
       }
       return { sent: false, reason: `held: ${reason}`, retryAt: at };
