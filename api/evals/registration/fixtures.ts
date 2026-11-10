@@ -69,7 +69,7 @@ export function fixtureHtml(f: Fixture): string {
     },
   };
   const cfg = { nav: !!f.nav, resultIn: f.resultIn ?? "dialog", slug: f.slug, fields: f.fields ?? NAME_EMAIL, button: f.button === undefined ? "Register" : f.button, result: f.result ?? "registered", signIn: f.signIn ?? null, code: f.code ?? null, closed: !!f.closed, loginCode: f.signIn?.code ?? f.loginCode ?? null, lost: !!f.lost };
-  return `<!doctype html><html><head><title>${data.props.pageProps.initialData.data.event.name} · Luma</title>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${data.props.pageProps.initialData.data.event.name} · Luma</title>
 <script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data)}</script></head><body>
 ${f.nav ? '<header><a href="#main">Skip to Content</a> <span>4:02 PM PST</span> <nav><a href="https://luma.com/discover">Discover Events</a> <a href="https://luma.com/signin">Sign In</a></nav></header>' : ""}
 <main id="main"><h1>${data.props.pageProps.initialData.data.event.name}</h1><p>Hosted By Host Collective</p>
@@ -177,8 +177,11 @@ const start = async () => {
   // Signed in: the page shows what Luma holds for them, the way the real page shows "You're going".
   const held = signedInEmail ? await server("state", { email: signedInEmail }) : null;
   if (held && held.status) {
-    const words = held.status === "pending" ? "Pending Approval. Your request is waiting on the host." : held.status === "waitlist" ? "You're on the waitlist." : "You're Going";
-    document.getElementById("card").appendChild(el("p", { id: "state" }, words));
+    // Shaped like Luma's registered page (captured 2026-11-09): the status line, the guest's own controls, the cancel line. (The
+    // pending and waitlist versions were never seen live.)
+    const words = held.status === "pending" ? "Pending Approval" : held.status === "waitlist" ? "You're on the waitlist" : "You’re In";
+    const card = document.getElementById("card");
+    card.appendChild(el("div", { id: "state" }, "<div>" + words + "</div><button type='button' aria-label='My Ticket'></button><div>No longer able to attend? Notify the host by <span role='button' tabindex='0'>canceling your registration</span>.</div>"));
     return;
   }
   if (cfg.button && !cfg.closed) {

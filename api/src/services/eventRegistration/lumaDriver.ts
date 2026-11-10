@@ -26,7 +26,7 @@
 // env switch (no feature toggles; approvals.ts). Inspect mode (reading a public page) works live; submit works only on local fixtures.
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { DateTime } from "luxon";
-import { classifyField, readResultText, canonicalEventUrl, type FormField, type FormRead, type Ticket } from "./registration.js";
+import { classifyField, readResultText, restrictionsIn, canonicalEventUrl, type FormField, type FormRead, type Ticket } from "./registration.js";
 import type { RegistrationDriver, RegistrationSession, SubmitRead } from "./drivers.js";
 import { keepBrowserWhile } from "../browserRead.js";
 
@@ -58,7 +58,7 @@ export class LiveSubmitDisabled extends Error {
 export const submitAllowed = (fixtureMode: boolean, approved: boolean = LUMA_LIVE_SUBMIT_APPROVED) => approved || fixtureMode;
 
 // Pure: the page's public data (its __NEXT_DATA__ JSON) as the parts a registration needs. Anything missing is null, never guessed.
-export type PageData = { name: string | null; startAt: string | null; zone: string | null; free: boolean | null; priceCents: number | null; flexible: boolean; ticketTypes: Ticket[]; requireApproval: boolean | null; soldOut: boolean | null; waitlist: boolean | null; terms: string[]; hosts: string[] };
+export type PageData = { description?: string | null; name: string | null; startAt: string | null; zone: string | null; free: boolean | null; priceCents: number | null; flexible: boolean; ticketTypes: Ticket[]; requireApproval: boolean | null; soldOut: boolean | null; waitlist: boolean | null; terms: string[]; hosts: string[] };
 export function pageDataFrom(json: unknown): PageData {
   const root: any = json ?? {};
   const d: any = root?.props?.pageProps?.initialData?.data ?? root?.props?.pageProps?.initialData ?? {};
@@ -81,6 +81,7 @@ export function pageDataFrom(json: unknown): PageData {
     waitlist: typeof d.waitlist_active === "boolean" ? d.waitlist_active : null,
     terms,
     hosts: (Array.isArray(d.hosts) ? d.hosts : []).map((h: any) => String(h?.name ?? "")).filter(Boolean),
+    description: (() => { const t = flat(d.description_mirror ?? ev.description_mirror).trim(); return t || (typeof ev.description === "string" ? ev.description : null); })(),
   };
 }
 
@@ -131,6 +132,8 @@ export function formReadFrom(url: string, data: PageData, raw: RawForm | null, b
     action: gate === "captcha" && !button ? "none" : action,
     tickets: data.ticketTypes.length > 1 ? data.ticketTypes : [],
     priceText: priceTextOf(data),
+    // Who the event's own description says it's for (put to the member to confirm; never judged).
+    ...(restrictionsIn(data.description).length ? { restrictions: restrictionsIn(data.description) } : {}),
     fields,
     gate,
     signIn,
@@ -182,6 +185,14 @@ const READ_FORM_JS = String.raw`(() => {
 
 // Pure: what a signed-in event page says Luma holds for this guest. "not_registered" only when the page offers its register button and
 // says none of the guest states; anything else it can't tell is "unknown" (never read as not registered).
+// Pure: Luma's own state for this guest from the region read: a status only from the guest-status block (or a dialog); "not registered"
+// only when there is no status block and a live register button is on the page; anything else is unknown.
+export function ownStateFromRegion(r: RegionRead | null): ReturnType<typeof ownStateFrom> {
+  if (!r) return { state: "unknown", why: "the page couldn't be read" };
+  if (r.region === "status" || r.region === "dialog") return ownStateFrom(r.text, false);
+  if (r.registerButton) return { state: "not_registered", why: "signed in, the page offers registration and shows no status block for them" };
+  return { state: "unknown", why: "the page shows neither this guest's status nor a way to register" };
+}
 export function ownStateFrom(text: string, registerButton: boolean): { state: "registered" | "pending_approval" | "waitlisted" | "not_registered" | "unknown"; why: string } {
   const t = String(text ?? "").replace(/[’]/g, "'").replace(/\s+/g, " ");
   if (/pending approval|request (?:has been |was )?(?:sent|submitted)|waiting (?:for|on) (?:the )?host/i.test(t)) return { state: "pending_approval", why: "the page shows their request pending" };
@@ -194,21 +205,42 @@ export function ownStateFrom(text: string, registerButton: boolean): { state: "r
 // What the page shows in the registration's own region, read in the page (plain JavaScript in a string, like READ_FORM_JS).
 //   region: the open dialog, else the RSVP/ticket block the register button sat in (tagged when it was clicked), else the page's main
 //   content with its header, nav and footer taken out ("main"), else nothing.
-export type RegionRead = { region: "dialog" | "rsvp" | "main" | "none"; text: string; codeInput: boolean; signInForm: boolean; formStillOpen: boolean; tied: boolean; ticket: string | null };
+export type RegionRead = { region: "dialog" | "status" | "rsvp" | "main" | "none"; text: string; codeInput: boolean; signInForm: boolean; formStillOpen: boolean; tied: boolean; ticket: string | null; registerButton: boolean };
+// The registration's own region, in this order:
+//   1. an open dialog (the form, or its answer);
+//   2. the guest-status block for this event: the block that carries this guest's own controls (cancel the registration, My Ticket),
+//      read with its status line ("You're In", "Pending", "On the waitlist"). Luma's registered page (captured 2026-11-09) also shows a
+//      "Registration ... Register" block further down, inert: inert and hidden blocks are never read, and that block is not a state;
+//   3. the RSVP/ticket block the register button sat in (tagged when it was clicked);
+//   4. the page's main content with its header, nav, footer and inert blocks taken out ("main": its words are never proof).
+// registerButton: a visible register button outside any inert block.
 const REGION_JS = String.raw`((member) => {
-  const visible = (el) => !!el && el.isConnected && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const dialog = document.querySelector("[role=dialog]");
-  const rsvp = document.querySelector("[data-cue-region]");
+  const live = (el) => !!el && el.isConnected && !el.closest("[inert], [aria-hidden=true]") && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const words = (root) => {
+    const out = [];
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => { const p = n.parentElement; if (!p) return NodeFilter.FILTER_REJECT; if (p.closest("script, style, noscript, [inert], [aria-hidden=true], header, nav, footer, [role=navigation], [role=banner], [role=contentinfo]")) return NodeFilter.FILTER_REJECT; return NodeFilter.FILTER_ACCEPT; } });
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) { const t = n.nodeValue.trim(); if (t) out.push(t); }
+    return out.join(" ").replace(/\s+/g, " ").slice(0, 4000);
+  };
+  const STATE = /you[’']re in\b|you[’']re (?:going|registered)|pending approval|request (?:has been |was )?(?:sent|submitted)|on the wait ?list|you[’']re waitlisted|registration (?:is )?confirmed/i;
+  const CONTROL = /cancel(?:ing)? (?:your )?registration|my ticket/i;
+  const registerButton = Array.from(document.querySelectorAll("button, [role=button]")).some((b) => live(b) && /^(register|request to join|join waitlist|rsvp|one-click rsvp|get tickets?)$/i.test((b.innerText || "").trim()));
   let region = "none", node = null;
-  if (visible(dialog)) { region = "dialog"; node = dialog; }
-  else if (visible(rsvp)) { region = "rsvp"; node = rsvp; }
-  else {
-    const main = document.querySelector("main") || document.body;
-    if (main) { region = "main"; node = main.cloneNode(true); node.querySelectorAll("header, nav, footer, [role=navigation], [role=banner], [role=contentinfo]").forEach((x) => x.remove()); }
+  const dialog = document.querySelector("[role=dialog]");
+  if (live(dialog)) { region = "dialog"; node = dialog; }
+  if (!node) {
+    const controls = Array.from(document.querySelectorAll("button, [role=button], a")).filter((el) => live(el) && (CONTROL.test(el.innerText || "") || CONTROL.test(el.getAttribute("aria-label") || "")));
+    for (const c of controls) {
+      let up = c;
+      for (let i = 0; i < 7 && up && up !== document.body; i++, up = up.parentElement) if (STATE.test(words(up))) { node = up; region = "status"; break; }
+      if (node) break;
+    }
   }
-  if (!node) return { region: "none", text: "", codeInput: false, signInForm: false, formStillOpen: false, tied: false, ticket: null };
-  const text = ((node.innerText !== undefined && node.isConnected ? node.innerText : node.textContent) || "").replace(/\s+/g, " ").trim().slice(0, 4000);
-  const q = (s) => node.querySelector(s);
+  if (!node) { const rsvp = document.querySelector("[data-cue-region]"); if (live(rsvp)) { region = "rsvp"; node = rsvp; } }
+  if (!node) { node = document.querySelector("main") || document.body; region = node ? "main" : "none"; }
+  if (!node) return { region: "none", text: "", codeInput: false, signInForm: false, formStillOpen: false, tied: false, ticket: null, registerButton };
+  const text = words(node);
+  const q = (s) => Array.from(node.querySelectorAll(s)).find((el) => live(el)) || null;
   const codeInput = !!q("input[autocomplete=one-time-code]") || (!!q("input[inputmode=numeric]") && /code/i.test(text));
   const hasName = !!q("input[name=name], input[autocomplete=name], input[autocomplete=given-name]");
   const hasEmail = !!q("input[type=email], input[autocomplete=email]");
@@ -216,13 +248,13 @@ const REGION_JS = String.raw`((member) => {
   const formStillOpen = region === "dialog" && hasName && !!q("button[type=submit]");
   const low = text.toLowerCase();
   const tiedWords = (member.email && low.includes(String(member.email).toLowerCase())) || (member.name && low.includes(String(member.name).toLowerCase()));
-  const links = Array.from(node.querySelectorAll("a[href]")).map((a) => a.href);
+  const links = Array.from(node.querySelectorAll("a[href]")).filter((a) => live(a)).map((a) => a.href);
   const ticket = links.find((h) => /^https:\/\/(?:lu\.ma|luma\.com)\/(?:ticket|e\/ticket|tickets?)\//i.test(h)) || null;
-  return { region, text, codeInput, signInForm, formStillOpen, tied: !!tiedWords || !!ticket, ticket };
+  return { region, text, codeInput, signInForm, formStillOpen, tied: !!tiedWords || !!ticket, ticket, registerButton };
 })`;
 
 // A string expression is evaluated as is (Playwright passes no argument to it), so the member is written into the call.
-const regionCall = (member: { email: string | null; name: string | null }) => `${REGION_JS}(${JSON.stringify(member)})`;
+export const regionCall = (member: { email: string | null; name: string | null }) => `${REGION_JS}(${JSON.stringify(member)})`;
 
 // Pure: the result of a submit from its region's read. A code input in the region is the code step. Success, pending, waitlist and
 // already-registered count only from the dialog or the RSVP block (generic words in the page's main content are not proof). An error
@@ -234,7 +266,7 @@ export function resultFrom(r: RegionRead | null, eventUrl: string): SubmitRead {
   if (r.codeInput) return { state: "needs_code", detail: "Luma sent a code to their email", link: null, linkKind: "event_page" };
   if (r.signInForm) return none;
   const words = readResultText(r.text);
-  const scoped = r.region === "dialog" || r.region === "rsvp";
+  const scoped = r.region === "dialog" || r.region === "status" || r.region === "rsvp";
   const link = r.ticket ?? eventUrl;
   const linkKind = r.ticket ? ("confirmation" as const) : ("event_page" as const);
   const detail = `${r.text.slice(0, 200)}${r.tied ? "" : " [not tied to them on the page]"}`;
@@ -420,6 +452,14 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
 
   const session: RegistrationSession = {
     async read() {
+      // The description, when the page's data didn't carry it: the "About Event" section's own text (never the nav or the form).
+      if (!data.description) {
+        data.description = await page.evaluate(() => {
+          const h = Array.from(document.querySelectorAll("div, h2, h3, h4")).find((e) => (e as HTMLElement).innerText?.trim() === "About Event");
+          const box = h?.parentElement?.parentElement;
+          return box ? ((box as HTMLElement).innerText ?? "").replace(/^About Event\s*/, "").slice(0, 6000) : null;
+        }).catch(() => null);
+      }
       await openForm();
       return formReadFrom(url, data, await raw(), button);
     },
@@ -508,10 +548,9 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
       if (!signedIn) return { state: "unknown", why: "not signed in to Luma in this session" };
       await page.reload({ waitUntil: "domcontentloaded", timeout: LUMA_LIMITS.pageMs });
       await page.waitForTimeout(fixtureMode ? 150 : LUMA_LIMITS.settleMs);
-      // The page's own content, never its header or nav (a nav "Sign In" or "Discover Events" says nothing about this guest).
-      const r = (await page.evaluate(regionCall({ email: null, name: null })).catch(() => null)) as RegionRead | null;
-      const button = await page.getByRole("button", { name: REGISTER_BUTTON }).count().catch(() => 0);
-      return ownStateFrom(r?.text ?? "", button > 0);
+      // This guest's status block for this event, never the whole page: Luma's registered page also shows a "Registration ... Register"
+      // block (inert), so a register button on the page says nothing by itself (captured 2026-11-09).
+      return ownStateFromRegion((await page.evaluate(regionCall({ email: null, name: null })).catch(() => null)) as RegionRead | null);
     },
     async readResult(member) {
       return resultNow(member);
