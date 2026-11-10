@@ -258,7 +258,7 @@ export function resolveCoEventPlace(
 // coordinates, hosts, description, registration). Both confirmed live 2026-10-19 on an event we don't manage (lu.ma/16nclyz5).
 // One key for all of it (LUMA_API_KEY, Noise's calendar key): Luma allows 200 requests a minute per calendar, so these two stop at
 // LUMA_PUBLIC_API.perMinute, leaving room for Noise's own calendar calls above. A 429 pauses the Exa search for refusalPauseMinutes.
-export const LUMA_PUBLIC_API = { perMinute: 150, lookupCacheDays: 7, missCacheHours: 24, eventCacheMinutes: 60, failedCacheMinutes: 2, refusalPauseMinutes: 10 } as const;
+export const LUMA_PUBLIC_API = { perMinute: 150, lookupCacheDays: 7, missCacheHours: 24, eventCacheMinutes: 60, failedCacheMinutes: 2, refusalPauseMinutes: 10, deniedPauseMinutes: 30, deniedPauseMaxMinutes: 24 * 60, timeoutMs: 6000 } as const;
 
 export type LumaEntity = { type: "event"; id: string; slug: string; startAt: string | null; endAt: string | null } | { type: "calendar"; id: string };
 export type LumaPublicEvent = {
@@ -280,17 +280,47 @@ export type LumaPublicEvent = {
   requireApproval: boolean | null;
   spotsRemaining: number | null;
 };
-// "refused": Luma said 429. "limited": our own per-minute stop. "off": no LUMA_API_KEY.
-export type LumaApiMiss = "refused" | "limited" | "off";
+// Why a call gave no answer, kept apart from "Luma knows no such event" (null), which is only a 404 or a 200 naming no event
+// (Royce, 2026-11-10: "a failed verification service must never become 'nothing found'"):
+//   "refused": Luma said 429. "limited": our own per-minute stop. "off": no LUMA_API_KEY.
+//   "denied": Luma refused the key itself (401 or 403; from 2026-10-31 every call answered 403 "Your calendar must have an active
+//             Luma Plus plan to make API requests"). Source-wide: the API pauses (lumaApiDenied) instead of failing once per event.
+//   "failed": no usable answer (timed out, unreachable, a 5xx, another 4xx, or a reply that couldn't be read). Not an answer about it.
+export type LumaApiMiss = "refused" | "limited" | "off" | "denied" | "failed";
 
 export const lumaApiConfigured = (env: NodeJS.ProcessEnv = process.env): boolean => !!env.LUMA_API_KEY?.trim();
 let apiCalls: number[] = [];
 let apiRefusedAt = 0;
 export const lumaApiRefusedRecently = (now: number = Date.now()): boolean => apiRefusedAt > 0 && now - apiRefusedAt < LUMA_PUBLIC_API.refusalPauseMinutes * 60_000;
-// For tests: forget the minute's calls, the last refusal and both caches.
+// The key refused (401/403): when, what Luma said (its own message, never the key), and until when the API isn't asked again. Each
+// denial in a row doubles the pause (30 minutes, up to a day); any other answer from Luma clears it. Recovery is tested by one free API
+// call once the pause is over (lumaApiState), never by a paid search.
+export type LumaApiDenial = { at: number; until: number; status: number; message: string; streak: number };
+let apiDenied: LumaApiDenial | null = null;
+// Pure: how long the pause is after this many denials in a row.
+export const deniedPauseMs = (streak: number): number =>
+  Math.min(LUMA_PUBLIC_API.deniedPauseMinutes * 2 ** Math.max(0, streak - 1), LUMA_PUBLIC_API.deniedPauseMaxMinutes) * 60_000;
+// The denial still in force, or null.
+export const lumaApiDenied = (now: number = Date.now()): LumaApiDenial | null => (apiDenied && now < apiDenied.until ? apiDenied : null);
+// The last denial, in force or not (null once Luma answered the key again).
+export const lastLumaApiDenial = (): LumaApiDenial | null => apiDenied;
+// Pure: Luma's own message from an error body, short, for the log. Never a header, never the key.
+export function lumaErrorMessage(body: unknown): string {
+  const m = body && typeof body === "object" ? (body as any).message : typeof body === "string" ? body : null;
+  return String(m ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+}
+// A denial while one is already in force (calls that were in flight together) doesn't lengthen the pause: only a new denial after the
+// pause ran out does.
+function noteDenied(now: number, status: number, message: string): void {
+  if (apiDenied && now < apiDenied.until) return;
+  const streak = (apiDenied?.streak ?? 0) + 1;
+  apiDenied = { at: now, until: now + deniedPauseMs(streak), status, message, streak };
+}
+// For tests: forget the minute's calls, the last refusal and denial, and both caches.
 export function resetLumaPublicApi(): void {
   apiCalls = [];
   apiRefusedAt = 0;
+  apiDenied = null;
   lookupCache.clear();
   eventCache.clear();
 }
@@ -306,15 +336,46 @@ async function apiGet(path: string, params: Record<string, string>, d: ApiDeps):
   const env = d.env ?? process.env;
   if (!lumaApiConfigured(env)) return "off";
   const now = (d.now ?? Date.now)();
+  // The key was refused and its pause isn't over: not asked again until then (one denial for the source, not one per event).
+  if (lumaApiDenied(now)) return "denied";
   if (!takeApiSlot(now)) return "limited";
   const url = new URL(`${LUMA_BASE_URL}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await (d.fetchImpl ?? fetch)(url, { headers: { "x-luma-api-key": String(env.LUMA_API_KEY).trim() }, signal: AbortSignal.timeout(6000) });
+  let res: Response;
+  try {
+    res = await (d.fetchImpl ?? fetch)(url, { headers: { "x-luma-api-key": String(env.LUMA_API_KEY).trim() }, signal: AbortSignal.timeout(LUMA_PUBLIC_API.timeoutMs) });
+  } catch {
+    // Timed out or unreachable: no answer about anything.
+    return "failed";
+  }
   if (res.status === 429) {
     apiRefusedAt = now;
     return "refused";
   }
-  return { status: res.status, body: res.ok ? await res.json().catch(() => null) : null };
+  if (res.status === 401 || res.status === 403) {
+    noteDenied(now, res.status, lumaErrorMessage(await res.json().catch(() => null)));
+    return "denied";
+  }
+  // Any other answer means the key is accepted again.
+  apiDenied = null;
+  if (res.status >= 500) return "failed";
+  if (!res.ok) return { status: res.status, body: null };
+  const body = await res.json().catch(() => undefined);
+  // A 200 whose body can't be read says nothing about the event.
+  return body === undefined ? "failed" : { status: res.status, body };
+}
+
+// What the Luma search through Exa may expect of the API now: "ok", "denied" (a denial's pause is in force, or the one free probe made
+// when it ran out was denied again: the pause starts again, longer), or "off" (no key). A probe that got no answer at all ("failed",
+// "refused", "limited") is not proof the key works: "denied" stands until Luma answers. The probe is an entity lookup of a slug that
+// names no event ("discover"): a 404 or a 200 is fine, only a 401/403 isn't. Free; never a paid search.
+export async function lumaApiState(d: ApiDeps = {}): Promise<"ok" | "denied" | "off"> {
+  if (!lumaApiConfigured(d.env ?? process.env)) return "off";
+  const now = (d.now ?? Date.now)();
+  if (lumaApiDenied(now)) return "denied";
+  if (!apiDenied) return "ok";
+  const probe = await apiGet("/v1/entities/lookup", { slug: "discover" }, d).catch(() => "failed" as const);
+  return typeof probe === "string" ? (probe === "off" ? "off" : "denied") : "ok";
 }
 
 const lookupCache = new Map<string, { at: number; ttl: number; v: Promise<LumaEntity | null | LumaApiMiss> }>();
@@ -327,8 +388,8 @@ export async function lookupLumaEntity(slug: string, d: ApiDeps = {}): Promise<L
   if (hit && now - hit.at < hit.ttl) return hit.v;
   const entry = { at: now, ttl: LUMA_PUBLIC_API.failedCacheMinutes * 60_000, v: null as unknown as Promise<LumaEntity | null | LumaApiMiss> };
   entry.v = (async (): Promise<LumaEntity | null | LumaApiMiss> => {
-    const r = await apiGet("/v1/entities/lookup", { slug }, d).catch(() => null);
-    if (r === null || typeof r === "string") return r;
+    const r = await apiGet("/v1/entities/lookup", { slug }, d).catch(() => "failed" as const);
+    if (typeof r === "string") return r;
     const e = r.body?.entity;
     if (r.status === 200 && e?.type === "event" && typeof e.event?.id === "string") {
       entry.ttl = LUMA_PUBLIC_API.lookupCacheDays * 86_400_000;
@@ -338,13 +399,17 @@ export async function lookupLumaEntity(slug: string, d: ApiDeps = {}): Promise<L
       entry.ttl = LUMA_PUBLIC_API.lookupCacheDays * 86_400_000;
       return { type: "calendar", id: e.calendar.id };
     }
-    if (r.status === 200 || r.status === 404) entry.ttl = LUMA_PUBLIC_API.missCacheHours * 3_600_000;
-    return null;
+    // Luma knows no such slug: a 404, or a 200 naming no event or calendar. Any other status is no answer about it.
+    if (r.status === 200 || r.status === 404) {
+      entry.ttl = LUMA_PUBLIC_API.missCacheHours * 3_600_000;
+      return null;
+    }
+    return "failed";
   })();
   if (lookupCache.size > 2000) lookupCache.clear();
   lookupCache.set(key, entry);
   const v = await entry.v;
-  // A refusal or our own stop isn't an answer: not kept.
+  // A refusal, a denial, a failure or our own stop isn't an answer: not kept.
   if (typeof v === "string" && lookupCache.get(key) === entry) lookupCache.delete(key);
   return v;
 }
@@ -357,8 +422,10 @@ export async function getPublicLumaEvent(id: string, d: ApiDeps = {}): Promise<L
   if (hit && now - hit.at < hit.ttl) return hit.v;
   const entry = { at: now, ttl: LUMA_PUBLIC_API.failedCacheMinutes * 60_000, v: null as unknown as Promise<LumaPublicEvent | null | LumaApiMiss> };
   entry.v = (async (): Promise<LumaPublicEvent | null | LumaApiMiss> => {
-    const r = await apiGet("/v1/events/get", { event_id: id }, d).catch(() => null);
-    if (r === null || typeof r === "string") return r;
+    const r = await apiGet("/v1/events/get", { event_id: id }, d).catch(() => "failed" as const);
+    if (typeof r === "string") return r;
+    // Luma won't show it (a 404, or a 200 that isn't an event a visitor can see): null. Any other status is no answer.
+    if (r.status !== 200 && r.status !== 404) return "failed";
     const e = r.body?.event ?? r.body;
     if (r.status !== 200 || typeof e?.id !== "string" || typeof e?.start_at !== "string") return null;
     entry.ttl = LUMA_PUBLIC_API.eventCacheMinutes * 60_000;
