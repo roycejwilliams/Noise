@@ -249,5 +249,37 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("pcmag, Medium and mrbeast are still excluded", !!excluded && excluded.links.length === 0, excluded);
 }
 
+// ---------------------------------------------------------------- round-3 review of #441
+{
+  const SPC = "South Park Commons Member Residency";
+  const XPOST = "https://x.com/i/status/2118001184623517763";
+  const EARLIER = "https://www.southparkcommons.com/residency";
+  for (const t of ["spc residency", "what about spc", "I applied to South Park Commons last week"]) {
+    check(`candidate link is the X post, an earlier showing on southparkcommons.com: "${t}" is discussed`, mentionsThing(t, SPC, [XPOST, EARLIER]));
+  }
+  check("'ai builders events' with no earlier showing on an AI Builders host: not discussed", !mentionsThing("any ai builders events this week?", "AI Builders Residency", [XPOST, "https://lu.ma/x"]));
+  const gate = readFileSync(new URL("../../src/harness/matchGate.ts", import.meta.url), "utf8");
+  check("the sweep passes every earlier showing's link", /urls: shownUrls/.test(gate) && /AS url FROM co_memories/.test(gate));
+
+  // Wrong-page ordering: a host carrying the name or acronym first; the rest only as "a page about it"; event platforms never its page.
+  const line = `Five places to look for founder support:\n1. ${SPC} https://lu.ma/spc-info https://www.eventbrite.com/e/spc-123 https://joesblog.dev/spc https://www.southparkcommons.com/residency\n2. Lattice Fund fellowship\n3. Northgate Accelerator\n4. Openbench grants`;
+  const r = roundupOf(line, SPC);
+  check("lu.ma and eventbrite are never candidates; the official host comes first", !!r && !r.links.some((l) => /lu\.ma|eventbrite/.test(l)) && r.links[0] === "https://www.southparkcommons.com/residency" && (r.named ?? []).includes("https://www.southparkcommons.com/residency") && !(r.named ?? []).includes("https://joesblog.dev/spc"), r);
+  const pages: Record<string, { text: string | null; gone: boolean }> = { "https://joesblog.dev/spc": { text: `${SPC}\nMy notes on the residency.`, gone: false } };
+  const deps: RecheckDeps = { luma: async () => null, page: async (u) => pages[u] ?? { text: null, gone: false } };
+  const res = await recheckFind({ tier: 3, kind: "opportunity", name: SPC, url: XPOST, reason: "", opportunity: { postText: line } } as any, { now: at("2026-11-10T17:00:00Z"), zone: null, deps });
+  check("official page unreadable: joesblog.dev goes only as 'a page about it'", res.ok && (res as any).match.url === "https://joesblog.dev/spc" && (res as any).match.pageIsAbout === true, res);
+  const facts = res.ok ? revealItem("find an engineer", false, (res as any).match).facts : {};
+  check("...never described as its own page", !("its_own_page_read_at_send" in facts) && "a_page_about_it_read_at_send" in facts, facts);
+  const lumaOnly = roundupOf(`Five places to look:\n1. ${SPC} https://lu.ma/spc-info https://www.eventbrite.com/e/spc-123\n2. Lattice Fund fellowship\n3. Northgate Accelerator`, SPC);
+  check("lu.ma and eventbrite alone: no candidate (held)", !!lumaOnly && lumaOnly.links.length === 0, lumaOnly);
+
+  const A = await import("../../src/services/askLifecycle.js");
+  const ask = { n: "A1", row: { id: "i1", ask_id: "a1", ask_text: "find another engineer to build with", created_at: at("2026-11-01T00:00:00Z") } };
+  const closes = (q: string) => A.verifyClosures([{ ask: "A1", how: "moved_on", quote: q }], [ask as any], [{ at: at("2026-11-08T00:00:00Z"), side: "member" as const, text: q }]).length === 1;
+  check("'found a great article on it, but taking a break for now': stays open", !closes("found a great article on it, but taking a break for now"));
+  check("'we found a cofounder': closes", closes("we found a cofounder"));
+}
+
 console.log(`\nrecommendation memory: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
