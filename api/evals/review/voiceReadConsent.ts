@@ -307,7 +307,9 @@ check("5. the reply tool is removed wherever the read can't run, with or without
     // When a later text may go (another tool ran since), the question still isn't said again: the carry is spent.
     state.workSinceSend = true;
     await tools.sendReply.execute({ message: `Also: ${C.VOICE_READ_ASK}` }, {});
-    check("6. …and a later text that may go never repeats it", state.sentMessages.length === 3 && !state.sentMessages[2].includes("Hume") && state.sentMessages.join("\n").split(C.VOICE_READ_ASK).length - 1 === 1, state.sentMessages[2]);
+    // Since the second-send fix (2026-11-10): a later text that only repeats what already went is held as a duplicate; either way the
+    // question reached them once.
+    check("6. …and a later text that may go never repeats it", state.sentMessages.length <= 3 && !(state.sentMessages[2] ?? "").includes("Hume") && state.sentMessages.join("\n").split(C.VOICE_READ_ASK).length - 1 === 1, state.sentMessages[2]);
   }
   check("6. the tool tells Cue its own part asks nothing beside the question", /yours asks nothing/.test(tools.slice(tools.indexOf("    voiceRead: tool({"), tools.indexOf("    answerShareAsks: tool({"))));
   // The yes and stop lines already end their sentence: carried as written, never "anytime..".
