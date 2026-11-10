@@ -6,6 +6,7 @@ import type { TierMatch } from "./tieredRecommendation.js";
 import { memberZone } from "./memberTime.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 import { dayIn, eventEndOf, formOf } from "./findForm.js";
+import { followUpEvidence as followUpEvidenceSync } from "./followUpEvidence.js";
 
 // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
 // "named someone?" classifier + wiring signal weighting into future
@@ -301,12 +302,21 @@ export async function recordClosestMissMentioned(userId: string, name: string, a
 // A registration Cue made for them (services/eventRegistration: on the guest list, waiting on the host or a spot) for any of these keys
 // or this link: evidence they meant to go (Royce, 2026-11-10). Read by the enqueue below and the debrief's own send-time read.
 export const REGISTERED_STATUSES = ["registered", "already_registered", "pending_approval", "waitlisted"];
-export async function registeredFor(userId: string, keys: string[], url: string | null = null): Promise<boolean> {
+export async function registeredFor(userId: string, keys: string[], urls: string | null | readonly (string | null)[] = null): Promise<boolean> {
+  const links = (Array.isArray(urls) ? urls : [urls]).filter((u): u is string => !!u);
   const { rows } = await pool.query(
-    `SELECT 1 FROM event_registrations WHERE user_id = $1 AND status = ANY($2::text[]) AND (item_key = ANY($3::text[]) OR ($4::text IS NOT NULL AND event_url = $4)) LIMIT 1`,
-    [userId, REGISTERED_STATUSES, keys, url],
+    `SELECT 1 FROM event_registrations WHERE user_id = $1 AND status = ANY($2::text[]) AND (item_key = ANY($3::text[]) OR event_url = ANY($4::text[])) LIMIT 1`,
+    [userId, REGISTERED_STATUSES, keys, links],
   );
   return rows.length > 0;
+}
+
+// Pure: the evidence from what was read, the ONE mapping queue time and send time share (review of #445: the send read passed reactions
+// raw, so "already_did_it" was ignored there and a row queued on it was dropped at send). The reaction router's "already_did_it" is a
+// stated plan or going (outcomes.ts records it as acted).
+export function evidenceOf(i: { rows: { result: string; provenance?: string | null }[]; reactions: string[]; registered: boolean; came?: boolean; walkin?: boolean }): import("./followUpEvidence.js").Evidence {
+  const rows = [...i.rows, ...i.reactions.filter((x) => x === "already_did_it").map(() => ({ result: "acted", provenance: "stated" }))];
+  return followUpEvidenceSync({ rows, reactions: i.reactions, registered: i.registered, came: i.came, walkin: i.walkin });
 }
 
 // Pure: a follow-up row's keys, the same ones its outcomes and reactions are recorded under.
@@ -319,16 +329,13 @@ export function followUpKeys(row: { id: string; match_name: string; match: any }
 // walk-in, their stated word. "Cue sent it" and silence are never evidence (Royce, 2026-11-10: a 10-30 send with no reply queued a
 // morning-after debrief on 11-10). Throws when it can't be read: the caller holds the row.
 export async function rowEvidence(userId: string, row: { id: string; match_name: string; match: any }): Promise<import("./followUpEvidence.js").Evidence> {
-  const { followUpEvidence } = await import("./followUpEvidence.js");
   const keys = followUpKeys(row);
   const [outcomes, reactions, registered] = await Promise.all([
     pool.query(`SELECT result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [userId, keys]).then((r) => r.rows),
     pool.query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [userId, keys]).then((r) => r.rows.map((x: any) => String(x.reaction))),
     registeredFor(userId, keys, row.match?.url ?? null),
   ]);
-  // "already_did_it" from the reaction router is a stated plan or going (outcomes.ts records it as acted).
-  const rows = [...outcomes, ...reactions.filter((x) => x === "already_did_it").map(() => ({ result: "acted", provenance: "stated" }))];
-  return followUpEvidence({ rows, reactions, registered });
+  return evidenceOf({ rows: outcomes, reactions, registered });
 }
 
 export async function enqueueDueOutcomeFollowUps(): Promise<void> {

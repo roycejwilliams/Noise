@@ -174,9 +174,15 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     .query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [c.userId, keys])
     .then((r) => r.rows.map((x: any) => String(x.reaction)))
     .catch(() => [] as string[]);
-  // A registration Cue made for them counts as meaning to go, like a Noise check-in (2026-11-10).
-  const viaCue = await import("../services/recommendationOutcome.js").then((R) => R.registeredFor(c.userId, keys)).catch(() => false);
-  const evidence = followUpEvidence({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 || viaCue });
+  // The same evidence read as the queue (recommendationOutcome.ts evidenceOf, registeredFor): a registration Cue made for them, by key or
+  // by the find's own link, counts as meaning to go, like a Noise check-in; "already_did_it" is a stated plan (review of #445: the two
+  // reads disagreed, and a row queued on either was dropped here).
+  const RO = await import("../services/recommendationOutcome.js");
+  const links = p.outcomeFollowupIds?.length
+    ? await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]).then((r) => r.rows.map((x: any) => x.url as string | null)).catch(() => [] as (string | null)[])
+    : [];
+  const viaCue = await RO.registeredFor(c.userId, keys, links).catch(() => false);
+  const evidence = RO.evidenceOf({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 || viaCue });
   if (doorMissed && evidence.level !== "attended") return skip("the door was tracked and they weren't scanned: the no-show flow covers that night");
   // Their stated word is the only evidence, and the debrief is only about a recommendation: they already told Cue how it went, so a
   // debrief would re-ask it (settleFollowUpForResult closes the row when they say it; this covers one queued before they did).
