@@ -135,7 +135,7 @@ const cut = full.slice(0, cutAt);
   const fine = ["Noticed SPC's residency opens Monday", "This one has your name on it: a founder dinner Saturday", "You'd like this one", "Saw this and it fits where you're headed", "You mentioned wanting to raise pre-seed by spring, so Hustle Fund's office hours on Oct 21 fit", "Since you were hoping to launch in November, the SF Builders demo night is worth a look"];
   check("a goal find saying they asked is caught", asked.every((t) => ED.CLAIMS_THEY_ASKED.pattern.test(t)), asked.filter((t) => !ED.CLAIMS_THEY_ASKED.pattern.test(t)));
   check("a goal find said as noticed passes", fine.every((t) => !ED.CLAIMS_THEY_ASKED.pattern.test(t)), fine.filter((t) => ED.CLAIMS_THEY_ASKED.pattern.test(t)));
-  check("the backstop applies to goal finds only", /forbidden: \[OFFER_FORBIDDEN, IMPLIES_IDENTITY, \.\.\.\(fromProfile \? \[CLAIMS_THEY_ASKED\] : \[\]\)\]/.test(src("agent/eventDiscoverySurfacing.ts")));
+  check("the backstop applies to goal finds only", /forbidden: \[OFFER_FORBIDDEN, IMPLIES_IDENTITY, \.\.\.\(fromProfile \? \[CLAIMS_THEY_ASKED\] : \[\]\), \.\.\.\(match\.sendAsRoundup \? \[UNCHECKED_CLAIM\] : \[\]\)\]/.test(src("agent/eventDiscoverySurfacing.ts")));
 }
 
 // 6. Starvation is logged, never forced.
