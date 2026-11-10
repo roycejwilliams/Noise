@@ -281,5 +281,39 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("'we found a cofounder': closes", closes("we found a cofounder"));
 }
 
+// ---------------------------------------------------------------- Royce's roundup ruling (2026-11-10): shared AS a roundup, or held
+{
+  const S = await import("../../src/services/sendCheck.js");
+  const B = await import("../../src/harness/bundleComposer.js");
+  const E = await import("../../src/agent/eventDiscoverySurfacing.js");
+  const now = at("2026-11-10T17:00:00Z");
+  const X = "https://x.com/i/status/42";
+  const noPage = async () => ({ text: null, gone: false });
+  const deps = (sent: string[] | null): RecheckDeps => ({ luma: async () => null, page: noPage, sentNames: async () => sent });
+  const goodPost = `Where to meet backend engineers in SF this month:\n1. Harbor Point Collective Member Residency\n2. Backend Builders supper club\n3. Systems Reading Group at the Mission library\n4. Open Infra hack night`;
+  const m = (post: string): any => ({ tier: 3, kind: "opportunity", name: "Harbor Point Collective Member Residency", url: X, reason: "", source: "x", opportunity: { postText: post } });
+  const shared: any = await S.recheckFind(m(goodPost), { now, zone: null, deps: deps(["Harbor Point Collective Member Residency"]) });
+  check("roundup: readable, new items (3 of 4 not sent) → shared as a roundup, with the post's link, unverified", shared.ok && shared.match.sendAsRoundup === true && shared.match.url === X && shared.verified === false, shared);
+  const item = E.revealItem("meet backend engineers in SF", false, shared.match);
+  check("...described as what it is, from the post's own words, nothing checked", item.roundup === true && item.facts.where_it_was_found === E.ROUNDUP_SHARED_FACT && String(item.facts.source_post).includes("Backend Builders") && /none of the listed programs' terms, availability or deadlines were checked/.test(String(item.facts.where_it_was_found)) && !("its_own_page_read_at_send" in item.facts));
+  const input: any = { firstName: "Jordan", items: [{ candidate: { id: "c1" }, item, pick: null, again: false }], set: null, leadWhy: null, memberBlock: null, feeling: null, thread: "", recent: "", threadLive: false };
+  check("...the composer frames it as a list, never verified terms, and may skip it for fit", B.composePrompt(input).includes(B.ROUNDUP_NOTE) && /skip it if the list as a whole doesn't help/.test(B.ROUNDUP_NOTE));
+  const claim = B.checkComposed({ opening: null, items: [{ n: 1, caption: "A list of places to meet backend engineers in SF; the Harbor Point residency applications are still open." }], closing: "Any of these?", connects: null }, input);
+  check("...a caption claiming a listed program's terms gets a rewrite", claim.problems.some((p: any) => /nobody checked/.test(p.why)), claim.problems);
+  const plain = B.checkComposed({ opening: null, items: [{ n: 1, caption: "A post listing four places to meet backend engineers in SF, from a supper club to a hack night at Harbor Point Collective." }], closing: "Any of these?", connects: null }, input);
+  check("...a plain description of the list passes that check", !plain.problems.some((p: any) => /nobody checked/.test(p.why)), plain.problems);
+
+  const spcShape = `Five places to look for founder support:\n1. South Park Commons Member Residency\n2. HF0 Residency\n3. Antler\n4. On Deck Fellowship`;
+  const spc: any = await S.recheckFind({ ...m(spcShape), name: "South Park Commons Member Residency" }, { now, zone: null, deps: deps(["South Park Commons Member Residency", "HF0 Residency", "Antler", "On Deck Fellowship"]) });
+  check("SPC shape (mostly already sent) → not shared, held", !spc.ok && spc.exit === false && /mostly what they already have/.test(spc.why), spc);
+  const dl = `Five places to look for founder support, apply by Dec 1:\n1. Harbor Point Collective Member Residency\n2. Backend Builders supper club\n3. Systems Reading Group\n4. Open Infra hack night`;
+  const dead: any = await S.recheckFind(m(dl), { now, zone: null, deps: deps([]) });
+  check("value is a deadline nobody checked → held", !dead.ok && dead.exit === false && /deadlines or spots nobody checked/.test(dead.why), dead);
+  check("unreadable post → held", (S.roundupShare("", []) as any).ok === false && /couldn't be read/.test((S.roundupShare("", []) as any).why));
+  const unknown: any = await S.recheckFind(m(goodPost), { now, zone: null, deps: deps(null) });
+  check("what they already have unreadable → held (fails closed)", !unknown.ok && /couldn't be read/.test(unknown.why), unknown);
+  check("weak fit → not sent: the composer's skip at the same bar (model-judged; the note says so)", /skip it if the list as a whole doesn't help what they're after/.test(B.ROUNDUP_NOTE));
+}
+
 console.log(`\nrecommendation memory: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
