@@ -25,9 +25,12 @@ import { deliveryFallback, REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETR
 // The length a reply should be, said last and specifically (2026-09-24).
 // A request for the whole picture (Royce, 2026-11-10: "Tell me more about your matching system", "give me a scenario", "be real
 // descriptive" were all under 15 words and none matched, so each was told "one or two sentences").
-const DEPTH_ASK = /\b(plan|detail|details|detailed|walk (me )?through|how (do|does|did|should|would|can|to|it works)|outline|lead|steps?|step by step|explain|why|what should|help me|ideas|options|break (it )?down|elaborate|examples?|compare|draft|feedback|thoughts on|tell me (more|about)|more about|describe|description|descriptive|scenario|walkthrough|full (picture|version|explanation)|whole (picture|thing)|in depth|deeper|for the first time|seeing it|what (does|would) (it|that) look like)\b/i;
-// Pushback on the last answer (repair it, never a shorter reword of it).
-export const REPAIR_ASK = /\b(that doesn'?t (explain|answer)|doesn'?t explain|didn'?t (explain|answer)|(you )?said the same thing|same (thing|answer) (again|twice)|not what i (asked|meant)|still don'?t (get|understand)|that'?s not (it|what i)|be (more |real |really )?(specific|descriptive|detailed|clear)|more detail|larger description|you'?re not (answering|explaining))\b/i;
+// "describe", "more about" and "seeing it" alone are casual as often as not ("describe the vibe"): they no longer switch the brevity line
+// off on their own (review of #443); a message that also asks for depth ("tell me more", "explain", "step by step") still gets room.
+const DEPTH_ASK = /\b(plan|detail|details|detailed|walk (me )?through|how (do|does|did|should|would|can|to|it works)|outline|lead|steps?|step by step|explain|why|what should|help me|ideas|options|break (it )?down|elaborate|examples?|compare|draft|feedback|thoughts on|tell me more|description|descriptive|scenario|walkthrough|full (picture|version|explanation)|whole (picture|thing)|in depth|deeper|for the first time|what (does|would) (it|that) look like)\b/i;
+// Pushback about Cue's last answer only (review of #443: "that's not it, I'm just tired" is about them, not the answer): the answer
+// repeated, wrong, or not what they asked. Repair it, never a shorter reword of it.
+export const REPAIR_ASK = /\b(that doesn'?t (explain|answer)|doesn'?t explain (it|that|anything)|(you )?didn'?t (explain|answer)|you said (that|this|the same thing)( already)?|you already said (that|this)|same (thing|answer) (again|twice)|you'?re repeating|repeating yourself|that'?s not what i (asked|meant)|not what i asked|wrong answer|that'?s wrong|you'?re not (answering|explaining)|be (more |real |really )?(specific|descriptive|detailed)|larger description|more detail)\b/i;
 export function replyLengthLine(message: string): string | null {
   if (REPAIR_ASK.test(message)) return "They're pushing back on your last answer: say what it missed and answer again differently (an example, clearer steps, another angle), in full.";
   const words = message.trim().split(/\s+/).filter(Boolean).length;
