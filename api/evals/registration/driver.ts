@@ -354,6 +354,36 @@ if (browser) {
     await s.close();
     check("captured page: 'open to Stanford students and affiliates' read from its description as a restriction to confirm", (form.restrictions ?? []).includes("This event is open to Stanford students and affiliates.") && !(form.restrictions ?? []).some((x) => /Northwind/.test(x)), form.restrictions);
   }
+  {
+    // Review 2026-11-09: a failed or ignored submit must never read as success.
+    const base: D.RegionRead = { region: "rsvp", text: "", codeInput: false, signInForm: false, formStillOpen: false, tied: true, ticket: null, registerButton: false, regionRegisterButton: false, mainHasStatus: false };
+    const u = "https://luma.com/example";
+    check("an open form labeled 'If you're in SF, which neighborhood?' is not a result", D.resultFrom({ ...base, region: "dialog", formStillOpen: true, text: "If you're in SF, which neighborhood? Register" }, u).state === "unknown" && R.readResultText("If you're in SF, which neighborhood?") === "unknown");
+    check("'…before we see you there?' is not a result", R.readResultText("Anything we should know before we see you there?") === "unknown" && D.resultFrom({ ...base, region: "dialog", formStillOpen: true, text: "Anything we should know before we see you there?" }, u).state === "unknown");
+    check("an unchanged 'Get on the waitlist' is not waitlisted", R.readResultText("Get on the waitlist") === "unknown" && D.resultFrom({ ...base, text: "Get on the waitlist" }, u, { before: "Get on the waitlist" }).state === "unknown");
+    check("an unchanged 'Registration confirmed by email after approval' is not registered", R.readResultText("Registration confirmed by email after approval") === "unknown" && D.resultFrom({ ...base, text: "You're In" }, u, { before: "You're In" }).state === "unknown");
+    check("an RSVP block still offering its register button hasn't answered", D.resultFrom({ ...base, text: "You're In", regionRegisterButton: true }, u).state === "unknown");
+    check("an RSVP block's success that isn't tied to them (no name, email or ticket) is uncertain", D.resultFrom({ ...base, text: "You're In", tied: false }, u).state === "unknown" && D.resultFrom({ ...base, text: "You're In", tied: true }, u).state === "registered");
+    check("a status block or ticket link for this event still counts", D.resultFrom({ ...base, region: "status", tied: false, text: "You’re In No longer able to attend?" }, u).state === "registered" && D.resultFrom({ ...base, tied: true, ticket: "https://luma.com/ticket/x", text: "You're In" }, u).state === "registered");
+    check("'not registered' needs a live register button in this event's block AND no status anywhere in the main content", D.ownStateFromRegion({ ...base, regionRegisterButton: true, mainHasStatus: true }).state === "unknown" && D.ownStateFromRegion({ ...base, regionRegisterButton: false }).state === "unknown" && D.ownStateFromRegion({ ...base, regionRegisterButton: true }).state === "not_registered");
+    const ctx = await browser.newContext();
+    await ctx.route("**/*", (r) => r.abort());
+    const page = await ctx.newPage();
+    const read = async (html: string, title: string | null) => {
+      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"></head><body>${html}</body></html>`);
+      return (await page.evaluate(D.regionCall({ email: null, name: null }, { title }))) as D.RegionRead;
+    };
+    // Renamed controls: the status block's own controls aren't recognized, a live Register button sits in a card.
+    const renamed = await read(`<header><nav><a>Sign In</a></nav></header><main><h1>Demo Night</h1><div class="status"><div>You’re In</div><button>Leave this event</button></div><div class="rsvp-card"><button>Register</button></div></main>`, "Demo Night");
+    check("renamed controls: a status line on the page means 'not registered' can't be read (unknown, no retry)", D.ownStateFromRegion(renamed).state === "unknown" && renamed.mainHasStatus === true, renamed);
+    // Two events on one page: one shows this guest in, the other offers registration.
+    const two = `<main><section><h2>Other Night</h2><div><div>You’re In</div><button aria-label="My Ticket">t</button><div>No longer able to attend? <span role="button">canceling your registration</span></div></div></section><section><h2>Demo Night</h2><div class="rsvp-card"><button>Register</button></div></section></main>`;
+    const forDemo = await read(two, "Demo Night");
+    check("several events: another event's 'You're In' is never this event's status", forDemo.region !== "status" && D.ownStateFromRegion(forDemo).state !== "registered", forDemo);
+    const forOther = await read(two, "Other Night");
+    check("several events: the status block of the event asked about is read as its own", forOther.region === "status" && D.ownStateFromRegion(forOther).state === "registered", forOther);
+    await ctx.close();
+  }
   check("page slots: every session released", open === 0, open);
   await browser.close();
 }
