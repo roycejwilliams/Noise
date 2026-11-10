@@ -24,12 +24,21 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
 };
 
 // ---------------------------------------------------------------- the length line follows the need
-for (const m of ["Tell me more about your matching system", "Give me a scenario", "Walk me through it step by step", "Explain it like I'm seeing it for the first time", "Describe how intros work"]) {
+for (const m of ["Tell me more about your matching system", "Give me a scenario", "Walk me through it step by step", "Explain it like I'm seeing it for the first time", "Describe how intros work, step by step"]) {
   check(`a request for the whole picture is never capped: "${m}"`, replyLengthLine(m) === null, replyLengthLine(m));
 }
-for (const m of ["That doesn't explain it", "You said the same thing twice", "Be real descriptive", "Give me a larger description"]) {
+for (const m of ["That doesn't explain it", "You said the same thing twice", "You said that already", "That's not what I asked", "you're repeating yourself", "Be real descriptive", "Give me a larger description"]) {
   const line = replyLengthLine(m);
   check(`pushback gets the repair line, not a cap: "${m}"`, REPAIR_ASK.test(m) && !!line && /answer again differently/.test(line), line);
+}
+// Review of #443: pushback about Cue's answer only; a casual "that's not it" is about them.
+for (const m of ["that's not it, I'm just tired", "I still don't understand why she left", "that's not it lol, the other cafe"]) {
+  check(`casual, not pushback on the answer: no repair line: "${m}"`, !REPAIR_ASK.test(m), m);
+}
+// Review of #443: "describe", "more about" and "seeing it" alone keep the brevity line (casual turns stay brief).
+for (const m of ["describe the vibe there", "more about that later", "can't wait to be seeing it"]) {
+  const line = replyLengthLine(m);
+  check(`casual words alone keep the brevity line: "${m}"`, !!line && /as briefly as it needs/.test(line), line);
 }
 const quick = replyLengthLine("Any good wine spot near Hayes?");
 check("a quick question stays quick, with no fixed count", !!quick && /as briefly as it needs/.test(quick) && !/\b(one|two|three) (or \w+ )?sentences?\b/i.test(quick), quick);
@@ -48,15 +57,21 @@ check("the reply's length rule is need-matched, with the vent-plus-ask case", /M
 check("the old 'one or two sentences' line is gone", !/Reply in one or two sentences/.test(reply));
 
 // ---------------------------------------------------------------- splitting only where it helps
+// Review of #443: nothing is dropped in code (a draft, two versions, should / should-not pairs all go; a repeat is the prompt's to avoid).
+const draft = "Here's a draft you could send:\n\nHi Sam, loved meeting you at the supper. Coffee next week?\n\nOr a shorter version:\n\nHi Sam, coffee next week?";
+const db = toBeats(draft);
+check("a draft paragraph and two draft versions are all kept", db.length === 4 && db.some((b) => b.includes("loved meeting you")) && db.some((b) => b === "Hi Sam, coffee next week?"), db);
+const pair = toBeats("You should mention the demo date.\n\nYou should not mention the demo date if it might slip.");
+check("a should / should-not pair is kept", pair.length === 2, pair);
 const wine = ["https://example.test/the-cellar", "The Cellar on Fell: small natural-wine bar, quiet on weeknights.", "The Cellar on Fell is a small natural-wine bar that's quiet on weeknights.", "Want a backup in case it's full?"];
-const beats = toBeats(wine.join("\n\n"));
-check("a paragraph that only restates the one before it is dropped (the wine-bar fourth bubble)", beats.length === 3 && beats[0] === wine[0] && beats[2] === wine[3], beats);
-const steps = "Here's how it goes:\n\n1. You RSVP to a Noise night.\n\n2. Cue reads what you've told it and what the room needs.\n\n3. If someone fits, you both get a private yes or no.\n\n4. Only a double yes becomes an intro.";
-const sb = toBeats(steps);
-check("a walkthrough's numbered steps and its lead-in stay one text", sb.length === 1 && sb[0].includes("1.") && sb[0].includes("4."), sb);
-check("a link and a question are never dropped as repeats", keepTogether(["Here's the link: https://example.test/a", "https://example.test/a", "Is that the one?"]).length === 3);
-check("two different paragraphs both go", toBeats("That's a lot to carry.\n\nHere's what I'd do first: call the venue tomorrow morning.").length === 2);
+check("no code-level repeat drop: every paragraph goes (the prompt avoids repeats)", toBeats(wine.join("\n\n")).length === 4);
+check("keepTogether only joins lists, never drops", keepTogether(["a b c d e f", "a b c d e f g"]).length === 2);
 const tool = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
+check("the prompt line against repeats stays", /Never a paragraph that repeats an earlier one\./.test(tool));
+// The single-text path sends the message whole when it is one beat: with nothing dropped, one beat is the whole message.
+const one = "Here's how it goes:\n\n1. RSVP.\n\n2. Cue reads the room.";
+check("one beat carries every word of the message (the single-send path sends the message itself)", toBeats(one).length === 1 && toBeats(one)[0].replace(/\s+/g, " ") === one.replace(/\s+/g, " "));
+check("two different paragraphs both go", toBeats("That's a lot to carry.\n\nHere's what I'd do first: call the venue tomorrow morning.").length === 2);
 check("the send tool's split rule: only where it helps, connected explanations together, no beat quota", /keep one connected explanation or a set of steps in one paragraph/.test(tool) && !/Most replies are one to three short beats/.test(tool));
 
 // ---------------------------------------------------------------- "anything yet?" is an ask, answered honestly
