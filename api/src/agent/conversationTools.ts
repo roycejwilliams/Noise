@@ -2291,8 +2291,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
   // The calendar and Docs grants (services/googleTools.ts). Team-only tools are taken out again now that these are in.
   Object.assign(tools, googleTools(ctx, notDone));
-  // Registering them for another host's free Luma event (agent/registrationTools.ts): no such tools for anyone until live submission
-  // and the copy are approved (services/eventRegistration/approvals.ts), so today's tools and prompts are unchanged.
+  // Registering them for another host's free Luma event (agent/registrationTools.ts): on for every member since the go-live
+  // (Royce, 2026-11-09), while live submission and the copy are both approved (services/eventRegistration/approvals.ts).
   if (registrationLive()) Object.assign(tools, registrationTools(ctx, realRegistrationEnv, notDone));
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 

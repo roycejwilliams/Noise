@@ -803,7 +803,7 @@ const MENU: MenuLine[] = [
   { group: "Being there", main: "team_feedback", text: "pass feedback to the team", call: null },
 ];
 // What Co can't do, for a complete answer (the LIMITS above say it in full).
-const CANNOT = "book, buy or register them for things, find investors or sponsors on demand, contact people for them, or start a group text";
+const CANNOT = "book or buy things, register them for anything but a free Luma event, find investors or sponsors on demand, contact people for them, or start a group text";
 
 const memberAbility = (a: Ability) => !a.teamOnly;
 export const liveOn = (a: Ability, surface: Surface) => memberAbility(a) && (surface === "text" || a.onCall === true || !!a.surfaces?.includes("call"));
