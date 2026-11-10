@@ -28,7 +28,7 @@ import type { EventDetails } from "./eventDetails.js";
 import { datesOnPage, dayIn, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
 import { START_LEAD_MINUTES, eventStartProblem, matchStartProblem } from "./eventStart.js";
-import { namesThing, thingSearchTerms } from "./knowledge/sent.js";
+import { hostOf, hostTerms, namesThing } from "./knowledge/sent.js";
 
 // A read this recent counts as now: the old plan tool's window for a Luma page.
 export const RECHECK_FRESH_MS = 30 * 60 * 1000;
@@ -176,20 +176,34 @@ export function roundupOf(text: string, name: string, o: { page?: boolean } = {}
   const t = String(text ?? "");
   if (!t.trim() || !name.trim() || !namesThing(t, name)) return null;
   const lines = t.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  // Its first line names it: the post or page is about this thing, whatever else it lists (review of #441).
+  if (namesThing(lines[0] ?? "", name)) return null;
   const items = lines.filter((l) => LIST_LINE.test(l));
   const named = items.filter((l) => namesThing(l, name));
-  const headline = COUNT_HEADLINE.test(t.slice(0, 300)) && !namesThing(lines[0] ?? "", name);
+  const headline = COUNT_HEADLINE.test(t.slice(0, 300));
   const isRoundup = o.page ? headline : (items.length >= 3 && named.length >= 1 && named.length < items.length) || headline;
   if (!isRoundup) return null;
   const line = named[0] ?? lines.find((l) => namesThing(l, name)) ?? null;
   const clean = (u: string) => u.replace(/[.,;!?]+$/, "");
-  const onLine = (line?.match(URLS) ?? []).map(clean).filter((u) => !isX(u));
-  const terms = thingSearchTerms(name).map((w) => w.replace(/[^a-z0-9]/g, "")).filter(Boolean);
-  const hostOf = (u: string) => u.toLowerCase().replace(/^https?:\/\/(?:www\.)?/, "").split("/")[0].replace(/[^a-z0-9]/g, "");
-  const shortener = (u: string) => /^https?:\/\/(?:www\.)?(?:t\.co|bit\.ly)\//i.test(u);
-  const byHost = (t.match(URLS) ?? []).map(clean).filter((u) => !onLine.includes(u) && !isX(u) && !shortener(u) && terms.some((w) => hostOf(u).includes(w)));
-  return { items: items.length, line: line ? line.slice(0, 200) : null, links: [...new Set([...onLine, ...byHost])] };
+  // A candidate for its own page carries a whole word of its name (five letters or more) or its organization's acronym in its address
+  // (knowledge/sent.ts hostTerms), on the line that names it or anywhere in the text. Never a shortened link, another post, or a
+  // write-up on a publishing or news site (review of #441: pcmag.com and mrbeast.com matched two-letter pieces).
+  const terms = hostTerms(name).map((w) => w.replace(/[^a-z0-9]/g, "")).filter((w) => w.length >= 3);
+  const bare = (u: string) => (hostOf(u) ?? "").replace(/[^a-z0-9.]/g, "");
+  const ownPage = (u: string) => {
+    const h = bare(u);
+    if (!h || isX(u) || SHORTENER.test(h) || WRITE_UP.test(h)) return false;
+    const label = h.split(".").slice(0, -1).join("");
+    return terms.some((w) => label.includes(w));
+  };
+  const all = (t.match(URLS) ?? []).map(clean);
+  const onLine = (line?.match(URLS) ?? []).map(clean);
+  const links = [...new Set([...onLine, ...all])].filter(ownPage);
+  return { items: items.length, line: line ? line.slice(0, 200) : null, links };
 }
+// Hosts that shorten links, and hosts where a third party writes about things: never a thing's own page.
+const SHORTENER = /^(?:t\.co|bit\.ly|tinyurl\.com|buff\.ly|ow\.ly|lnkd\.in|rebrand\.ly|is\.gd|cutt\.ly|shorturl\.at)$/;
+const WRITE_UP = /(?:^|\.)(?:medium\.com|substack\.com|linkedin\.com|youtube\.com|youtu\.be|reddit\.com|facebook\.com|instagram\.com|threads\.net|tiktok\.com|news\.ycombinator\.com|techcrunch\.com|forbes\.com|businessinsider\.com|venturebeat\.com|wired\.com|theverge\.com|pcmag\.com|crunchbase\.com|wikipedia\.org|github\.com|notion\.site|beehiiv\.com|ghost\.io)$/;
 
 // Its own page, from the roundup's links: the first that reads, names it near its top, and isn't itself a roundup. Then the usual
 // send-time read runs on that page (dates, closing words), with the roundup kept as where it was found. None: held and read again (the
