@@ -282,24 +282,41 @@ export function anotherSendAllowed(state: SendState, answerOwed: boolean, o: { c
 // What a second text may continue, at most, after the reply (it never runs on).
 export const MAX_CONTINUING_SENDS = 2;
 const STOP = new Set(["the", "and", "that", "this", "with", "for", "you", "your", "its", "it's", "are", "was", "but", "not", "just", "they", "them", "then", "there", "what", "when", "have", "has", "had", "from", "into", "about", "like", "really", "very", "also", "can", "will", "would", "could", "should"]);
-const contentWords = (t: string) => (t.toLowerCase().replace(/[\u2019']/g, "").match(/[a-z0-9]+/g) ?? []).filter((w) => w.length > 2 && !STOP.has(w));
-const flat = (t: string) => t.toLowerCase().replace(/[\u2019']/g, "").replace(/[^a-z0-9]+/g, " ").trim();
-// Pure: a send that repeats what already went (or is going) this turn: the same text, contained in it, or nearly all of its words already
-// said (85%). An actual duplicate is always held; a second take is held by the one-reply rule above.
+// Numbers are kept whatever their length ("7:30" vs "8:30": the "30" and the "7" or "8" both count; review of #444).
+const tokens = (t: string) => t.toLowerCase().replace(/[\u2019']/g, "").match(/[a-z0-9]+/g) ?? [];
+const contentWords = (t: string) => tokens(t).filter((w) => /\d/.test(w) || (w.length > 2 && !STOP.has(w)));
+const numbersIn = (t: string) => new Set(tokens(t).filter((w) => /\d/.test(w)));
+// Pure: a send that repeats what already went (or is going) this turn: the same words in a row (whole words, never inside another word:
+// "Yes." isn't in "yesterday"), or nearly all of its words already said (85%). A text whose numbers differ from what went is never a
+// repeat: that's a correction ("starts at 7:30" -> "starts at 8:30"). An actual duplicate is always held; a second take is held by the
+// one-reply rule above.
+// Judged on what the text adds: its sentences already said word for word are set aside first (a carried line said again is stripped
+// downstream; new content around it still goes).
 export function repeatsSent(message: string, said: readonly string[]): boolean {
-  const m = flat(message);
-  if (!m) return true;
-  const all = flat(said.join(" "));
-  if (all.includes(m)) return true;
-  const words = contentWords(message);
-  if (!words.length) return true;
+  if (!tokens(message).length) return true;
+  const theirs = tokens(said.join(" "));
+  const whole = ` ${theirs.join(" ")} `;
+  const fresh = message.split(/(?<=[.!?])\s+|\n+/).filter((x) => { const t = tokens(x); return t.length && !whole.includes(` ${t.join(" ")} `); }).join(" ");
+  const mine = tokens(fresh);
+  if (!mine.length) return true;
+  const had = new Set(theirs.filter((w) => /\d/.test(w)));
+  if ([...numbersIn(fresh)].some((n) => !had.has(n))) return false;
+  if (whole.includes(` ${mine.join(" ")} `)) return true;
+  const words = contentWords(fresh);
+  // Only little words ("ok", "yes"): a repeat only when each is already there as a whole word.
+  if (!words.length) { const all = new Set(theirs); return mine.every((w) => all.has(w)); }
   const have = new Set(contentWords(said.join(" ")));
   return words.filter((w) => have.has(w)).length / words.length >= 0.85;
 }
 // Pure: their message asks for something (a question or a request), so the answer may run to a second text. A share or a reaction
 // never does.
-const ASKS = /\?|\b(?:tell me|explain|walk me|describe|show me|give me|help me|how (?:do|does|did|should|would|can|could|to)|what (?:should|would|do|does|is|are|can)|why|which|can you|could you|would you|should i|any (?:good |ideas|tips|advice))\b/i;
-export const askedForSomething = (message: string | null | undefined): boolean => ASKS.test(String(message ?? ""));
+const ASKS = /\?|\b(?:tell me|explain|walk me|describe|show me|give me|send me|help me|find (?:me|a|an|some|someone|somewhere)|recommend|suggest|i need|need an? |thoughts|any thoughts|ideas|how (?:do|does|did|should|would|can|could|to)|what (?:should|would|do|does|is|are|can)|why|which|can you|could you|would you|should i|any (?:good |ideas|tips|advice))/i;
+// Rhetorical openers and tags that ask nothing ("guess what? I got the job!", "you know what?", "right?"), and what they quoted or replied
+// to (an inline reply's note, a ">" quoted line: Cue's words, not their ask).
+const RHETORICAL = /\b(?:guess what|you know what|can you believe (?:it|that)|right|huh|isn'?t it|ya know|you know)\s*\?/gi;
+const QUOTED = /\[(?:Replying to [^\]]*|They also sent[^\]]*|also sent[^\]]*|sent [^\]]*)\]|^\s*>.*$/gim;
+// Pure: does their own message ask for something?
+export const askedForSomething = (message: string | null | undefined): boolean => ASKS.test(String(message ?? "").replace(QUOTED, " ").replace(RHETORICAL, " "));
 // Pure: whether a tool's result opens a second text. A guard refusal does only when it tells Cue to tell them (switched off, nothing was
 // made, their yes couldn't be checked); otherwise only a declared tool's own result does.
 export function resultIsNewForThem(name: string, out: unknown): boolean {
