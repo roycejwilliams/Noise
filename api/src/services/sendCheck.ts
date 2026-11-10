@@ -303,6 +303,11 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     const d = await deps.luma(lumaUrl).catch(() => null);
     if (!d) return { ok: false, exit: false, why: "its event page couldn't be read just now" };
     // Luma's own flags are certain.
+    if (d.cancelled === true) return { ok: false, exit: true, state: "cancelled", why: `its page said it was cancelled when Cue read it on ${today}` };
+    // Not listed for the public any more (its host made it private, or it never was): never sent to a member it wasn't shared with
+    // (2026-11-10: a find queued 11-09 had gone "private" by 11-10). Noise's own events (tier 1) are ours to share, whatever their listing.
+    if (match.tier !== 1 && typeof d.visibility === "string" && d.visibility !== "public")
+      return { ok: false, exit: true, state: "expired", why: `its page says it's ${d.visibility}, not public, when Cue read it on ${today}` };
     if (d.soldOut === true) return { ok: false, exit: true, state: "expired", why: `sold out when Cue read its page on ${today}` };
     if (d.spotsRemaining === 0) return { ok: false, exit: true, state: "expired", why: `no spots left when Cue read its page on ${today}` };
     // Over: past its end when it has one (a festival that started yesterday still runs), else past its start.
