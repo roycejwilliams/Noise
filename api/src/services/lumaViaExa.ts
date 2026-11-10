@@ -16,7 +16,7 @@
 import { nearestPlace, type DiscoveredEvent, type DiscoverPlace } from "./lumaDiscovery.js";
 import type { GeoPoint } from "./geocoding.js";
 import type { EventDetails } from "./eventDetails.js";
-import type { LumaApiMiss, LumaEntity, LumaPublicEvent } from "./luma.js";
+import type { LumaApiDenial, LumaApiMiss, LumaEntity, LumaPublicEvent } from "./luma.js";
 import type { ExaSearch } from "./exaSearch.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
 
@@ -118,8 +118,10 @@ export const IN_PERSON_LOCATION_TYPE = "offline";
 // pages: Luma links Exa returned. looked: links Luma's API resolved (lookup). calendars: links that were a calendar, not an event
 // (skipped). past: events the lookup already showed are over or outside the window (not read further). read: events read from the
 // API. notPublic: read but not listed as public by their host (dropped). noLocation: no confirmed place (not a named online platform, nor in person with a city; dropped). refused:
-// lookups or reads Luma answered 429. limited: left unread because our own per-minute stop was reached. kept: public, upcoming,
-// inside the window, with a place.
+// lookups or reads Luma answered 429. limited: left unread because our own per-minute stop was reached. denied: Luma refused the key
+// (401/403: the API itself is down for us, never "no such event"). failed: no usable answer (timed out, unreachable, unreadable).
+// kept: public, upcoming, inside the window, with a place.
+// sourceDown: the check every candidate needs couldn't run at all (the key refused): said once per search, never once per event.
 // error: what failed and what to do about it, for the log (never the member: they get the feed's events as before).
 // kinds: the fixed kinds the search used (from EVENT_KINDS, never their words).
 export type ViaExaReport = {
@@ -134,8 +136,11 @@ export type ViaExaReport = {
   noLocation?: number;
   refused?: number;
   limited?: number;
+  denied?: number;
+  failed?: number;
   kept: number;
   kinds?: string[];
+  sourceDown?: boolean;
 };
 
 // Pure: why a Luma search through Exa failed, said with its fix, from exaSearch's error (or what a call threw). Timed out, refused
@@ -165,6 +170,14 @@ export const lumaRefusedReason = (refused: number, limited: number, pages: numbe
 // Luma's API refusing in the last few minutes: no Exa search at all (its results couldn't be checked, so it would be paid for nothing).
 export const lumaRefusingReason = (pauseMinutes: number) =>
   `Luma's API refused a request (429) in the last ${pauseMinutes} minutes, so no Luma search through Exa (its results couldn't be checked); ${FEED_ALONE}; it searches again once ${pauseMinutes} minutes pass without a refusal`;
+// Luma's API refused the key (401/403, e.g. no active Luma Plus plan): its checks can't run, so what Exa would find can't be told from
+// "no such event". Said once per search, with Luma's own words and when it's tried again (one free API call, never a paid search).
+const mins = (ms: number) => Math.max(1, Math.round(ms / 60_000));
+export const lumaDeniedReason = (d: Pick<LumaApiDenial, "status" | "message" | "until"> | null, now: number, counts?: { denied: number; pages: number }) =>
+  `Luma's API refused the key (HTTP ${d?.status ?? 403}${d?.message ? `: "${d.message}"` : ""})${counts ? `, so ${counts.denied} of ${counts.pages} Luma links went unchecked (not "no such event")` : ""}; no Luma search through Exa runs while its results can't be checked; ${FEED_ALONE}; ${d ? `a free API check runs again in ${mins(d.until - now)} minutes` : "a free API check runs on the next search"}`;
+// Some checks got no answer at all (timed out, unreachable, unreadable): those events are unchecked, not missing.
+export const lumaFailedReason = (failed: number, pages: number) =>
+  `${failed} of ${pages} Luma checks got no usable answer (timed out, unreachable or unreadable): those events went unchecked, not "no such event"`;
 // No Luma API key: Exa's links can't be checked, so Exa isn't asked (it would be paid for nothing).
 export const LUMA_API_OFF = `LUMA_API_KEY isn't set on this service, so Exa's Luma links can't be checked and no Luma search through Exa runs; ${FEED_ALONE}; set LUMA_API_KEY to turn it on`;
 
@@ -223,6 +236,10 @@ export type LumaViaExaDeps = {
   lookup: (slug: string) => Promise<LumaEntity | null | LumaApiMiss>;
   event: (id: string) => Promise<LumaPublicEvent | null | LumaApiMiss>;
   lumaApi: () => boolean;
+  // Whether the API answers this key now (services/luma.ts lumaApiState: a denial pauses it, recovery is one free call), and the
+  // denial in force, for the report.
+  apiState: () => Promise<"ok" | "denied" | "off">;
+  denial: () => LumaApiDenial | null;
   configured: () => boolean;
   now: () => Date;
   // Luma's API answered 429 in the last LUMA_PUBLIC_API.refusalPauseMinutes (services/luma.ts).
@@ -257,6 +274,9 @@ export async function lumaEventsViaExa(
   if (!deps.lumaApi()) return { events: [], report: { cached: false, error: LUMA_API_OFF, pages: 0, read: 0, notPublic: 0, kept: 0 } };
   // Luma's API is refusing: no search, and no checks of a cached one either (each would add to what Luma is refusing).
   if (deps.refusing()) return { events: [], report: { cached: false, error: lumaRefusingReason(deps.pauseMinutes), pages: 0, read: 0, notPublic: 0, refused: 0, kept: 0 } };
+  // Luma's API refuses the key: no paid search whose results couldn't be checked. A source-wide failure, said once, never "nothing found".
+  if ((await deps.apiState().catch(() => "denied" as const)) === "denied")
+    return { events: [], report: { cached: false, error: lumaDeniedReason(deps.denial(), deps.now().getTime()), pages: 0, read: 0, notPublic: 0, kept: 0, sourceDown: true } };
   // A test account never spends on a paid search (services/testMemberSpend.ts, #271): checked before the shared cache, so its refusal
   // is never another member's answer. reserveLumaExaSearch checks again.
   if (o.userId && (await skipsPaidSearch(o.userId, "lumaViaExa"))) return { events: [], report: { cached: false, error: TEST_ACCOUNT, pages: 0, read: 0, notPublic: 0, kept: 0 } };
@@ -290,14 +310,16 @@ export async function lumaEventsViaExa(
   const { found, error, reason } = await mine.found;
   // A failed search is never kept: the next ask searches again.
   if (error && cache.get(key) === mine) cache.delete(key);
-  const n = { looked: 0, calendars: 0, past: 0, read: 0, notPublic: 0, noLocation: 0, refused: 0, limited: 0 };
+  const n = { looked: 0, calendars: 0, past: 0, read: 0, notPublic: 0, noLocation: 0, refused: 0, limited: 0, denied: 0, failed: 0 };
   const miss = (m: LumaApiMiss) => {
     if (m === "refused") n.refused++;
     else if (m === "limited") n.limited++;
+    else if (m === "denied") n.denied++;
+    else if (m === "failed" || m === "off") n.failed++;
   };
   const checked = await Promise.all(
     found.map(async ({ slug, title }): Promise<ViaExaEvent | null> => {
-      const entity = await deps.lookup(slug).catch(() => null);
+      const entity = await deps.lookup(slug).catch(() => "failed" as const);
       if (typeof entity === "string") return miss(entity), null;
       if (!entity) return null;
       n.looked++;
@@ -305,7 +327,7 @@ export async function lumaEventsViaExa(
       // The lookup gives the start and end: one that's over or outside the window isn't read any further.
       const over = entity.endAt ? new Date(entity.endAt).getTime() <= now.getTime() : false;
       if (over || (entity.startAt && (new Date(entity.startAt).getTime() <= now.getTime() || !o.inRange(entity.startAt)))) return n.past++, null;
-      const e = await deps.event(entity.id).catch(() => null);
+      const e = await deps.event(entity.id).catch(() => "failed" as const);
       if (typeof e === "string") return miss(e), null;
       if (!e) return null;
       n.read++;
@@ -346,8 +368,13 @@ export async function lumaEventsViaExa(
     }),
   );
   const events = checked.filter((e): e is ViaExaEvent => e !== null && new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
-  const why = reason ?? exaFailureReason(error) ?? (n.refused || n.limited ? lumaRefusedReason(n.refused, n.limited, found.length, deps.pauseMinutes) : null);
-  return { events, report: { cached: !!fresh, error: why, pages: found.length, ...n, kept: events.length, kinds } };
+  const why =
+    reason ??
+    exaFailureReason(error) ??
+    (n.denied ? lumaDeniedReason(deps.denial(), now.getTime(), { denied: n.denied, pages: found.length }) : null) ??
+    (n.refused || n.limited ? lumaRefusedReason(n.refused, n.limited, found.length, deps.pauseMinutes) : null) ??
+    (n.failed ? lumaFailedReason(n.failed, found.length) : null);
+  return { events, report: { cached: !!fresh, error: why, pages: found.length, ...n, kept: events.length, kinds, ...(n.denied ? { sourceDown: true } : {}) } };
 }
 
 async function search(query: string, userId: string | null, deps: LumaViaExaDeps): Promise<{ found: Found[]; error: string | null }> {
@@ -373,6 +400,9 @@ async function realDeps(d: Partial<LumaViaExaDeps> = {}): Promise<LumaViaExaDeps
     lookup: d.lookup ?? ((slug) => A.lookupLumaEntity(slug)),
     event: d.event ?? ((id) => A.getPublicLumaEvent(id)),
     lumaApi: d.lumaApi ?? (() => A.lumaApiConfigured()),
+    // A test that says only whether there's a key gets "ok" or "off" from it.
+    apiState: d.apiState ?? (d.lumaApi ? async () => (d.lumaApi!() ? "ok" : "off") : () => A.lumaApiState()),
+    denial: d.denial ?? (() => A.lumaApiDenied()),
     configured: d.configured ?? (() => X.exaConfigured()),
     now: d.now ?? (() => new Date()),
     refusing: d.refusing ?? (() => A.lumaApiRefusedRecently()),
