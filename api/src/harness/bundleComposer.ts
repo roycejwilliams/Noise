@@ -22,7 +22,8 @@ import { CO_WHY } from "../services/coVoice.js";
 import { unbackedSpecifics } from "./proactiveSpecifics.js";
 import { repeatQuestionCheck } from "./repeatAsk.js";
 import type { RevealItem } from "../agent/eventDiscoverySurfacing.js";
-import { AUDIENCE_RULE, OFFER_HONESTY, REVEAL_MAX_CHARS } from "../agent/eventDiscoverySurfacing.js";
+import { AUDIENCE_RULE, OFFER_HONESTY, REVEAL_MAX_CHARS, ROUNDUP_NOTE, VERIFIED_CLAIM } from "../agent/eventDiscoverySurfacing.js";
+export { ROUNDUP_NOTE, VERIFIED_CLAIM };
 import { checkDraft, DRAFT_MODEL, renderFacts, type Candidate } from "./proactive.js";
 
 export const BUNDLE_LIMITS = { openingChars: 280, closingChars: 140, captionChars: REVEAL_MAX_CHARS, calls: 3 } as const;
@@ -120,10 +121,7 @@ export function mayWait(items: { waits: number; expiresAt: Date | null }[], now:
 
 // ---------------------------------------------------------------- the prompt (pure)
 
-// A roundup shared as a roundup (Royce, 2026-11-10): framed as what it is; it clears the same fit bar as any find.
-export const ROUNDUP_NOTE = " (a post listing several places, not one program: say it's a list and what it covers, from the post's own words; never say any listed program's terms, availability or deadlines are checked or current; skip it if the list as a whole doesn't help what they're after)";
-// A caption claiming what nobody checked about a roundup's programs.
-export const VERIFIED_CLAIM = /\b(?:verified|confirmed|checked|still open|(?:applications?|apps) (?:are )?(?:still )?open|deadline is|due (?:on|by)|spots? left|accepting applications)\b/i;
+// The roundup note and the unchecked-claim pattern live with the reveal (agent/eventDiscoverySurfacing.ts), shared by every path.
 // A caption that presents a resend as a fresh find.
 export const NEW_CLAIM = /\b(?:new (?:find|one|program|opportunity|opening)|just (?:found|came across|spotted|saw)|came across|found (?:this|another|one)|another (?:one|program|residency|fellowship|opening)|distinct from|different from (?:the|what)|not the same as)\b/i;
 
@@ -274,9 +272,27 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
 
 // ---------------------------------------------------------------- the composer
 
-export async function composeBundle(input: ComposeInput, deps: ComposeDeps = realComposeDeps): Promise<ComposeResult> {
-  let items = [...input.items];
+// Pure: a bundle's things as the composer judges them (round-5 review of #441). A roundup is never a tier pick (it is judged for fit like any
+// find, and may be skipped), and one post's link goes once per text: a second roundup item with the same link is dropped as covered.
+export function roundupBundle(items: BundleItem[]): { items: BundleItem[]; dropped: Composed["dropped"] } {
+  const seen = new Set<string>();
+  const kept: BundleItem[] = [];
   const dropped: Composed["dropped"] = [];
+  for (const b of items) {
+    const it = b.item.roundup && b.tierPick ? { ...b, tierPick: false } : b;
+    const link = it.item.roundup && it.item.url ? it.item.url : null;
+    if (link && seen.has(link)) { dropped.push({ item: it, why: "the same post's link already goes in this text" }); continue; }
+    if (link) seen.add(link);
+    kept.push(it);
+  }
+  return { items: kept, dropped };
+}
+
+export async function composeBundle(input: ComposeInput, deps: ComposeDeps = realComposeDeps): Promise<ComposeResult> {
+  const rb = roundupBundle(input.items);
+  input = { ...input, items: rb.items };
+  let items = [...input.items];
+  const dropped: Composed["dropped"] = [...rb.dropped];
   const notes: string[] = [];
   let calls = 0;
   let problems: string[] = [];
