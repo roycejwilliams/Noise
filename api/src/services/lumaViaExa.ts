@@ -282,7 +282,8 @@ export type LumaPageCheck =
   | { kind: "not_event" }
   | { kind: "missing" }
   | { kind: "blocked"; why: string }
-  | { kind: "failed"; why: string };
+  // served: the page came back as Luma's app (its __NEXT_DATA__), even though it isn't a readable event: Luma is serving us pages.
+  | { kind: "failed"; why: string; served?: boolean };
 // Luma's (Cloudflare's) access-check pages: never read as an answer.
 const CHALLENGE = /cf-chl|challenge-platform|Just a moment\.\.\.|Attention Required|cf-browser-verification/i;
 // Pure: what one page read says. A 404/410 is a page that isn't there; a 403/429/503 or an access check is Luma not serving it to us
@@ -294,9 +295,19 @@ export function classifyLumaPage(r: { html: string | null; status: number | null
   const app = /<script id="__NEXT_DATA__"/.test(r.html);
   if (!app && CHALLENGE.test(r.html)) return { kind: "blocked", why: "an access check page" };
   if (!app) return { kind: "failed", why: "a page without Luma's event data" };
+  // By the parsed path only (review of #447: a loose "event": { match read lu.ma/discover's and lu.ma/sf's listings as a broken event
+  // page): no initialData.data.event is a calendar's, a city's or a listing page; an event there with no readable record is failed.
+  const m = r.html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  let data: any = undefined;
+  try {
+    data = m ? JSON.parse(m[1])?.props?.pageProps?.initialData?.data : undefined;
+  } catch {
+    return { kind: "failed", why: "Luma's page data couldn't be read", served: true };
+  }
+  if (!data?.event || typeof data.event !== "object") return { kind: "not_event" };
   const rec = record(r.html);
   if (rec) return { kind: "event", record: rec };
-  return /"event"\s*:\s*\{/.test(r.html) ? { kind: "failed", why: "its event record has no start" } : { kind: "not_event" };
+  return { kind: "failed", why: "its event record has no start", served: true };
 }
 export const LUMA_PAGES = { concurrency: 5, blockedPauseMinutes: 30, blockedPauseMaxMinutes: 24 * 60, okCacheMinutes: 60, okProbeMinutes: 10 } as const;
 let pagesBlocked: { at: number; until: number; why: string; streak: number } | null = null;
@@ -333,8 +344,9 @@ async function pagesUsable(deps: LumaViaExaDeps, now: number): Promise<boolean> 
     notePagesBlocked(now, probe.why);
     return false;
   }
-  // No answer at all: unknown, so no paid search this time (nothing is paused; the next search reads it again).
-  if (probe.kind === "failed") return false;
+  // Any 200 page carrying Luma's app data counts as served (review of #447). No answer at all: unknown, so no paid search this time
+  // (nothing is paused; the next search reads it again).
+  if (probe.kind === "failed" && !probe.served) return false;
   pagesBlocked = null;
   pagesOkAt = now;
   return true;

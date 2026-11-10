@@ -1,7 +1,7 @@
 // The page route for tier 2 (Royce, 2026-11-10): when Luma's API can't be used (403 "no active Luma Plus plan" from 2026-10-31), each
 // Luma link Exa finds is checked on its own public page, by the same rules the API answer had: public only (fails closed), upcoming,
 // inside the window, a confirmed place. The page's embedded record (shaped here like the 2026-11-10 sample of 17 real lu.ma pages, with
-// invented names) carries visibility, start/end/zone, location type, city and whether the street is shown, registration ("open",
+// invented names; the real-page fixtures below are anonymized too) carries visibility, start/end/zone, location type, city and whether the street is shown, registration ("open",
 // "waitlist", "sold-out"), approval, spots; its schema.org record carries cancellation. A page Luma won't serve (403/429/503 or an
 // access check) stops the route and pauses it, and no paid search runs while neither route can check. Zero tokens, no network.
 //   npx tsx evals/search/lumaPages.ts
@@ -84,6 +84,37 @@ const ok200 = (h: string) => classify({ html: h, status: 200, error: null });
   check("a page without Luma's data: failed (unreadable), not missing", ok200("<html><body>hello</body></html>").kind === "failed");
   check("a calendar's page: not an event", ok200(CAL).kind === "not_event");
   check("an event record with no start: failed, not an event", ok200(html().replace(/"start_at":"[^"]+",/, "")).kind === "failed");
+}
+
+// ================================================================ real page shapes (review of #447): the structure of lu.ma/discover, lu.ma/sf
+// and one public event page as Luma served them on 2026-11-10 (evals/search/fixtures), with every value that could identify anyone or
+// anything replaced: names are "Test ...", ids are evt-/cal-/discplace-TEST..., slugs are test-..., places are city level only (no
+// street, venue, coordinates or place ids), and only Luma's own enum values and times are kept. Their listings still hold
+// "event": { ... } entries, the shape a loose match read as a broken event page.
+{
+  const { readFileSync } = await import("fs");
+  const fx = (f: string) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf8");
+  const disc = ok200(fx("luma-discover.html"));
+  check("real lu.ma/discover: not an event (the probe's page is served, not 'failed')", disc.kind === "not_event", disc);
+  const sf = ok200(fx("luma-sf.html"));
+  check("real lu.ma/sf (a city page listing events): not an event", sf.kind === "not_event", sf);
+  const ev = ok200(fx("luma-public-event.html"));
+  const r = ev.kind === "event" ? ev.record : null;
+  check("real public event page: an event, public, offline in San Francisco, open, its own zone", !!r && r.visibility === "public" && r.locationType === "offline" && r.city === "San Francisco" && r.registration === "open" && r.timezone === "America/Los_Angeles" && r.startAt === "2026-11-15T21:00:00.000Z" && !r.cancelled && !r.noindex, r);
+  check("an unparseable app-data page is failed but served (Luma is serving us)", (() => { const c = ok200('<script id="__NEXT_DATA__" type="application/json">{not json</script>'); return c.kind === "failed" && c.served === true; })());
+  // The probe passes on the real discover page with the API denied: the route runs and checks the real event page end to end.
+  const d: any = {
+    exa: async () => ({ pages: [{ url: "https://lu.ma/test-ev-1", title: "Test Event", published: null, text: "" }], cost: 0.022, error: null }),
+    lookup: async () => { throw new Error("no API"); }, event: async () => { throw new Error("no API"); },
+    lumaApi: () => true, apiState: async () => "denied", denial: () => ({ at: 0, until: Date.now() + 60_000, status: 403, message: "x", streak: 1 }),
+    page: async (slug: string) => ok200(fx(slug === "discover" ? "luma-discover.html" : "luma-public-event.html")),
+    configured: () => true, now: () => new Date("2026-11-10T20:00:00Z"), refusing: () => false, pauseMinutes: 10,
+    reserve: async () => ({ ok: true, reason: null }), place: async (c: string | null) => (c ? { name: c } : null),
+  };
+  V.clearLumaViaExaCache();
+  V.resetLumaPages();
+  const res = await V.lumaEventsViaExa("community walk", "San Francisco", { userId: null, source: "sweep", inRange: () => true, dates: "November 10 to November 24, 2026", deps: d });
+  check("API denied + real discover probe: the page route runs and keeps the real public event", res!.report.route === "page" && !res!.report.sourceDown && res!.events.length === 1 && res!.events[0].api_id === "evt-TESTEV0001", res?.report);
 }
 
 // ================================================================ the route inside the search
