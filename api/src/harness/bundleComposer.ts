@@ -31,7 +31,8 @@ export const BUNDLE_LIMITS = { openingChars: 280, closingChars: 140, captionChar
 // through the pick.
 export type PickWhy = { whyMember: string; whyNow: string } | null;
 // tierPick: the best of its tier for them this morning (services/sweepSelect.ts tierPicks): never skipped for fit (composeBundle).
-export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; tierPick?: boolean };
+// againWhy: why a resend comes back (harness/matchGate.ts repeatRule): never answered or talked about in a month, or what changed.
+export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; againWhy?: string | null; tierPick?: boolean };
 export type ComposeInput = {
   firstName: string;
   items: BundleItem[];
@@ -119,12 +120,23 @@ export function mayWait(items: { waits: number; expiresAt: Date | null }[], now:
 
 // ---------------------------------------------------------------- the prompt (pure)
 
+// A caption that presents a resend as a fresh find.
+export const NEW_CLAIM = /\b(?:new (?:find|one|program|opportunity|opening)|just (?:found|came across|spotted|saw)|came across|found (?:this|another|one)|another (?:one|program|residency|fellowship|opening)|distinct from|different from (?:the|what)|not the same as)\b/i;
+
+// Pure: how a resend is framed (Royce, 2026-11-10: the 11-10 resend was captioned as a new find). It was sent before: never new, never
+// "another" or "distinct". A change is said as the change; otherwise one light circle-back.
+export function againNote(why: string | null | undefined): string {
+  return why && /^changed since/.test(why)
+    ? ` (you sent this before; it ${why.replace(/^changed since it was shown/, "changed since you sent it")}: lead with what changed, never present it as new)`
+    : " (you sent this before, over a month ago, and it wasn't answered or talked about since; it's still open: circle back once, lightly, never as new)";
+}
+
 export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: string | null } = {}): string {
   const many = i.items.length > 1;
   const items = i.items
     .map((b, n) => {
       const pick = b.pick ? `\nwhy Cue's daily pick chose it for them: ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now: ${b.pick.whyNow}` : ""}` : "";
-      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? " (you mentioned it over a month ago with no reply; it's still open: circle back once, lightly)" : ""}\n${renderFacts(b.item.facts)}${pick}`;
+      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? againNote(b.againWhy) : ""}\n${renderFacts(b.item.facts)}${pick}`;
     })
     .join("\n\n");
   return `${CO_VOICE}
@@ -212,6 +224,8 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     const unbacked = unbackedSpecifics(c, b.item.facts);
     if (unbacked.length) problems.push({ at: n, why: `thing ${n}'s caption says ${unbacked.map((u) => `"${u.text}"`).join(", ")}, which its facts don't back` });
     if ((stripUngroundedIdentity(c, b.item.grounding) ?? "").trim() !== c.trim()) problems.push({ at: n, why: `thing ${n}'s caption says who they are beyond what they've told Cue` });
+    // A resend is never news (Royce, 2026-11-10): its caption and the reason it came back must agree. A rewrite, never a veto.
+    if (b.again && NEW_CLAIM.test(c)) problems.push({ at: n, why: `thing ${n} was sent to them before; its caption calls it new or different from what was sent` });
     captions.set(n, c);
   });
   // The reason doesn't repeat (C1).

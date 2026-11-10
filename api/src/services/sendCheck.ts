@@ -28,6 +28,7 @@ import type { EventDetails } from "./eventDetails.js";
 import { datesOnPage, dayIn, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
 import { START_LEAD_MINUTES, eventStartProblem, matchStartProblem } from "./eventStart.js";
+import { namesThing, thingSearchTerms } from "./knowledge/sent.js";
 
 // A read this recent counts as now: the old plan tool's window for a Luma page.
 export const RECHECK_FRESH_MS = 30 * 60 * 1000;
@@ -159,6 +160,52 @@ Return ONLY JSON: {"state": "open" | "closed" | "unclear", "quote": "the page's 
   return { state, quote: typeof p.quote === "string" && p.quote.trim() ? p.quote.trim() : null };
 }
 
+// ---------------------------------------------------------------- a roundup is not the thing (Royce, 2026-11-10)
+
+// A list line: a bullet, a number, an arrow or an emoji at its start.
+const LIST_LINE = /^\s*(?:[-*•▪◦→>]|\d{1,2}[.)]|\p{Extended_Pictographic})\s*\S/u;
+// A headline that counts things ("Five places to look for founder support", "10 fellowships open now").
+const COUNT_HEADLINE = /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|top \d{1,2})\s+(?:[\w'-]+\s+){0,3}?(?:places|programs|programmes|ways|resources|things|options|opportunities|accelerators|fellowships|residencies|communities|grants|picks|orgs|organizations|funds|incubators)\b/i;
+const URLS = /https?:\/\/[^\s)"'<>\]]+/gi;
+export type Roundup = { items: number; line: string | null; links: string[] };
+// Pure: is this text a roundup that lists several things, this one among them? A post: three or more list lines with this one in some
+// but not all of them, or a counting headline whose opening line isn't about this thing. A page: only the counting headline (its own
+// page lists its benefits in bullets; that's not a roundup). links: candidates for its own page, the ones on the line that names it
+// first, then any whose address carries its name or acronym; never another X or Twitter post.
+export function roundupOf(text: string, name: string, o: { page?: boolean } = {}): Roundup | null {
+  const t = String(text ?? "");
+  if (!t.trim() || !name.trim() || !namesThing(t, name)) return null;
+  const lines = t.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const items = lines.filter((l) => LIST_LINE.test(l));
+  const named = items.filter((l) => namesThing(l, name));
+  const headline = COUNT_HEADLINE.test(t.slice(0, 300)) && !namesThing(lines[0] ?? "", name);
+  const isRoundup = o.page ? headline : (items.length >= 3 && named.length >= 1 && named.length < items.length) || headline;
+  if (!isRoundup) return null;
+  const line = named[0] ?? lines.find((l) => namesThing(l, name)) ?? null;
+  const clean = (u: string) => u.replace(/[.,;!?]+$/, "");
+  const onLine = (line?.match(URLS) ?? []).map(clean).filter((u) => !isX(u));
+  const terms = thingSearchTerms(name).map((w) => w.replace(/[^a-z0-9]/g, "")).filter(Boolean);
+  const hostOf = (u: string) => u.toLowerCase().replace(/^https?:\/\/(?:www\.)?/, "").split("/")[0].replace(/[^a-z0-9]/g, "");
+  const shortener = (u: string) => /^https?:\/\/(?:www\.)?(?:t\.co|bit\.ly)\//i.test(u);
+  const byHost = (t.match(URLS) ?? []).map(clean).filter((u) => !onLine.includes(u) && !isX(u) && !shortener(u) && terms.some((w) => hostOf(u).includes(w)));
+  return { items: items.length, line: line ? line.slice(0, 200) : null, links: [...new Set([...onLine, ...byHost])] };
+}
+
+// Its own page, from the roundup's links: the first that reads, names it near its top, and isn't itself a roundup. Then the usual
+// send-time read runs on that page (dates, closing words), with the roundup kept as where it was found. None: held and read again (the
+// defers bound it), never sent as the post and never described from the post as if it were its page.
+async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: { now: Date; zone: string | null; deps: RecheckDeps }): Promise<Recheck> {
+  const label = r.line ? `listed as: ${r.line}` : "listed among several things";
+  for (const link of r.links.slice(0, 3)) {
+    const page = await o.deps.page(link).catch((): PageRead => ({ text: null, gone: false }));
+    if (!page.text || page.gone || !namesThing(page.text.slice(0, 6000), match.name) || roundupOf(page.text, match.name, { page: true })) continue;
+    const own = { ...match, url: link, roundupUrl: url, foundInRoundup: label } as TierMatch;
+    const next = await recheckFind(own, o);
+    return next.ok ? { ...next, changed: [...next.changed, "its own page instead of the post that listed it"] } : next;
+  }
+  return { ok: false, exit: false, why: `its link is a post listing several things (${label.slice(0, 100)}), not its own page, and no page of its own could be read` };
+}
+
 // Pure-with-deps: one find's own page, read again now. Never throws.
 export async function recheckFind(match: TierMatch, o: { now: Date; zone: string | null; deps: RecheckDeps }): Promise<Recheck> {
   const { now, zone, deps } = o;
@@ -202,6 +249,14 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     if (after) return after;
     return { ok: true, match: next, checkedAt, changed, verified: true };
   }
+  // A post that lists several things (a roundup: "five places to look for founder support"), this among them, is not this thing's page
+  // (Royce, 2026-11-10: an X roundup went out as the residency itself). Its own page is found among the post's links and read now: that
+  // link goes, described from that page. None that can be read: held and read again, never sent as the post.
+  if (match.kind === "opportunity" && url && !match.foundInRoundup) {
+    const listed = isX(url) ? postText : "";
+    const r = listed ? roundupOf(listed, match.name) : null;
+    if (r) return resolveFromRoundup(match, url, r, o);
+  }
   // No page to read again: a Co event with no link, or an X post with no event page behind it (the post can't be read again without
   // the X API). It goes as it was found, marked unverified; its caption may not claim spots or a price its record doesn't state.
   if (!url || isX(url) || match.kind !== "opportunity") {
@@ -214,6 +269,11 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   // A dead link is certain.
   if (r.gone) return { ok: false, exit: true, state: "cancelled", why: `its page is gone (a dead link when Cue checked on ${today})` };
   if (!r.text) return { ok: false, exit: false, why: "its page couldn't be read just now" };
+  // A web page that is itself a roundup of several things, this among them (an article, a list): the same rule as a post.
+  if (!match.foundInRoundup) {
+    const listed = roundupOf(r.text, match.name, { page: true });
+    if (listed) return resolveFromRoundup(match, url, listed, o);
+  }
   // Words are never certain: held and read again.
   const onFile = eventDateOf(match, zone) ?? (isOpening && "deadline" in match ? match.deadline ?? null : null);
   const closed = closedOnPage(r.text, match.name, onFile);

@@ -64,6 +64,9 @@ export const askLastConfirmed = (a: Pick<AskRow, "created_at" | "last_mentioned_
 export const ONGOING = /\b(keep (an eye|looking|me posted|watching)|on(-|\s)?going|every (day|week|month)|weekly|daily|whenever|each time|going forward|let me know when|updates?)\b/i;
 
 export type Closure = { askId: string; ask: string; how: "answered" | "delivered" | "moved_on"; evidence: string };
+// Weariness or a pause in their words, and words that really end it.
+export const WEARY = /\b(?:tired|exhausted|worn out|burn(?:ed|t) out|sick of|over it|frustrat\w*|a break|take a break|pause|hold off|not right now|for now|later)\b/i;
+export const FINISHED = /\b(?:found|hired|got (?:one|someone|it)|done|cancel+ed|not (?:doing|looking for) (?:it|that|this) any ?more|no longer (?:need|want|looking)|don'?t need|stop looking|called it off)\b/i;
 
 const norm = (s: string) => String(s).toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 export type Msg = { at: Date | string; side: "member" | "co"; text: string };
@@ -95,6 +98,9 @@ export function verifyClosures(raw: { ask?: unknown; how?: unknown; quote?: unkn
     const quote = typeof r.quote === "string" ? r.quote.trim() : "";
     if (!a || !how || norm(quote).length < 12) continue;
     if (how === "answered" && (atTheirWordOnly ? atTheirWordOnly.has(a.row.id) : ONGOING.test(a.row.ask_text))) continue;
+    // Tired of it, or a break, is not finished (Royce, 2026-11-10): "I'm tired of looking" keeps the search, gentler; only their word
+    // that it's done, found, off or no longer wanted closes it.
+    if (how === "moved_on" && WEARY.test(quote) && !FINISHED.test(quote)) continue;
     const side = how === "answered" ? "co" : "member";
     const q = norm(quote);
     const hit = convo.find((m) => m.side === side && +new Date(m.at) > +new Date(a.row.created_at) && norm(m.text).includes(q));

@@ -62,11 +62,17 @@ export const OFFER_FORBIDDEN = { pattern: /\b(?:thinking|thought) (?:about|of) (
 export const IMPLIES_IDENTITY = { pattern: /\b(?:women|girls|ladies|men|guys|moms|dads|group)\b[^.]{0,50}\b(?:perfect|ideal|made|built|just) for you\b|\bwhich you are\b|\bsince you(?:'re| are) a\b|\bas a (?:woman|man|girl|guy|mom|dad)\b/i, reason: "implies who they are" };
 
 // The reveal can use the real record; the tease can't (it names nothing).
+// What it is comes from its own page (Royce, 2026-11-10): the page read at send (services/sendCheck.ts) when there is one. A post that
+// listed it among other things (a roundup) only proves it was mentioned: it's labelled as that, never described as the thing itself.
 function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): Facts {
+  const roundup = !!match.foundInRoundup;
   return {
     ...matchFacts(askText, fromProfile, match),
     details: match.details ? renderEventDetails(match.name, match.details) : null,
-    source_post: match.opportunity?.postText ?? null,
+    ...(match.pageNow ? { its_own_page_read_at_send: match.pageNow.slice(0, 1500) } : {}),
+    ...(roundup
+      ? { where_it_was_found: `a post listing several things, this among them (${match.foundInRoundup}); the post is not this thing's page and says nothing current about its terms` }
+      : { source_post: match.opportunity?.postText ?? null }),
   };
 }
 

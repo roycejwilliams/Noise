@@ -211,7 +211,9 @@ async function repeatFor(userId: string, match: TierMatch, zone: string | null =
 // again: shown over a month ago, never answered, still open: it comes back
 // once, under its own key so the first send's key doesn't block it.
 // unread: held because its page didn't say when it is, or couldn't be read (services/workingSet.ts); never offered while held.
-type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean; again?: boolean; unread?: import("./workingSet.js").Unread };
+// againWhy: why it comes back (harness/matchGate.ts repeatRule's reason: unanswered a month, or what changed since), for the picker
+// and the text, so a resend is never pitched as new (Royce, 2026-11-10).
+type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean; again?: boolean; againWhy?: string; unread?: import("./workingSet.js").Unread };
 
 export function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder" | "again">): string {
   return `event_offer:${item.reminder ? "reminder:" : item.again ? "again:" : ""}${matchKey(item.match)}`;
@@ -505,6 +507,7 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
   const repeats = await Promise.all(matches.map((m) => repeatFor(candidate.userId, m, timezone)));
   const fresh = matches.filter((_, i) => repeats[i].action === "new" || repeats[i].action === "resurface");
   const again = new Set(matches.filter((_, i) => repeats[i].action === "resurface"));
+  const againWhy = new Map(matches.flatMap((m, i) => (repeats[i].action === "resurface" ? [[m, repeats[i].reason] as const] : [])));
   const reminders = matches.filter((_, i) => repeats[i].action === "remind");
   const bias = await getTierBias(candidate.userId);
   const items = fresh
@@ -512,7 +515,7 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
     .map((match) => {
       const date = relevantDate(match);
       const source: "full" | "urgent" = date !== null && daysUntilDate(date, timezone) <= URGENT_WINDOW_DAYS ? "urgent" : "full";
-      return { askText: candidate.askText, match, source, ...(again.has(match) ? { again: true } : {}) };
+      return { askText: candidate.askText, match, source, ...(again.has(match) ? { again: true, againWhy: againWhy.get(match) } : {}) };
     })
     .concat(reminders.map((match) => ({ askText: candidate.askText, match, source: "urgent" as const, reminder: true })));
   return {
@@ -724,8 +727,10 @@ export type EventOfferPayload = {
   revealNow?: boolean;
   // They've already been shown this one; it's a heads-up that it's coming up.
   reminder?: boolean;
-  // Shown over a month ago with no reply, and still open: brought up once more.
+  // Shown before and brought up once more: unanswered and not talked about for a month and still open, or changed since (againWhy says
+  // which, harness/matchGate.ts repeatRule).
   again?: boolean;
+  againWhy?: string;
 };
 
 // ask_id used for the backlog of people with no open stated ask, whose
@@ -976,7 +981,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       // they have to answer before seeing it.
       ...(trace.frustratedWithCo ? { revealNow: true } : {}), // mood: raises a find, never holds one
       ...(item.reminder ? { reminder: true } : {}),
-      ...(item.again ? { again: true } : {}),
+      ...(item.again ? { again: true, ...(item.againWhy ? { againWhy: item.againWhy } : {}) } : {}),
     };
     // A failed attempt's row (a failed draft, or an undated find's window that ended unsent) is cleared so this lands, the way a
     // pick's does (queuePickedOffer); alreadyDecided above already let it through (Phase B, B2).
@@ -1026,7 +1031,7 @@ export async function pickerDecides(userId: string): Promise<boolean> {
 // error is the caller's fourth answer.
 export type PickQueued = "queued" | "already decided" | "past" | "already exists";
 // sent: the member's sent record for this run (sentForRun), shared by every pick queued in it; read fresh when not given.
-export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[]; tierPick?: boolean; tierNext?: { key: string; why: string }[] } }, sent?: SentOnce): Promise<PickQueued> {
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; againWhy?: string; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[]; tierPick?: boolean; tierNext?: { key: string; why: string }[] } }, sent?: SentOnce): Promise<PickQueued> {
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   if (await alreadyDecided(userId, item, sent)) return "already decided";
@@ -1036,7 +1041,7 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
   if (tooLateToOffer(match, zone)) return "past";
   // picked: the daily pick chose it, so the send step bundles it with the other picks waiting (per tier). lastDay: the last day
   // it's worth sending (Royce, 2026-10-09: "Fleet Week should never lose its slot to something that will still exist next week").
-  const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.pick ? { pick: o.pick } : {}), ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
+  const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.pick ? { pick: o.pick } : {}), ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true, ...(o.againWhy ? { againWhy: o.againWhy } : {}) } : {}) };
   const timeBound = pickPriority(o.lastDay ?? null, zone);
   // A failed earlier attempt for the same thing re-enters the working set: its row (the queue keeps one per thing) is cleared so this
   // pick lands in it, instead of the insert quietly doing nothing.
