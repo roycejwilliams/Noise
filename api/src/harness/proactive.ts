@@ -3327,7 +3327,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
       }
       const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string; tierPick?: boolean } }).pick;
       // No why-member (a tier pick the picker didn't send itself): no pick line, the find's own facts speak for it.
-      items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again), ...(pk?.tierPick && morningFind(x, state.now, person.timezone) ? { tierPick: true } : {}) });
+      items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again), againWhy: (x.payload as { againWhy?: string }).againWhy ?? null, ...(pk?.tierPick && morningFind(x, state.now, person.timezone) ? { tierPick: true } : {}) });
     }
     // The pick's set line only for a bundle of exactly the finds it chose together (review of #135: a set line could describe finds
     // that didn't make it into the message).

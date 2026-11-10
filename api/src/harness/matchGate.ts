@@ -301,7 +301,12 @@ const SAME_SHOWING_DAYS = 3;
 const ANSWERED_WITHIN_HOURS = 24;
 
 export type OfferOutcome = "declined" | "interested" | "acted" | null;
-export type OfferHistory = { shownAt: Date[]; outcome: OfferOutcome; answered: boolean };
+// discussed (Royce, 2026-11-10): it was named again in their conversation after it was shown (texts or calls, by them or by Cue;
+// services/conversationRecall.ts mentionsSince). The 9-22 residency was talked about on 9-24, 10-01, 10-02 and 10-06, none of it
+// within a day of the send, and came back on 11-10 as "never answered". Talked about isn't declined, interested or done: it only means
+// it isn't unseen. null: the conversation couldn't be read, which is never "not discussed". Absent: not looked up (old callers).
+// shownDates: the date or deadline each showing carried, for a material change (a new deadline) since.
+export type OfferHistory = { shownAt: Date[]; outcome: OfferOutcome; answered: boolean; discussed?: boolean | null; shownDates?: string[] };
 export type RepeatAction = "new" | "remind" | "resurface" | "blocked";
 
 // One showing can leave several records (the offer, the dedup row, a texted
@@ -335,11 +340,29 @@ export function repeatRule(
       ? { action: "remind", reason: `they were interested and the deadline is ${daysLeft} day(s) out` }
       : { action: "blocked", reason: "they were interested; only a reminder before the deadline" };
   }
+  // A material change since it was shown (a new date or deadline, still ahead): it can come back once as an update, whether or not they
+  // answered or talked about it, never after a no or once they acted (above). The reason names the change, so the text can say it.
+  // Openings only: an event under the same name with a new date is a recurrence, a new find (knowledge/sent.ts), not a change.
+  const changed = m.isEvent ? null : materialChange(h.shownDates ?? [], m.date, today);
+  if (changed && showings.length < 2) return { action: "resurface", reason: changed };
   if (h.answered) return { action: "blocked", reason: "they replied after seeing it" };
+  if (h.discussed) return { action: "blocked", reason: "talked about in their conversation since it was shown" };
   if (showings.length >= 2) return { action: "blocked", reason: "already came back once" };
   const since = Math.floor((now.getTime() - showings[0].getTime()) / 86_400_000);
   if (since < RESURFACE_AFTER_DAYS) return { action: "blocked", reason: `shown ${since} day(s) ago, can come back after ${RESURFACE_AFTER_DAYS}` };
-  return { action: "resurface", reason: `shown ${since} days ago, never answered, still open` };
+  // Unknown is never "never discussed": with the conversation unreadable it isn't brought back as unseen.
+  if (h.discussed === null) return { action: "blocked", reason: "their conversation since couldn't be read, so it isn't brought back as unseen" };
+  return { action: "resurface", reason: `shown ${since} days ago, never answered or talked about since, still open` };
+}
+
+// Pure: a date or deadline it carries now that none of its showings carried, still ahead of today: the change in plain words, or null.
+// No date now, or none on any showing (nothing to compare): no change.
+export function materialChange(shownDates: string[], date: string | null, today: string): string | null {
+  const shown = [...new Set(shownDates.filter(Boolean).map((d) => d.slice(0, 10)))];
+  if (!date || !shown.length) return null;
+  const now = date.slice(0, 10);
+  if (shown.includes(now) || now < today) return null;
+  return `changed since it was shown: its date was ${shown[shown.length - 1]}, now ${now}`;
 }
 
 // When they were shown it, what they said about it, and whether they texted
@@ -371,11 +394,13 @@ async function shownTwins(userId: string, match: TierMatch): Promise<{ at: Date;
   });
 }
 
-export async function offerHistory(userId: string, match: TierMatch, extraShownAt: Date[] = []): Promise<OfferHistory> {
+// o.discussion false: the conversation isn't read (a texted search's repeat check, which keeps its old rule and its latency).
+export async function offerHistory(userId: string, match: TierMatch, extraShownAt: Date[] = [], o: { discussion?: boolean } = {}): Promise<OfferHistory> {
   const eventId = "event_api_id" in match ? match.event_api_id : null;
-  const shown = await pool
+  // Each showing with the date or deadline it carried (a material change since is judged against these; repeatRule).
+  const shownRows = await pool
     .query(
-      `SELECT created_at AS at FROM co_memories
+      `SELECT created_at AS at, coalesce(content::jsonb -> 'match' ->> 'deadline', content::jsonb ->> 'deadline', content::jsonb -> 'match' ->> 'event_date', content::jsonb ->> 'event_date') AS date FROM co_memories
        WHERE user_id = $1
          AND memory_type IN ('recommendation_offered', 'event_offer_pending')
          AND (
@@ -383,21 +408,27 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
            OR lower(coalesce(content::jsonb ->> 'name', content::jsonb -> 'match' ->> 'name')) = lower($3)
          )
        UNION ALL
-       SELECT surfaced_at FROM surfaced_events WHERE user_id = $1 AND $2::text IS NOT NULL AND event_api_id = $2
+       SELECT surfaced_at, NULL FROM surfaced_events WHERE user_id = $1 AND $2::text IS NOT NULL AND event_api_id = $2
        UNION ALL
-       SELECT created_at FROM tier3_offered_opportunities WHERE user_id = $1 AND lower(name) = lower($3)`,
+       SELECT created_at, NULL FROM tier3_offered_opportunities WHERE user_id = $1 AND lower(name) = lower($3)`,
       [userId, eventId, match.name],
     )
-    .then((r) => r.rows.map((row: { at: Date }) => new Date(row.at)))
-    .catch(() => [] as Date[]);
+    .then((r) => r.rows.map((row: { at: Date; date: string | null }) => ({ at: new Date(row.at), date: row.date ? String(row.date) : null })))
+    .catch(() => [] as { at: Date; date: string | null }[]);
+  const shown = shownRows.map((r) => r.at);
   // The same event shown under another link (Royce, 2026-10-28: one event on two platforms, services/eventIdentity.ts sameEvent): read
   // from what was offered by its record, for an event with a start of its own. A time already counted isn't counted twice.
   const twins = match.tier !== 3 || (match as any).details?.startAt ? await shownTwins(userId, match) : [];
+  // The same program under another name or link (an opening: knowledge/sent.ts sameProgram; Royce 2026-11-10: an X post's "SPC Member
+  // Residency" is the residency already sent). Another cohort of it is not this one's showing.
+  const programTwins = match.tier === 3 && !(match as any).details?.startAt ? await shownSameProgram(userId, match.name) : [];
   const seenTimes = new Set(shown.map((d) => d.getTime()));
-  const shownAt = [...shown, ...twins.map((t) => t.at).filter((d) => !seenTimes.has(d.getTime())), ...extraShownAt];
+  const shownAt = [...shown, ...[...twins, ...programTwins].map((t) => t.at).filter((d) => !seenTimes.has(d.getTime()) && (seenTimes.add(d.getTime()), true)), ...extraShownAt];
+  const shownDates = [...shownRows.map((r) => r.date), ...programTwins.map((t) => t.date)].filter((d): d is string => !!d);
   // What they said about it, under this link or a twin's (by its record, not its name alone).
-  const keys = [...new Set([eventId ? `event:${eventId}` : "", `name:${match.name.toLowerCase()}`, ...twins.flatMap((t) => [t.id ? `event:${t.id}` : "", `name:${t.name.toLowerCase()}`])].filter(Boolean))];
-  const names = [...new Set([match.name, ...twins.map((t) => t.name)].map((n) => n.toLowerCase()).filter(Boolean))];
+  // The same program under another name counts too (a no to the X post's name is a no to the program); another program never does.
+  const keys = [...new Set([eventId ? `event:${eventId}` : "", `name:${match.name.toLowerCase()}`, ...twins.flatMap((t) => [t.id ? `event:${t.id}` : "", `name:${t.name.toLowerCase()}`]), ...programTwins.map((t) => `name:${t.name.toLowerCase()}`)].filter(Boolean))];
+  const names = [...new Set([match.name, ...twins.map((t) => t.name), ...programTwins.map((t) => t.name)].map((n) => n.toLowerCase()).filter(Boolean))];
   const outcomeRow = await pool
     .query(
       `SELECT result FROM suggestion_outcomes
@@ -427,7 +458,39 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
       .then((r) => r.rows.length > 0)
       .catch(() => false);
   }
-  return { shownAt, outcome, answered };
+  // Talked about since it was first shown, in texts or calls, by them or by Cue (services/conversationRecall.ts mentionsSince): only
+  // looked up when it could matter (shown, no recorded outcome). Unreadable: null, never "not discussed".
+  if (o.discussion === false) return { shownAt, outcome, answered, shownDates };
+  let discussed: boolean | null = false;
+  if (shownAt.length && !outcome && !answered) {
+    const { mentionsSince } = await import("../services/conversationRecall.js");
+    const first = new Date(Math.min(...shownAt.map((d) => d.getTime())));
+    const names = [...new Set([match.name, ...twins.map((t) => t.name), ...programTwins.map((t) => t.name)].filter(Boolean))];
+    discussed = await Promise.all(names.map((n) => mentionsSince({ query: (sql, args) => pool.query(sql, args as any[]) as any }, userId, n, first, { sends: shownAt })))
+      .then((all) => all.some((m) => m.member.length > 0 || m.cue.length > 0))
+      .catch((err: any) => {
+        console.error("offerHistory: their conversation since couldn't be read (treated as unknown):", err?.message ?? err);
+        return null;
+      });
+  }
+  return { shownAt, outcome, answered, discussed, shownDates };
+}
+
+// Openings offered before that are the same program as this name under another one (knowledge/sent.ts sameProgram "same"), with when
+// and the date or deadline each carried. Every offered opening, no window: what was sent stays sent.
+async function shownSameProgram(userId: string, name: string): Promise<{ at: Date; name: string; date: string | null }[]> {
+  const { sameProgram } = await import("../services/knowledge/sent.js");
+  const rows = await pool
+    .query(
+      `SELECT created_at AS at, coalesce(content::jsonb -> 'match' ->> 'name', content::jsonb ->> 'name') AS name,
+              coalesce(content::jsonb -> 'match' ->> 'deadline', content::jsonb ->> 'deadline') AS date
+       FROM co_memories WHERE user_id = $1 AND memory_type IN ('recommendation_offered', 'event_offer_pending')
+         AND coalesce(content::jsonb -> 'match' ->> 'tier', content::jsonb ->> 'tier') = '3'`,
+      [userId],
+    )
+    .then((r) => r.rows as { at: Date; name: string | null; date: string | null }[])
+    .catch(() => [] as { at: Date; name: string | null; date: string | null }[]);
+  return rows.flatMap((r) => (r.name && r.name.toLowerCase() !== name.toLowerCase() && sameProgram(r.name, name) === "same" ? [{ at: new Date(r.at), name: r.name, date: r.date }] : []));
 }
 
 export function repeatInput(match: TierMatch, shortNotice: boolean): { isEvent: boolean; date: string | null; shortNotice: boolean } {
@@ -441,7 +504,7 @@ export function repeatInput(match: TierMatch, shortNotice: boolean): { isEvent: 
 // For a texted search: anything but a fresh or resurfacing item counts as
 // already offered (a reminder isn't something to pitch as new).
 export async function wasAlreadyOffered(userId: string, match: TierMatch, now = new Date(), zone: string | null = null): Promise<boolean> {
-  const h = await offerHistory(userId, match);
+  const h = await offerHistory(userId, match, [], { discussion: false });
   const input = repeatInput(match, false);
   const r = repeatRule(h, input, localToday(now, zone), now);
   return r.action === "blocked" || r.action === "remind";

@@ -115,11 +115,14 @@ export function matchSent(rec: SentRecord, p: SentProbe): "url" | "event" | "nam
   if (rec.ident.name && pi.name && hasStart(rec.ident) && hasStart(pi) && tokensKey(rec.ident.name) === tokensKey(pi.name) && sameEvent({ ...rec.ident, name: rec.ident.name }, pi)) return "event";
   if (rec.urlOnly) return null;
   const a = nameKey(rec.name), b = nameKey(p.name ?? p.ident?.name ?? "");
+  const rd = dayOf(rec.ident), pd = dayOf(p.ident);
+  const recKnown = !!(rec.eventId || rd), probeKnown = !!(pid || pd);
+  // Neither side says which event it is (an opening, a program): the same program under another name or link is the same thing
+  // (sameProgram; Royce 2026-11-10). Another cohort of it is not "already sent" here: it is new, and the picker is told what it updates.
+  if (a && b && a !== b && !recKnown && !probeKnown && sameProgram(rec.name, p.name ?? p.ident?.name ?? "") === "same") return "name";
   if (!a || a !== b) return null;
   // Same name. Two events that each say which one they are (an id, or a date) are the same only if those agree: a new id or a new date
   // is a recurrence, a new find. A side that doesn't say leaves the name to decide (an opening, a link shared in a reply).
-  const rd = dayOf(rec.ident), pd = dayOf(p.ident);
-  const recKnown = !!(rec.eventId || rd), probeKnown = !!(pid || pd);
   if (recKnown && probeKnown && idsOrDaysDiffer(rec, p)) return null;
   // Cue's action record alone (a reply-path send: no event id, and rarely a date) never says which event it was. Its name blocks a find
   // that doesn't say either (an opening, a link in a reply), never one that says which event it is: a dated or id'd find of the same
@@ -267,4 +270,103 @@ export function sentOnce(q: Q, userId: string): SentOnce {
       console.error(`sent lookup failed for ${userId} (failing closed: nothing new is pitched this run):`, err?.message ?? err);
       return null;
     }));
+}
+
+// ---------------------------------------------------------------- the same opportunity, by what it is (Royce, 2026-11-10)
+//
+// An opening (a program, residency, fellowship, grant) has no event id or date to say which one it is, and the same program shows up
+// under several names and links: an X post ("SPC Member Residency"), its own site ("South Park Commons Member Residency"), an
+// application page. Those are one opportunity. Two different programs from one organization (a residency and a fellowship) are two,
+// and a new cohort of a program already sent is the same program, changed: an update, never a "new" find (the 11-10 resend of the
+// residency first sent 9-22 was pitched as "distinct from the program already sent"). Pure; no model, no store of its own.
+
+// Words that say nothing about which program it is.
+const WEAK = new Set(["program", "programs", "programme", "official", "application", "applications", "apply", "member", "members", "new", "open", "now", "the", "a", "an", "and", "of", "for", "in", "at", "on", "to", "by", "with", "via", "s"]);
+// Words that say which cohort: a year, a season, a batch code (W27, S26), a numbered batch or cohort.
+const SEASON = /^(?:spring|summer|fall|autumn|winter)$/;
+const BATCH_CODE = /^[wsf]\d{2}$/;
+const YEAR = /^20\d{2}$/;
+const COHORT_WORD = /^(?:batch|cohort|class)$/;
+
+// Pure: the acronyms a name spells out, from its runs of capitalized words ("South Park Commons" -> spc).
+function acronymRuns(name: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const words = String(name ?? "").split(/[^\p{L}\p{N}&]+/u).filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    for (let len = 2; len <= 5 && i + len <= words.length; len++) {
+      const run = words.slice(i, i + len);
+      if (!run.every((w) => /^\p{Lu}[\p{Ll}\p{N}]/u.test(w))) break;
+      out.set(run.map((w) => w[0]).join("").toLowerCase(), run.map((w) => w.toLowerCase()));
+    }
+  }
+  return out;
+}
+
+// Pure: a name's words, lower-cased, with an all-caps acronym the OTHER side spells out replaced by its words (so "SPC Residency" and
+// "South Park Commons Residency" read alike). A possessive 's is dropped.
+function wordsWithAcronyms(name: string, other: string): string[] {
+  const runs = acronymRuns(other);
+  const out: string[] = [];
+  for (const raw of String(name ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/['’]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
+    const w = raw.toLowerCase();
+    const full = /^\p{Lu}{2,5}$/u.test(raw) ? runs.get(w) : undefined;
+    out.push(...(full ?? [w]));
+  }
+  return out;
+}
+
+// Pure: which cohort a name names (a year, a season, a batch code, "batch 4", "cohort 2"), as one sorted signature, or "" when none.
+export function cohortOf(name: string): string {
+  const w = eventNameKey(name).split(" ");
+  const sig = new Set<string>();
+  for (let i = 0; i < w.length; i++) {
+    if (YEAR.test(w[i]) || SEASON.test(w[i]) || BATCH_CODE.test(w[i])) sig.add(w[i]);
+    if (COHORT_WORD.test(w[i]) && /^\d+$/.test(w[i + 1] ?? "")) sig.add(`${w[i]} ${w[i + 1]}`);
+  }
+  return [...sig].sort().join(" ");
+}
+
+const programWords = (name: string, other: string): Set<string> =>
+  new Set(wordsWithAcronyms(name, other).filter((w) => !WEAK.has(w) && !YEAR.test(w) && !SEASON.test(w) && !BATCH_CODE.test(w) && !/^\d+$/.test(w) && !COHORT_WORD.test(w)));
+
+// Pure: are two opening names the same program? "same": one program (the same words once acronyms, cohort words and filler are set
+// aside); "other_cohort": the same program, a different cohort each name states; null: two things (a word of substance differs: a
+// residency is not a fellowship, even from one organization). A new link or headline alone never makes two.
+export function sameProgram(a: string, b: string): "same" | "other_cohort" | null {
+  const wa = programWords(a, b), wb = programWords(b, a);
+  if (!wa.size || !wb.size || wa.size !== wb.size) return null;
+  for (const w of wa) if (!wb.has(w)) return null;
+  const ca = cohortOf(a), cb = cohortOf(b);
+  return ca && cb && ca !== cb ? "other_cohort" : "same";
+}
+
+// Pure: does a line of conversation name this thing? Its words of substance, acronyms read either way ("the SPC residency" names
+// "South Park Commons Member Residency"): all of them, or all but one for a long name (five or more), so the organization alone ("I know
+// someone at South Park Commons") or its other program ("the SPC fellowship") never counts. Used to tell whether something already
+// sent was talked about since (harness/matchGate.ts offerHistory).
+export function namesThing(text: string, name: string): boolean {
+  const stem = (w: string) => w.replace(/s$/, "");
+  const want = [...programWords(name, text)].filter((w) => w.length >= 3);
+  if (!want.length) return false;
+  const have = new Set(wordsWithAcronyms(text, name).map(stem));
+  const n = want.filter((w) => have.has(stem(w))).length;
+  return n >= (want.length <= 4 ? want.length : want.length - 1);
+}
+
+// Pure: words a database search for mentions of this thing starts from (its words of substance and its acronyms): a cheap first pass,
+// namesThing decides.
+export function thingSearchTerms(name: string): string[] {
+  const words = [...programWords(name, "")].filter((w) => w.length >= 3);
+  return [...new Set([...words, ...[...acronymRuns(name).keys()]])];
+}
+
+// Pure: the sent record that is the same program as this opening under another name (or another cohort of it). Only for finds that
+// don't say which event they are: an event keeps eventIdentity's rules.
+export function sameProgramSent(records: readonly SentRecord[], name: string): { record: SentRecord; how: "same" | "other_cohort" } | null {
+  for (const record of records) {
+    if (record.eventId || dayOf(record.ident)) continue;
+    const how = sameProgram(record.name, name);
+    if (how) return { record, how };
+  }
+  return null;
 }

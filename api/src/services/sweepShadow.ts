@@ -22,7 +22,7 @@ import { exitKey } from "./findForm.js";
 import { closedAskRefs, servesClosedAsk } from "./askLifecycle.js";
 import { withMember } from "./llmUsage.js";
 import { preferEvent, sameEvent, type EventLike } from "./eventIdentity.js";
-import { sentByReferent, wasSent, type SentRecord } from "./knowledge/sent.js";
+import { findSent, sameProgramSent, sentByReferent, wasSent, type SentRecord } from "./knowledge/sent.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -46,7 +46,7 @@ export async function shadowUserIds(env: NodeJS.ProcessEnv = process.env): Promi
 
 // ident: what the find's own record says it is (its link, start, city, venue), for one event on two platforms (eventIdentity.ts).
 // heldUntil: an event page past the event tier's window, held in the backlog until that day (sweepFind.ts holdForWindow).
-type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; details: string | null; ident?: EventLike; heldUntil?: string | null };
+type RawCandidate = { name: string; date: string | null; tier: number; askId: string | null; fromProfile: boolean; reminder: boolean; again?: boolean; againWhy?: string | null; details: string | null; ident?: EventLike; heldUntil?: string | null };
 // Pure: a waiting find's identity, from its match.
 export const identOf = (m: any): EventLike => ({ name: m?.name ?? null, event_api_id: typeof m?.event_api_id === "string" && m.event_api_id ? m.event_api_id : null, url: m?.url ?? null, startAt: m?.startAt ?? null, event_date: m?.event_date ?? null, city: m?.city ?? null, details: m?.details && typeof m.details === "object" ? m.details : null });
 
@@ -85,6 +85,10 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
     }
     if (r.ident && !idents.has(key)) idents.set(key, r.ident);
     const it = items.get(key) ?? { id: "", key, name: r.name, date: r.date, tier: r.tier, kind: "discovery" as const, asks: [] as string[], shortNotice: !!r.date && DateTime.fromISO(r.date).diff(DateTime.fromISO(today), "days").days <= 2, details: r.details };
+    if (!it.history) {
+      const h = sentHistory(r, sent);
+      if (h) it.history = h;
+    }
     const a = !r.fromProfile && r.askId ? askNumber.get(r.askId) : undefined;
     if (a && !it.asks.includes(a)) it.asks.push(a);
     if (a) it.kind = "answer";
@@ -93,6 +97,20 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
   }
   const all = [...items.values()];
   return [...all.filter((it) => !judgedKeys.has(it.key)), ...all.filter((it) => judgedKeys.has(it.key))].map((it, i) => ({ ...it, id: `C${i + 1}` }));
+}
+
+// Pure: what was already sent of a pool candidate, in the picker's words (Royce, 2026-11-10): a reminder or a resend names the send and
+// why it's back; another cohort of a program already sent is an update to it. null: nothing of it was sent.
+export function sentHistory(r: Pick<RawCandidate, "name" | "date" | "reminder" | "again" | "againWhy" | "ident">, sent: readonly SentRecord[]): string | null {
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const probe = { name: r.name, url: r.ident?.url ?? null, eventId: r.ident?.event_api_id ?? null, ident: r.ident ?? { name: r.name, event_date: r.date } };
+  const hit = r.reminder || r.again ? findSent(sent, probe) : null;
+  const when = hit ? ` on ${day(hit.record.at)}${hit.record.name !== r.name ? ` (as "${hit.record.name}")` : ""}` : "";
+  if (r.reminder) return `ALREADY SENT${when}: this is a reminder of it, not news`;
+  if (r.again) return `ALREADY SENT${when}: not new to them; it comes back only because ${r.againWhy ?? "it was never answered and is still open"}. Say what's new, never pitch it as a discovery`;
+  if (r.ident?.event_api_id || r.date) return null;
+  const twin = sameProgramSent(sent, r.name);
+  return twin?.how === "other_cohort" ? `a newer cohort of "${twin.record.name}", sent on ${day(twin.record.at)}: the same program, so it's an update to that, never a new discovery` : null;
 }
 
 // Pure: the backlogs with every find waiting for a closed ask taken out (a reminder stays), and what came out, by the key each
@@ -250,6 +268,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
         reminder: !!it?.reminder,
         details: describeMatch(it?.match),
         again: !!it?.again,
+        againWhy: typeof it?.againWhy === "string" ? it.againWhy : null,
         ident: identOf(it?.match),
         heldUntil: typeof it?.match?.heldUntil === "string" ? it.match.heldUntil : null,
       })),
@@ -257,7 +276,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     ...queued.map((c: any) => {
       const p = c.payload ?? {};
       const m = p.match ?? {};
-      return { name: String(m.name ?? ""), date: dateOf(m), tier: Number(m.tier ?? 0), askId: p.askId && p.askId !== "profile" ? String(p.askId) : null, fromProfile: p.fromProfile === true, reminder: !!p.reminder, again: !!p.again, details: describeMatch(m), ident: identOf(m) };
+      return { name: String(m.name ?? ""), date: dateOf(m), tier: Number(m.tier ?? 0), askId: p.askId && p.askId !== "profile" ? String(p.askId) : null, fromProfile: p.fromProfile === true, reminder: !!p.reminder, again: !!p.again, againWhy: typeof p.againWhy === "string" ? p.againWhy : null, details: describeMatch(m), ident: identOf(m) };
     }),
   ];
   // Nothing waiting at all: no pool to pick from, so the member's asks, knowledge and texts aren't loaded for it (efficiency audit,
@@ -375,7 +394,7 @@ export async function logClaimCheckFailure(userId: string, check: import("./swee
   return true;
 }
 
-type Waiting = { askId: string; askText: string; fromProfile: boolean; match: any; reminder?: boolean; again?: boolean };
+type Waiting = { askId: string; askText: string; fromProfile: boolean; match: any; reminder?: boolean; again?: boolean; againWhy?: string };
 
 // Pure: the picker's reason, as a member may read it. Its judgments cite records by internal id (A17, T3, S2, O1, C9, G2, D4), which
 // must never reach a text (review of #116). The A/T/S/O/C pattern is always stripped, real or made up ("A9", "T45", "C7"). G# and D#
@@ -485,7 +504,7 @@ export async function queueTierNext(userId: string, cand: { payload: any }, why:
     for (const n of next) {
       const from = backlogs.flatMap((b: any) => (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ b, it }))).find(({ it }: any) => shadowKey(String(it?.match?.name ?? ""), dateOf(it?.match)) === n.key);
       if (!from) { tried.push({ name: n.key, why: "not in the backlog" }); continue; }
-      const ok = await queuePickedOffer(userId, { askId: String(from.b.ask_id), askText: String(from.it?.askText ?? ""), fromProfile: from.b.ask_id === "profile", match: from.it.match, reminder: !!from.it.reminder, again: !!from.it.again, why: n.why, lastDay: null, pick: { whyMember: n.why, whyNow: "", set: null } }, sent).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 160)}`);
+      const ok = await queuePickedOffer(userId, { askId: String(from.b.ask_id), askText: String(from.it?.askText ?? ""), fromProfile: from.b.ask_id === "profile", match: from.it.match, reminder: !!from.it.reminder, again: !!from.it.again, ...(typeof from.it.againWhy === "string" ? { againWhy: from.it.againWhy } : {}), why: n.why, lastDay: null, pick: { whyMember: n.why, whyNow: "", set: null } }, sent).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 160)}`);
       if (ok === "queued") {
         await recordDecision({ layer: 5, decision: "sweep.tier_next", userId, outcome: "act", action: "queued", reason: why, proposal: { skipped: cand.payload?.match?.name ?? null, queued: from.it.match?.name ?? n.key, tried } }).catch(() => {});
         return String(from.it.match?.name ?? n.key);
@@ -524,7 +543,7 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
   // What Cue ever sent them, read once for every pick this run queues (review of #409).
   const sent = sentForRun(userId);
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
-    (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ askId: String(b.ask_id), askText: String(it?.askText ?? ""), fromProfile: b.ask_id === "profile", match: it?.match, reminder: !!it?.reminder, again: !!it?.again })),
+    (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ askId: String(b.ask_id), askText: String(it?.askText ?? ""), fromProfile: b.ask_id === "profile", match: it?.match, reminder: !!it?.reminder, again: !!it?.again, ...(typeof it?.againWhy === "string" ? { againWhy: it.againWhy } : {}) })),
   );
   const rows = (await pool.query(`SELECT id, payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])).rows;
   const waiting = rows.map((r: any) => ({ id: String(r.id), key: shadowKey(String(r.payload?.match?.name ?? ""), dateOf(r.payload?.match)) }));
@@ -565,7 +584,7 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
   const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
   for (const q of plan.queue) {
     // The pick's view of the set rides with each find it chose today, only when it chose more than one (Phase C3).
-    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set, ids) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}), ...(q.tierNext ? { tierPick: true, tierNext: q.tierNext } : {}) } }, sent).catch((err: any) => {
+    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, againWhy: q.againWhy, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set, ids) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}), ...(q.tierNext ? { tierPick: true, tierNext: q.tierNext } : {}) } }, sent).catch((err: any) => {
       const msg = String(err?.message ?? err).slice(0, 200);
       console.error("picker: queueing a pick failed:", msg);
       // One pick erroring fails the day too: its retry queues what's missing, and what did queue merges into its own row.
@@ -590,7 +609,7 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
     if (!from) return "not in the backlog";
     // The member's why is the alternate's own forThem line, never its hold or reject reason (memberWhyOf); empty, its details speak.
     const why = memberSafeWhy(memberWhyOf(j), ids);
-    return queuePickedOffer(userId, { askId: from.askId, askText: from.askText, fromProfile: from.fromProfile, match: from.match, reminder: from.reminder, again: from.again, why, lastDay: null, pick: { whyMember: why, whyNow: "", set: null, tierPick: true } }, sent).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 200)}`);
+    return queuePickedOffer(userId, { askId: from.askId, askText: from.askText, fromProfile: from.fromProfile, match: from.match, reminder: from.reminder, again: from.again, againWhy: from.againWhy, why, lastDay: null, pick: { whyMember: why, whyNow: "", set: null, tierPick: true } }, sent).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 200)}`);
   });
   // After the picks (and any tier fallback) are applied: fit-only holds on their last morning age out and leave with their fact.
   const aged = o.protect ? [] : ageOutFitOnly(judgments);

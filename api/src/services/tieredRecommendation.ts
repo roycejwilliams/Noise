@@ -64,7 +64,9 @@ import { skipsPaidSearch } from "./testMemberSpend.js";
 // searchedIn: where the search that found it looked (services/wantPlace.ts via eventSurfacingSweep.ts searchPlace): the want's own
 // place, or the home city; read by the send to say once where their finds come from.
 // startAt: the feed's own start time (ISO), when known, so the gate can tell an event that already started from one later today.
-type MatchExtras = { startAt?: string; searchedIn?: import("./eventSurfacingSweep.js").SearchedIn; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
+// foundInRoundup / roundupUrl (Royce, 2026-11-10): it was found in a post that lists several things (services/sendCheck.ts roundupOf);
+// its url is then its own page, resolved at send, and roundupUrl the post. The post proves a mention, never current terms or fit.
+type MatchExtras = { foundInRoundup?: string; roundupUrl?: string; startAt?: string; searchedIn?: import("./eventSurfacingSweep.js").SearchedIn; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)

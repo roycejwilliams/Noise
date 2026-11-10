@@ -37,6 +37,9 @@ export type PoolItem = {
   asks: string[]; // A# ids it serves (empty for profile finds)
   shortNotice?: boolean;
   details?: string | null; // facts from its page, when known
+  // What Cue already sent them of this (Royce, 2026-11-10): a resend, a reminder or a new cohort of something sent, said plainly so a
+  // resend is never judged or pitched as a new discovery (the 11-10 residency, "distinct from the program already sent", was the same).
+  history?: string | null;
 };
 
 export type SelectContext = {
@@ -103,11 +106,13 @@ For every candidate, give one verdict:
 - "hold": good for them, but the thing itself isn't ready yet (it opens later, or it's too far out to act on), or it would crowd a stronger send today. Say when it would be right, as a date (YYYY-MM-DD) if you can. You judge whether it fits them and its timing, never their attention: don't hold something because they seem busy, focused elsewhere or in a mood. They decide what they're too busy for. Something open now with a deadline, or applications open, is never held for that.
 - "reject": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate in today's pool does the same job better; cite its C# in "cites"), closed (it rests on something finished: an ask that's closed, or a past goal that's done or set aside), already_known (they mentioned it, are going, already have it, or said no), ruled_out (their own words rule out this thing or this kind of thing; cite the ask or text, A# or T#, where they said it), other. Add one line why.
 
-A ruled_out reject cites their own words (A# or T#) that rule it out. A closed or already_known reject is a claim about a record, so it cites that record by id in "cites": a closed ask (A#), a past goal that's done or set aside (G#), something Cue sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.
+A ruled_out reject cites their own words (A# or T#) that rule it out, at the scope they said it: a no to one thing ("not this one", "pass") rules out that thing only, never its kind; a kind is ruled out only when their words name the kind ("no more founder residencies"). No reply is not a no. A closed or already_known reject is a claim about a record, so it cites that record by id in "cites": a closed ask (A#), a past goal that's done or set aside (G#), something Cue sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.
 
 Past goals each say why they're past. done and set aside are their word. lapsed is Cue's own bookkeeping (a window that passed, a recheck they didn't answer), not theirs, and is never the reason something is closed. A closed one-off question (find me a couple of these) doesn't close an aim one of their active goals still carries either.
 
 An ask isn't finished after one send: someone looking for events this week usually wants a few across the week, and a search for a community can take several tries. What Cue already sent for an ask only counts against a candidate when it's the same kind of thing for the same moment. "covered" means another candidate in today's pool does the same job better, not that the ask got something before.
+
+Why this member has to be specific to what they're trying to do: say how this thing helps that particular ask or goal, from what the thing itself offers. Who it's for ("it's for founders") or a general networking benefit is not a reason on its own: someone looking for an engineer to build with needs a way to meet engineers, not a program for founders in general. An adjacent lead can still be worth sending when you can say plainly how it gets them closer; say that connection honestly, never stretch it. A candidate marked ALREADY SENT is not news to them: send it only for the reason it says it came back, never call it new or distinct from what was sent, and say in whyNow what's new.
 
 Some candidates come with only a name and a date. Judge what the name tells you; thin isn't the same as weak.
 
@@ -163,7 +168,7 @@ export function selectPrompt(c: SelectContext): string {
   lines.push(
     c.pool
       .slice(0, SELECT_LIMITS.maxPool)
-      .map((p) => `${p.id} ${p.name}${p.date ? ` (${p.date})` : ""}; ${SOURCE_LABEL[p.tier] ?? "found"}; ${p.kind === "answer" ? `answers ${p.asks.join(", ")}` : "from what they've shared"}${p.shortNotice ? "; short notice" : ""}${p.details ? `; ${clip(p.details, 200)}` : ""}`)
+      .map((p) => `${p.id} ${p.name}${p.date ? ` (${p.date})` : ""}; ${SOURCE_LABEL[p.tier] ?? "found"}; ${p.kind === "answer" ? `answers ${p.asks.join(", ")}` : "from what they've shared"}${p.shortNotice ? "; short notice" : ""}${p.history ? `; ${clip(p.history, 200)}` : ""}${p.details ? `; ${clip(p.details, 200)}` : ""}`)
       .join("\n"),
   );
   return lines.join("\n");

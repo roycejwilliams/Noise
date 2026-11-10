@@ -670,3 +670,39 @@ export async function realRecallDeps(): Promise<RecallDeps> {
     onTiming: (t) => console.log(`recall.timing ${JSON.stringify(t)}`),
   };
 }
+
+// ---------------------------------------------------------------- talked about since (Royce, 2026-11-10)
+
+// When a thing Cue sent was named again in their conversation (texts and calls) after a moment, by whom: the same rows and labels the
+// lookup reads, the same member boundary in the SQL, no window and no row cap past `since`. Only times come back, never words. The
+// thing is named when a line carries its words of substance (knowledge/sent.ts namesThing; "the SPC residency" names "South Park
+// Commons Member Residency"). Throws when the record can't be read: the caller treats that as unknown, never as "never discussed".
+// sends: when it was sent; Cue's own lines within SEND_ECHO_HOURS after a send are the send itself (the offer's text), not a later
+// conversation.
+export const SEND_ECHO_HOURS = 6;
+export type Mentions = { member: Date[]; cue: Date[] };
+export async function mentionsSince(db: RecallDb, userId: string, name: string, since: Date, o: { sends?: Date[] } = {}): Promise<Mentions> {
+  const { namesThing, thingSearchTerms } = await import("./knowledge/sent.js");
+  const terms = thingSearchTerms(name);
+  const out: Mentions = { member: [], cue: [] };
+  if (!terms.length) return out;
+  const { rows } = await db.query(
+    `SELECT memory_type, content, created_at FROM co_memories
+     WHERE user_id = $1 AND created_at > $2 AND ${kindFilter("any")} AND content ~* $3
+     ORDER BY created_at`,
+    [userId, since.toISOString(), terms.map((t) => `\\m${reEscape(t)}`).join("|")],
+  );
+  for (const r of rows as Row[]) {
+    const at = new Date(r.created_at);
+    const lines = r.memory_type === "call_transcript" ? labelCallTranscript(r.content, at, "UTC") : [labelTextRow(r.content, at, "UTC")].filter((l): l is RecallLine => !!l);
+    for (const l of lines) {
+      if (!namesThing(l.text, name)) continue;
+      if (l.speaker === "member") out.member.push(at);
+      else if (l.speaker === "cue" || l.speaker === "summary") {
+        if ((o.sends ?? []).some((s) => at.getTime() >= s.getTime() - 60_000 && at.getTime() <= s.getTime() + SEND_ECHO_HOURS * 3_600_000)) continue;
+        out.cue.push(at);
+      }
+    }
+  }
+  return out;
+}
