@@ -98,12 +98,17 @@ const turn = (gate: (d: string, findsWaiting?: () => boolean) => string = (d) =>
 }
 {
   const L = await import("../../src/agent/loopTools.js");
-  check("the line while a search runs is one short natural line saying what Cue is looking for in their terms, not a bare label and never a generic status line ('let me look')", /when a lookup is really starting, it will take a moment, and a word to them would help, give one short, natural line in your own voice that says what you're looking for, in their terms/.test(L.WHILE_LOOKING) && /Leave it empty when the answer will be quick or a line wouldn't help; it is never required and never filler/.test(L.WHILE_LOOKING) && /Not a bare label/.test(L.WHILE_LOOKING) && /Looking at what's on in SF this week/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
+  check("the line while a search runs answers them in Cue's own voice, reacting to what they asked or how they put it, different every time; optional, first search only, never filler, not a bare label and never a generic status line ('let me look')", /give one short line in your own voice that answers them the way a person would, never a status/.test(L.WHILE_LOOKING) && /React to what they asked or how they put it \(their mood, a word they chose, the occasion\), warm, playful or wry as fits them and the moment, and different every time/.test(L.WHILE_LOOKING) && /Optional, and only on your first search/.test(L.WHILE_LOOKING) && /Leave it empty when the answer will be quick or a line wouldn't help; it is never required and never filler/.test(L.WHILE_LOOKING) && /Not a bare label/.test(L.WHILE_LOOKING) && /let me look/.test(L.WHILE_LOOKING) && /never one you've sent them before/.test(L.WHILE_LOOKING) && (readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8").match(/whileLooking: z\.string\(\)\.optional\(\)\.describe\(WHILE_LOOKING\)/g) ?? []).length === 3);
+  // Royce, 2026-11-09: the old anchor ("Looking at what's on in SF this week.") made the model copy "Looking for...". It's gone, and
+  // no example of the kind of line opens on "Looking".
+  const examples = [...L.WHILE_LOOKING.matchAll(/gets "([^"]+)"/g)].map((m) => m[1]);
+  check("the anchor example is gone; 3-4 example lines from different moments, none opening on 'Looking'", !/Looking at what's on in SF this week/.test(L.WHILE_LOOKING) && examples.length >= 3 && examples.length <= 4 && examples.every((x) => !/^\s*looking\b/i.test(x)) && new Set(examples.map((x) => x.split(" ")[0])).size === examples.length, examples);
+  check("the new rules: never 'Looking for'/'Looking at', never just their request said back, never knowledge Cue doesn't have", /Never open with "Looking for" or "Looking at", and never just say their request back to them/.test(L.WHILE_LOOKING) && /never knowledge you don't have \("I know just the place"\)/.test(L.WHILE_LOOKING));
 }
 {
   // 2026-11-06 live test: "Co is looking: founder dinners before an investor meeting, good instinct".
   const L = await import("../../src/agent/loopTools.js");
-  check("the progress-line guidance forbids praise, a recap, machinery and anything implying a result", /No praise, no recap of what they said, no tools or machinery, and never anything that implies you've found something/.test(L.WHILE_LOOKING) && !/friend who's into it/.test(L.WHILE_LOOKING));
+  check("the progress-line guidance forbids praise, a recap, machinery and anything implying a result", /never just say their request back to them\. No praise, no tools or machinery, never anything that implies you've found something/.test(L.WHILE_LOOKING) && !/friend who's into it/.test(L.WHILE_LOOKING));
   const C = await import("../../src/services/capabilities.js");
   const use = C.toolUse("shareFinds");
   check("the caption guidance covers a find that isn't the form they asked for ('not a dinner, but...')", /isn't the form they asked for/.test(use) && /not a dinner, but/.test(use));
@@ -121,12 +126,30 @@ const turn = (gate: (d: string, findsWaiting?: () => boolean) => string = (d) =>
   };
   const t1 = mk();
   const first = await t1.tools.searchEvents.execute({ what: "things to do in SF", whileLooking: "Let me see what's good this week." }, { toolCallId: "a", messages: [] });
-  check("a stock holding line ('Let me see…') is refused once, before anything is searched", first.ok === false && /stock line/.test(first.error) && t1.state.holdLines.length === 0 && t1.loop().found.size === 0, first);
+  check("a stock holding line ('Let me see…') is refused once, before anything is searched", first.ok === false && /generic status line/.test(first.error) && t1.state.holdLines.length === 0 && t1.loop().found.size === 0, first);
   const second = await t1.tools.searchEvents.execute({ what: "things to do in SF", whileLooking: "Let me look." }, { toolCallId: "b", messages: [] });
   check("... a second stock line is never sent, and the search goes on without it", second.ok === true && t1.state.holdLines.length === 0 && t1.loop().found.size === 1, second);
   const t2 = mk();
   const own = await t2.tools.searchEvents.execute({ what: "things to do in SF", whileLooking: "Ooh, a free Saturday in SF, pulling the good ones." }, { toolCallId: "c", messages: [] });
   check("a line that reacts to what they asked goes out as the holding line", own.ok === true && t2.state.holdLines[0] === "Ooh, a free Saturday in SF, pulling the good ones.");
+  // Royce, 2026-11-09: his wine-night ask. The line he got reads as a status restating it; the line he wanted reacts, in Cue's voice.
+  const wine = "Can you find me a wine night in SF this week where I can whine down and chill";
+  const mkWine = () => createConversationTools({
+    userId: "u", phoneNumber: "+14155550101", resolvedContent: wine, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, stubSearch: true,
+    stubEvents: [{ name: FINDS[0].name, url: FINDS[0].url, lines: ["Saturday 9:30am."] }],
+    sendCoReply: async () => true, facts: { add: () => {}, text: () => "" },
+  } as any) as any;
+  const good = "A wine night sounds right. Let me find you somewhere quiet.";
+  const t3 = mkWine();
+  const went = await t3.tools.searchEvents.execute({ what: "wine night", city: "SF", whileLooking: good }, { toolCallId: "w1", messages: [] });
+  check("11-09: a line in Cue's own voice that reacts to the wine-night ask goes out as the holding line", L.holdProblem(good, wine) === null && went.ok === true && t3.state.holdLines[0] === good, { problem: L.holdProblem(good, wine), went, held: t3.state.holdLines });
+  const bad = "Looking for a low key wine night in SF.";
+  const t4 = mkWine();
+  const refused = await t4.tools.searchEvents.execute({ what: "wine night", city: "SF", whileLooking: bad }, { toolCallId: "w2", messages: [] });
+  check("11-09: \"Looking for a low key wine night in SF.\" is refused as a status that says their request back, before anything is searched", /says their request back/.test(L.holdProblem(bad, wine) ?? "") && refused.ok === false && /says their request back/.test(refused.error) && /never opening on "Looking for" or "Looking at"/.test(refused.error) && t4.state.holdLines.length === 0 && t4.loop().found.size === 0, refused);
+  check("11-09: a line only made of their own words is a restatement, whatever its opener; one with words of its own isn't", L.restatesThem("A wine night in SF to chill.", wine) && /only says their request back/.test(L.holdProblem("Wine night in SF this week", wine) ?? "") && !L.restatesThem(good, wine) && L.holdProblem("Whine down, I see what you did there.", wine) === null);
+  check("11-09: a generic status is still refused on the wine-night ask", ["Let me look.", "One sec, checking", "On it", "Give me a minute"].every((x) => /generic status line/.test(L.holdProblem(x, wine) ?? "")));
+  check("11-09: 'Looking for'/'Looking at' is refused even when it names their thing; 'Looking forward' isn't an opener", ["Looking at founder dinners in SF for Saturday", "Ok, looking for a wine bar in SF", "Looking for somewhere quiet to whine down"].every((x) => L.LOOKING_OPENER.test(x) && L.stockLine(x, wine)) && !L.LOOKING_OPENER.test("Looking forward to this one"));
   check("stock openers read as stock; lines that react don't", ["Let me look", "Let me see what's good this week.", "On it", "One sec, checking", "Give me a minute"].every((x) => L.STOCK_HOLD.test(x)) && !["Ooh, SF on a Saturday, digging in", "A low-key night sounds right, pulling a few", "Love that, founder dinners this week coming up"].some((x) => L.STOCK_HOLD.test(x)));
 }
 // ---------------------------------------------------------------- meaning, not words (Royce, 2026-10-17: "the guards match words,
@@ -278,9 +301,12 @@ const LOOSE_NAMED: [string, number][] = [
   // Should-fix 2: a stock opener that names something of theirs reacts to them.
   const L = await import("../../src/agent/loopTools.js");
   const ask = "Anything you have for me in SF? Founder stuff this Saturday, maybe the Angel Island run";
-  const REACTS = ["Looking at founder dinners in SF for Saturday", "Let me see if the Angel Island run still has spots", "Digging into SF founder events this weekend", "Yes, looking good for Saturday in SF", "Hold on, Saturday's actually stacked", "I'll find you something low key for Saturday"];
+  // 11-09: two of the reviewer's six now fail on purpose: "Looking at founder dinners in SF for Saturday" opens on "Looking at", and
+  // "Yes, looking good for Saturday in SF" is only their own words said back (LOOKING_OPENER, restatesThem).
+  const REACTS = ["Let me see if the Angel Island run still has spots", "Digging into SF founder events this weekend", "Hold on, Saturday's actually stacked", "I'll find you something low key for Saturday"];
+  check("11-09: the two that now fail, fail for the new reasons", /opens on "Looking for" or "Looking at"/.test(L.holdProblem("Looking at founder dinners in SF for Saturday", ask) ?? "") && /only says their request back/.test(L.holdProblem("Yes, looking good for Saturday in SF", ask) ?? ""));
   const STOCK = ["Let me look", "Let me see what's good this week.", "On it", "One sec, checking", "Give me a minute", "Ok, let me look", "Searching now", "Let me find you something good"];
-  check("review 2: a stock opener naming something from their words isn't stock (the reviewer's six)", REACTS.every((x) => !L.stockLine(x, ask)), REACTS.filter((x) => L.stockLine(x, ask)));
+  check("review 2: a stock opener naming something from their words isn't stock (four of the reviewer's six)", REACTS.every((x) => !L.stockLine(x, ask)), REACTS.filter((x) => L.stockLine(x, ask)));
   check("... one naming nothing of theirs still is", STOCK.every((x) => L.stockLine(x, ask)), STOCK.filter((x) => !L.stockLine(x, ask)));
   // Third review: generic lines that only echo filler from their text ("going on", "out there", "happening").
   const FILLER: [string, string][] = [["Let me see what's going on", "What's going on this week?"], ["Let me look out there", "Anything good out there?"], ["Let me see what's happening", "anything happening tonight?"]];
