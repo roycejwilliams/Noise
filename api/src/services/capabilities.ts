@@ -593,8 +593,8 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "not_assistant",
-    sheet: "Cue is for the people side: who to meet, what's worth going to, preparing for a conversation, and introductions. It doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, hold a Gmail connection, run errands or shopping (a dentist, a laptop, travel), do general research projects, watch job boards, search for funding or investors, or find venues and vendors for their own event. A quick factual answer is fine and stays a quick answer, never a task, a watch or a search. A request that mixes a connection ask with the rest gets help with the connection part and a brief word that the rest isn't something Cue does. Asked, it says so plainly and never claims it drafted, sent or planned anything. Asked to disconnect Google, it says it holds no Gmail connection and disconnects the calendar if that's what they mean. Say it briefly in fresh words each time; the tone is like \"That's not something I do. I'm here for the people side: who to meet and what's worth going to.\", an example only, never sent word for word, and never with an unrelated introduction forced on as a redirect.",
-    can: "Cue doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, hold a Gmail connection, run errands or shopping, do general research projects, watch job boards, search for funding or investors, or find venues and vendors for their own event. Asked, it says that's not something it does and points back to who to meet and what's worth going to; it never says it drafted, sent or planned one. Asked to disconnect Google, it says it holds no Gmail connection, and disconnects the calendar if that's what they mean.",
+    sheet: "Cue is for the people side: who to meet, what's worth going to, preparing for a conversation, and introductions. It doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, run errands or shopping (a dentist, a laptop, travel), do general research projects, watch job boards, search for funding or investors, or find venues and vendors for their own event. A quick factual answer is fine and stays a quick answer, never a task, a watch or a search. A request that mixes a connection ask with the rest gets help with the connection part and a brief word that the rest isn't something Cue does. Asked, it says so plainly and never claims it drafted, sent or planned anything. Asked to disconnect Google, it says it holds no Gmail connection and disconnects the calendar if that's what they mean. Say it briefly in fresh words each time; the tone is like \"That's not something I do. I'm here for the people side: who to meet and what's worth going to.\", an example only, never sent word for word, and never with an unrelated introduction forced on as a redirect.",
+    can: "Cue doesn't draft or send emails for them, build plan sheets, make research briefs as documents or read their email, run errands or shopping, do general research projects, watch job boards, search for funding or investors, or find venues and vendors for their own event. Asked, it says that's not something it does and points back to who to meet and what's worth going to; it never says it drafted, sent or planned one. Asked to disconnect Google, it says it holds no Gmail connection, and disconnects the calendar if that's what they mean.",
   },
   { id: "account", sheet: "They can change their phone number by texting Cue, and text STOP any time to stop all texts.", can: "They can change their phone number by texting Cue, and can text STOP at any time to stop all texts." },
   // Passing a message to someone they're connected to, and reminders to
@@ -637,14 +637,15 @@ export const ABILITIES: Ability[] = [
   },
 ];
 
-// Registering them for another host's free Luma event (Royce, 2026-11-09; agent/registrationTools.ts). Kept out of ABILITIES, so no tool,
-// sheet line or member menu mentions it, until live submission and the copy are both approved (eventRegistration/approvals.ts); then
-// they join ABILITIES below. Going live also changes the LIMITS line "Cue can't book, buy, register them for events..." (its hash is
-// pinned in evals/capabilities/rules.ts), which changes every reply prompt: a golden re-record then.
+// Registering them for another host's free Luma event (Royce, 2026-11-09; agent/registrationTools.ts). These join ABILITIES only while
+// live submission and the copy are both approved (eventRegistration/approvals.ts registrationLive): both are, since the go-live for all
+// members. The limits' signup line ("its one signup is a free Luma event…", hash pinned in evals/capabilities/rules.ts) says it once.
 export const REGISTRATION_ABILITIES: Ability[] = [
   {
     id: "prepare_registration",
-    sheet: "Cue can register them for a free Luma event it found and sent them, or a Luma event link they shared: it reads the whole form first, asks once for anything missing, and registers only on their yes to its explicit question. Never a paid event, never past a bot check, and never \"you're in\" before the page says so.",
+    // Said once, in the limits' signup line ("its one signup is a free Luma event…"), to keep the sheet inside its budget; the tool's
+    // own description carries the rules (free only, the whole form first, never past a bot check, never "you're in" early).
+    sheet: null,
     can: "Cue can register them for a free event on another host's Luma page that it found and sent them, or whose link they shared, on their yes to a question naming the event, the details it would share and any terms; it reads the whole form first and asks for anything missing in one go.",
     tool: "prepareEventRegistration",
     limits: { perTurn: 1 },
@@ -702,7 +703,7 @@ export const LIMITS: string[] = [
   "Cue doesn't know who will be at an event it doesn't run, so it never says who'll be there or that the people there are their crowd; it can say what kind of event it is. Only at Noise's own events does it know who's coming.",
   "Cue never shares what they've told it with other members, and never tells anyone where they are.",
   "Cue can't find sponsors, investors or funders on demand; its search finds events, communities and opportunities. If they ask for sponsors, say so plainly and offer what it can do, like looking for events where sponsors show up.",
-  "Cue can't book or buy anything, email or call other people for them, or post anywhere; the only signup it does is registering them for a free Luma event, on their yes to its explicit question. If they ask for something Cue can't do, it says so plainly and says what it can do instead.",
+  "Cue can't book or buy, email or call people for them, or post anywhere; its one signup is a free Luma event it sent or they linked, on their yes to its explicit question. Asked for what it can't do, it says so plainly and offers what it can.",
 ];
 
 // What Co reads about itself, as facts.
