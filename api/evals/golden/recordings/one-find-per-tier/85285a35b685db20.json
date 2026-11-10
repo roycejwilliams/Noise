@@ -1,7 +1,7 @@
 {
-  "hash": "497d71ce3069890b",
+  "hash": "85285a35b685db20",
   "case": "one-find-per-tier",
-  "recorded_at": "2026-10-28T01:30:30.617Z",
+  "recorded_at": "2026-11-10T20:05:09.342Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -18,7 +18,7 @@
       "max_tokens": 2848,
       "messages": [
         {
-          "content": "You check Cue's reasons for leaving something out of a member's day. Answer only from what's written here.\n\nTheir active goals (what they're working toward now):\n- meet other climate founders who actually see each other\n\nREASONS. For each, does this reason claim that something is finished, closed, done, set aside or already known to them (a goal or ask that ended, something they already have, are going to, or said no to)? Judging fit alone (not their scene, only loosely related, too far, too late) is not such a claim.\nW1: \"A 300+ person mixer is the opposite of the small-room dinners/hikes they asked for; C2 already covers the event slot with a better fit.\"\n\nAnswer only with JSON: {\"answers\":[{\"id\":\"R1\",\"yes\":false},{\"id\":\"W1\",\"yes\":true}]}, one entry per id.",
+          "content": "You check Cue's reasons for leaving something out of a member's day. Answer only from what's written here.\n\nTheir active goals (what they're working toward now):\n- meet other climate founders who actually see each other\n\nREASONS. For each, does this reason claim that something is finished, closed, done, set aside or already known to them (a goal or ask that ended, something they already have, are going to, or said no to)? Judging fit alone (not their scene, only loosely related, too far, too late) is not such a claim.\nW1: \"A 300+ RSVP mixer with name tags is the opposite of the small rooms where people 'actually see each other' that you're after — it's a crowd, not a crew.\"\n\nAnswer only with JSON: {\"answers\":[{\"id\":\"R1\",\"yes\":false},{\"id\":\"W1\",\"yes\":true}]}, one entry per id.",
           "role": "user"
         }
       ],
@@ -35,7 +35,7 @@
       "model": "claude-haiku-5-5",
       "text": "{\"answers\":[{\"id\":\"W1\",\"yes\":false}]}",
       "usage": {
-        "input_tokens": 262,
+        "input_tokens": 269,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation": {
@@ -52,7 +52,7 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgTmd7ENSvqtJNx8T9gz7",
+        "id": "msg_011Cgur8wPS7XUuqHpKovFGx",
         "type": "message",
         "role": "assistant",
         "content": [
@@ -66,7 +66,7 @@
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 262,
+          "input_tokens": 269,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
@@ -87,7 +87,7 @@
   ],
   "structure": {
     "v": "be0153bcbe53",
-    "hash": "497d71ce3069890b",
+    "hash": "85285a35b685db20",
     "wording": {},
     "guard": {},
     "format": []
