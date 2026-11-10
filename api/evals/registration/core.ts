@@ -155,6 +155,20 @@ check("event key", R.eventKeyOf("https://lu.ma/demo-night") === "luma:demo-night
   check("nothing new revealed: no re-ask", !n3.reaskSubmit && !n3.ask.length);
 }
 
+// ---- who the event is for: read from its own description, put to the member as a fact, never judged
+{
+  const live = "Sam co-founded Northwind in 2013 to make investing more accessible. This event is open to Stanford students and affiliates. You must RSVP to attend. It will take place at 5:15 p.m. on Wednesday, November 11, on Stanford's campus.";
+  const r = R.restrictionsIn(live);
+  check("restrictions: the live page's 'open to Stanford students and affiliates' is read, verbatim", r[0] === "This event is open to Stanford students and affiliates." && !r.some((x) => /Northwind/.test(x)), r);
+  check("restrictions: 21+, invite only, members only, ID required", R.restrictionsIn("Drinks provided. Must be 21+ to enter.")[0] === "Must be 21+ to enter." && R.restrictionsIn("This is an invite-only dinner.").length === 1 && R.restrictionsIn("Members only.").length === 1 && R.restrictionsIn("Please bring your student ID.").length === 1);
+  check("restrictions: an open, unrestricted description has none", R.restrictionsIn("Join us for demos, pizza and good conversation. Everyone welcome.").length === 0);
+  const form = base({ restrictions: r });
+  const plan = R.planFill(form, facts);
+  check("restrictions: part of the scope their yes covers", JSON.stringify(R.scopeOf(form, plan).restrictions) === JSON.stringify(r));
+  const later = base({ restrictions: [...r, "Must be 21+ to enter."] });
+  check("restrictions: a new one since the ask is a material change (asked again)", R.scopeChanges(R.scopeOf(form, plan), R.scopeOf(later, R.planFill(later, facts))).some((x) => /who it's for/.test(x)));
+}
+
 // ---- results and reconcile
 check("result: registered", R.readResultText("You're In. A confirmation was sent to your email.") === "registered");
 check("result: pending approval", R.readResultText("Your request has been sent. Pending approval from the host.") === "pending_approval");
