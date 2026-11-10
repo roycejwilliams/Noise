@@ -123,13 +123,16 @@ const fresh = () => {
 let exaCalls = 0;
 let reserves = 0;
 const at = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
-const via = (o: { state?: "ok" | "denied" | "off"; lookup?: (slug: string) => Promise<any>; event?: (id: string) => Promise<any>; pages?: { url: string; title: string }[] }) => ({
+let pageReads = 0;
+const via = (o: { state?: "ok" | "denied" | "off"; lookup?: (slug: string) => Promise<any>; event?: (id: string) => Promise<any>; pages?: { url: string; title: string }[]; page?: (slug: string) => Promise<any> }) => ({
   exa: async () => (exaCalls++, { pages: (o.pages ?? []).map((p) => ({ ...p, published: null, text: "" })), cost: 0.022, error: null }),
   lookup: o.lookup ?? (async () => null),
   event: o.event ?? (async () => null),
   lumaApi: () => true,
   apiState: async () => o.state ?? "ok",
   denial: () => (o.state === "denied" ? { at: Date.now(), until: Date.now() + 30 * 60_000, status: 403, message: PLUS, streak: 1 } : null),
+  // The page route (PR b): blocked unless a test says otherwise, so these tests are about the API alone.
+  page: async (slug: string) => (pageReads++, o.page ? o.page(slug) : { kind: "blocked", why: "HTTP 403" }),
   configured: () => true,
   now: () => new Date(),
   refusing: () => false,
@@ -139,13 +142,14 @@ const via = (o: { state?: "ok" | "denied" | "off"; lookup?: (slug: string) => Pr
 });
 const run = (d: ReturnType<typeof via>, what = "founder dinners") => {
   V.clearLumaViaExaCache();
+  V.resetLumaPages();
   return V.lumaEventsViaExa(what, "San Francisco", { userId: null, source: "sweep", inRange: () => true, dates: "November 10 to November 24, 2026", deps: d });
 };
 {
   exaCalls = 0; reserves = 0;
   const r = await run(via({ state: "denied", pages: [{ url: "https://lu.ma/abc123", title: "Dinner" }] }));
-  check("the API refusing the key: no Exa search, no budget slot taken", exaCalls === 0 && reserves === 0, { exaCalls, reserves });
-  check("and it says so, once, as a source-wide failure (not 'nothing found')", !!r && r.report.sourceDown === true && /refused the key \(HTTP 403: "Your calendar must have an active Luma Plus plan/.test(r.report.error ?? "") && /no Luma search through Exa runs/.test(r.report.error ?? ""), r?.report);
+  check("the API refusing the key and Luma's pages not served: no Exa search, no budget slot taken", exaCalls === 0 && reserves === 0, { exaCalls, reserves });
+  check("and it says so, once, as a source-wide failure (not 'nothing found'), naming both routes", !!r && r.report.sourceDown === true && /refused the key \(HTTP 403: "Your calendar must have an active Luma Plus plan/.test(r.report.error ?? "") && /weren't served to us \(HTTP 403\)/.test(r.report.error ?? "") && /no Luma search through Exa runs/.test(r.report.error ?? ""), r?.report);
   check("the failure reaches the sweep's failures (not a setting)", S.eventSearchFailures({ viaExa: { error: r!.report.error } }).length === 1);
 }
 {

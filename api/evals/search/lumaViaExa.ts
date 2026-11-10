@@ -96,7 +96,18 @@ const CATALOG = [
   { apiId: "discplace-nyc", name: "New York", slug: "nyc", lat: 40.7128, lng: -74.006 },
 ];
 const placeDep = async (city: string | null) => V.catalogCity(CATALOG, city);
-const viaDeps = (configured = true) => ({ exa: exaDep, lookup: lookupDep, event: eventDep, lumaApi: () => true, configured: () => configured, now: () => new Date(), refusing: () => lumaRefusing, pauseMinutes: 10, reserve: reserveDep, place: placeDep });
+// An event's own page (the page route, used when the API can't be): the same world, as the page's record. Every read is counted.
+let pageRouteReads: string[] = [];
+const pageRouteDep = async (slug: string): Promise<any> => {
+  pageRouteReads.push(slug);
+  const p = world.pages[slug];
+  if (!p) return { kind: "missing" };
+  if (typeof p === "string") return p.startsWith("calendar:") ? { kind: "not_event" } : { kind: "failed", why: p };
+  const e = await eventDep(idOf(slug));
+  apiCalls.pop();
+  return { kind: "event", record: { ...e, details: { ...p }, registration: p.soldOut ? "sold-out" : "open", soldOut: !!p.soldOut, cancelled: false, noindex: false } };
+};
+const viaDeps = (configured = true) => ({ exa: exaDep, lookup: lookupDep, event: eventDep, page: pageRouteDep, lumaApi: () => true, configured: () => configured, now: () => new Date(), refusing: () => lumaRefusing, pauseMinutes: 10, reserve: reserveDep, place: placeDep });
 // eventCandidates with every outside source stubbed. Nearby: San Francisco and Oakland are near each other, nothing else is.
 const BAY = new Set(["san francisco", "oakland"]);
 const sources = (o: { configured?: boolean; viaExa?: any } = {}) => ({
@@ -118,6 +129,8 @@ const reset = (w: Partial<World>) => {
   logs = [];
   pageReads = [];
   apiCalls = [];
+  pageRouteReads = [];
+  V.resetLumaPages();
   reserves = [];
   budgetSays = { ok: true, reason: null };
   lumaRefusing = false;
@@ -497,16 +510,17 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   reset({ feed: FEED, pages: { ...FEED_PAGES, good1: page({ startAt: at(40) }) }, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
   lumaRefusing = true;
   const s = await search();
-  check("while Luma's API is refusing: no Exa search, no budget taken, no API checks", exaCalls.length === 0 && reserves.length === 0 && apiCalls.length === 0, { exaCalls, reserves, apiCalls });
-  check("...logged with why, and the member's results are exactly the feed's", /^Luma's API refused a request \(429\) in the last 10 minutes, so no Luma search through Exa/.test(logs[0]?.reason ?? "") && JSON.stringify(links(s)) === JSON.stringify(alone), { reason: logs[0]?.reason, got: links(s), alone });
+  // 2026-11-10 (page route): while the API is refusing, the links are checked on their own public pages instead of no search at all.
+  check("while Luma's API is refusing: no API checks; the link is read from its own page", apiCalls.length === 0 && pageRouteReads.includes("good1") && links(s).includes("https://lu.ma/good1"), { apiCalls, pageRouteReads, got: links(s) });
+  check("...logged as the page route, with why the API wasn't used, and no failure", logs[0]?.proposal?.route === "page" && /429/.test(logs[0]?.proposal?.apiDown ?? "") && logs[0]?.reason === null && JSON.stringify(links(s).filter((u: string) => !u.includes("good1"))) === JSON.stringify(alone), { proposal: logs[0]?.proposal, reason: logs[0]?.reason });
   // Our own per-minute stop: said apart from Luma's refusals.
   reset({ feed: FEED, exa: [{ url: "https://lu.ma/l1", title: "Founder dinner" }, { url: "https://lu.ma/l2", title: "Founder dinner 2" }], pages: { ...FEED_PAGES, l1: page({ startAt: at(40) }), l2: "limited" } });
   const lim = await search();
   check("a check left unread at our own per-minute stop is said as that, and the rest go out", lim.viaExa?.limited === 1 && /^1 of 2 were left unchecked at the per-minute stop: those events couldn't be checked, so they were left out$/.test(logs[0]?.reason ?? "") && links(lim).includes("https://lu.ma/l1"), { viaExa: lim.viaExa, reason: logs[0]?.reason });
   // No Luma API key: Exa isn't asked (its links couldn't be checked).
-  reset({ feed: FEED, pages: FEED_PAGES, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
+  reset({ feed: FEED, pages: { ...FEED_PAGES, good1: page({ startAt: at(40) }) }, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
   const noApi = await search({ viaExa: (w: string, c: string | null, opt: any) => V.lumaEventsViaExa(w, c, { ...opt, deps: { ...viaDeps(), lumaApi: () => false } }) });
-  check("no LUMA_API_KEY: no Exa call, no budget, the feed alone, and the log says how to turn it on", exaCalls.length === 0 && reserves.length === 0 && /^LUMA_API_KEY isn't set on this service, so Exa's Luma links can't be checked/.test(logs[0]?.reason ?? "") && JSON.stringify(links(noApi)) === JSON.stringify(alone), { reason: logs[0]?.reason });
+  check("no LUMA_API_KEY: the page route checks Exa's links (no API call), and the log says so", apiCalls.length === 0 && pageRouteReads.includes("good1") && links(noApi).includes("https://lu.ma/good1") && logs[0]?.proposal?.route === "page" && /LUMA_API_KEY isn't set/.test(logs[0]?.proposal?.apiDown ?? ""), { proposal: logs[0]?.proposal, got: links(noApi) });
 }
 {
   // Luma's official API client (services/luma.ts), against a fake fetch. The records are shaped like the live answers of 2026-10-19
