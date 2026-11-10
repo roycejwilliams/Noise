@@ -79,6 +79,28 @@ check("not a code: a time, money, a zip, an address, a phone number, a sentence"
   check("no restriction on the page: no such line", !C.submitAsk({ eventName: "x", when: null, email: "a@b.c", link: "l" }, plain, RGx.scopeOf({ ...form, restrictions: [] }, plain), null).includes("Their page also says"));
 }
 
+// ---- the fit line's guidance, pinned (Royce, 2026-11-09, after the paid fit run): their specific reason, backed by both, or nothing
+{
+  const use = Cap.toolUse("prepareEventRegistration");
+  const pin = [
+    "naming their SPECIFIC reason, from their own words or what they've told you, that the event's own page backs",
+    "Never a vague one (\"lines up with where you are right now\") and never just a description of the event.",
+    "If no specific reason is backed by both their own words and the event's page, leave it out.",
+  ];
+  check("fit guidance in the tool's description: specific reason, backed by both, never vague, never just the event", pin.every((x) => use.includes(x)) && !use.includes("on why it fits, only from the event's own page or what the find said"), use);
+  check("fit guidance on the tool's fit input says the same", T.FIT_DESCRIBE.includes("SPECIFIC reason") && T.FIT_DESCRIBE.includes("never just a description of the event") && T.FIT_DESCRIBE.includes("leave it out"));
+  check("the fit quality script uses the same guidance", /FIT_DESCRIBE/.test(fs.readFileSync(new URL("./fitQuality.ts", import.meta.url), "utf8")));
+}
+// ---- the stored outcome never keeps the member's own name or email
+{
+  const facts: any = { first_name: { value: "Jordan", source: "account" }, last_name: { value: "Ellis", source: "account" }, email: { value: "member@example.com", source: "account" } };
+  const red = T.redactMember("You’re In Jordan Ellis · member@example.com Add to Calendar other@example.org", ["member@example.com"], facts);
+  check("outcome detail: name and email redacted (and any other email)", red === "You’re In [member] · [member] Add to Calendar [email]", red);
+  check("outcome detail: nothing to redact stays as it is", T.redactMember("You’re In", [], facts) === "You’re In" && T.redactMember(null, [], facts) === null);
+  check("removing an answer also scrubs it from the stored outcome detail", JSON.stringify(W.scrubSignupValue({ scope: null, askText: null, drafts: [], outcome: { state: "registered", detail: "You’re In Northwind" } }, "c", "Northwind").outcome) === JSON.stringify({ state: "registered", detail: "You’re In [removed]" }));
+  check("the forget-residue audit checks the outcome too", /cols: \["answers", "drafts", "ask_text", "scope", "outcome"\]/.test(src("scripts/forgetResidueAudit.ts")));
+}
+
 // ---- today: nothing exists for members, nothing in any prompt changes
 check("approvals: live submission and copy both unapproved (code constants)", A.LUMA_LIVE_SUBMIT_APPROVED === false && A.REGISTRATION_COPY_APPROVED === false && !A.registrationLive());
 check("today: no registration ability in the registry Cue reads (no sheet line, no tool, no prompt change)", !Cap.ABILITIES.some((a) => Cap.REGISTRATION_ABILITIES.some((r) => r.id === a.id)) && !Cap.capabilitySheet().some((l) => /register them for a free Luma/i.test(l)));
