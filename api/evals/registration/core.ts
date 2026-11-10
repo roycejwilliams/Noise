@@ -160,7 +160,10 @@ check("result: registered", R.readResultText("You're In. A confirmation was sent
 check("result: pending approval", R.readResultText("Your request has been sent. Pending approval from the host.") === "pending_approval");
 check("result: waitlisted", R.readResultText("You're on the waitlist.") === "waitlisted");
 check("result: already registered (Luma's documented repeat message)", R.readResultText("You have already registered for this event.") === "already_registered");
-check("result: a code step is never success", R.readResultText("Enter the code we sent to j***@example.com") === "blocked" && R.resultBlocker("Enter the code we sent")?.kind === "verification");
+check("result: a code step's words are never success (the code step itself is read from the page's structure)", R.readResultText("Enter the code we sent to j***@example.com") === "unknown" && R.resultBlocker("Enter the code we sent")?.kind === "verification");
+// Live test 2026-11-09 (luma.com/example-event): the signup succeeded, but the whole page's text, header nav included, read as blocked.
+check("result: a nav 'Sign In' is never a sign-in requirement (the live collision)", R.readResultText("Skip to Content 4:02 PM PST Discover Events Sign In Hosted By Example Host You're In") === "registered" && R.readResultText("Discover Events Sign In") === "unknown");
+check("result: a 'please sign in' line in the words alone is unknown, never blocked", R.readResultText("Please sign in to continue") === "unknown");
 check("result: 'submitted' alone is unknown, never 'you're in'", R.readResultText("Submitted") === "unknown");
 check("reconcile: unknown stays uncertain; a retry needs their yes", (R.reconcile({ state: "unknown" }) as any).retryNeedsTheirYes === true);
 check("reconcile: the page now shows registered settles it", (R.reconcile({ state: "registered" }) as any).settle === "registered");

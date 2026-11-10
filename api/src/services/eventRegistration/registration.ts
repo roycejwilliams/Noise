@@ -503,11 +503,14 @@ export function reconcile(pageNow: { state: Outcome["state"] | "unknown" }): Rec
 
 // Pure: what the page says after a submit, from its visible text (the driver reads it; the wording is Luma's guest-facing text as far
 // as it can be known without a live submit: every pattern here still needs live verification).
+// The text read here is the REGISTRATION RESULT only: the dialog or the event's RSVP/ticket region the submit acted on, never the
+// whole page (live test 2026-11-09, luma.com/example-event: a signup that succeeded was read as "blocked" because the page's header nav
+// carries "Sign In"). A sign-in or a code step is never read from words here: the driver reads it from the page's structure (a code
+// input, or a sign-in form in place of the registration form, inside that region). Anything this can't tell is "unknown", which the
+// record keeps as uncertain after a click: never "blocked", never a guessed "failed", and never a second submit.
 export function readResultText(text: string): Outcome["state"] | "unknown" {
   const t = String(text ?? "").replace(/[’]/g, "'").replace(/\s+/g, " ");
   if (/already registered|already (?:on the )?guest list|you('| a)re already (?:going|in)/i.test(t)) return "already_registered";
-  if (/(?:enter|check your (?:email|inbox) for) (?:the |a )?(?:code|verification)|verify your email|one-time code|verification code/i.test(t)) return "blocked";
-  if (/please sign in|sign in to (?:continue|register)|log in to (?:continue|register)/i.test(t)) return "blocked";
   if (/you('| a)re on the waitlist|added to the waitlist|joined the waitlist|you('| a)re waitlisted|on the wait ?list/i.test(t)) return "waitlisted";
   if (/pending approval|request (?:has been |was )?(?:sent|submitted|received)|waiting (?:for|on) (?:the )?host|awaiting approval|approval pending|registration pending/i.test(t)) return "pending_approval";
   if (/you('| a)re in\b|you('| a)re registered|you('| a)re going|registration (?:is )?confirmed|you('| a)re confirmed|see you there|added to (?:the )?guest list/i.test(t)) return "registered";
