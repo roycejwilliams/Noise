@@ -277,6 +277,27 @@ export async function outboundSentSince(q: { number: string; since: Date; conten
   }
 }
 
+// A reply send that threw may still have gone (Royce, 2026-11-10: accidental duplicates at delivery). A refusal by the send layer or a
+// 4xx from Sendblue never went (false, no read). Anything else (a timeout, a 5xx, no status) is read from Sendblue's own record of this
+// exact text to this number since the send began, after a short settle (its record can lag a send it accepted): true it went, false it
+// didn't, null unreadable. Only this one send is matched, word for word: never a similar text, so a reminder, a correction or an answer
+// to a repeated question is never taken for a duplicate. Deps injectable for tests.
+export const WENT_SETTLE_MS = 4000;
+export async function wentDespiteError(
+  err: unknown,
+  q: { number: string; since: Date; content: string },
+  deps: { went?: (q: { number: string; since: Date; content: string }) => Promise<boolean | null>; settleMs?: number } = {},
+): Promise<boolean | null> {
+  const e = err as { status?: unknown; message?: unknown } | null;
+  // Refused here, before anything left (the wrapper's own refusals all say so).
+  if (refusedBySendLayer(err) || /refusing to send/.test(String(e?.message ?? ""))) return false;
+  const status = typeof e?.status === "number" ? e.status : Number(String(e?.message ?? "").match(/^(?:\w*Error:\s*)?(\d{3})\b/)?.[1] ?? NaN);
+  if (status >= 400 && status < 500) return false;
+  if (!q.content.trim()) return null;
+  await new Promise((r) => setTimeout(r, deps.settleMs ?? WENT_SETTLE_MS));
+  return (deps.went ?? outboundSentSince)(q);
+}
+
 // Read receipts (Royce, 2026-09-15): the moment a 1:1 text reaches Co, the
 // sender sees it was read, even while the reply is still being worked on.
 // Sendblue sends these only for iMessage/RCS, best effort; never blocks.

@@ -93,7 +93,7 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 import { isShuttingDown, track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
-import { refusedBySendLayer } from "../services/sendblue.js";
+import { refusedBySendLayer, wentDespiteError } from "../services/sendblue.js";
 import { asHoldSend, trackTurnReplies, type TurnReplies } from "../services/turnReplies.js";
 import { setScopeMember, withMember } from "../services/llmUsage.js";
 import { createInboundHold, dbDownFor, holdFilePath } from "../services/inboundHold.js";
@@ -318,6 +318,8 @@ export async function sendCoReply(params: {
   };
   // An inline reply Sendblue refuses (not a V2 line, SMS, an old message) is
   // never sent at all, so it goes again as a plain text.
+  // When this send began: a send that throws is checked against Sendblue's record from here (wentDespiteError).
+  const since = new Date(Date.now() - 1000);
   if (params.replyTo && !audioUrl && !inlineRefused.has(phone)) {
     try {
       await sendblue.messages.send({ ...body, reply_to: { message_handle: params.replyTo } } as typeof body);
@@ -329,6 +331,12 @@ export async function sendCoReply(params: {
         console.error(`sendCoReply failed for ${phoneTail(phone)}:`, withoutPhones(err?.message ?? err));
         return false;
       }
+      // A timeout or a 5xx may have delivered it (Royce, 2026-11-10): the plain copy goes only when Sendblue's record says the inline
+      // one didn't. Unreadable: the plain copy goes, as before (a missing reply is worse than a rare double).
+      if ((await wentDespiteError(err, { number: phone, since, content: message })) === true) {
+        recordDecision({ layer: 7, decision: "reply.delivery", userId: null, outcome: "skip", action: "went_despite_error", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
+        return true;
+      }
       console.error("sendCoReply: inline reply refused, sending it plain (non-fatal):", err?.status ?? "", withoutPhones(err?.message ?? err));
       inlineRefused.add(phone);
       recordDecision({ layer: 7, decision: "reply.inline", userId: null, outcome: "skip", action: "refused", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
@@ -337,6 +345,12 @@ export async function sendCoReply(params: {
   try {
     await sendblue.messages.send(body);
   } catch (err: any) {
+    // It may have gone anyway (a timeout, a 5xx): reported as sent when Sendblue's record has this exact text, so the reply loop never
+    // writes it again as a "retry" (Royce, 2026-11-10: accidental duplicate sends). A voice note has no text to match.
+    if (!audioUrl && (await wentDespiteError(err, { number: phone, since, content: message })) === true) {
+      recordDecision({ layer: 7, decision: "reply.delivery", userId: null, outcome: "skip", action: "went_despite_error", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
+      return true;
+    }
     // A real delivery failure (e.g. recipient hasn't texted in first) must
     // never crash the whole request — the reply was already generated and
     // stored; this only means Sendblue couldn't deliver it. Confirmed: this
