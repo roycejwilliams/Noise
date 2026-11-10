@@ -130,8 +130,23 @@ for (const [name, c] of [["matching walkthrough", MATCHING], ["vent + ask", VENT
   await nah.send("Got it, I'll leave it.", "1");
   await nah.send("Say the word if that changes.", "2");
   check("'nah' replying to a Cue question (its quoted text set aside) stays one text", nah.t.state.sentMessages.length === 1, nah.t.state.sentMessages);
-  check("asked: find, recommend, suggest, send me, I need, need a, thoughts, ideas", ["find me a quiet bar", "recommend a book", "suggest somewhere", "send me the link", "I need a cofounder", "need a venue", "any thoughts", "ideas for saturday"].every((m) => T.askedForSomething(m)));
+  check("asked: find me, recommend, suggest, send me, I need help/someone, any thoughts, ideas", ["find me a quiet bar", "recommend a book", "suggest somewhere", "send me the link", "I need someone to build the backend", "I need a recommendation", "any thoughts", "ideas for saturday"].every((m) => T.askedForSomething(m)));
   check("not asked: guess what / you know what shares, quoted lines", !T.askedForSomething("guess what? I got the job!") && !T.askedForSomething("you know what? we did it") && !T.askedForSomething("> Want me to look?\nnah"));
+}
+// Re-review of #444.
+{
+  const plan = "The plan is dinner at Nopa Tuesday with Maya.";
+  const r = real("what's the plan again?");
+  await r.send(plan, "1");
+  const ex = await r.send(`${plan} Exactly.`, "2");
+  check("repeat + 'Exactly.' → held (only the repeat and a trivial word)", ex.note === T.ONE_REPLY_NOTE && r.t.state.sentMessages.length === 1, r.t.state.sentMessages);
+  const r2 = real("what's the plan again?");
+  await r2.send(plan, "1");
+  await r2.send(`${plan} Book the back room for four.`, "2");
+  check("repeat + 'Book the back room for four.' → sends only the new sentence", r2.t.state.sentMessages.length === 2 && r2.t.state.sentMessages[1] === "Book the back room for four.", r2.t.state.sentMessages);
+  check("'7:30pm' and '7:30 pm' read the same", T.repeatsSent("It starts at 7:30pm.", ["It starts at 7:30 pm."]));
+  for (const m of ["Finally shipped it. I need a nap.", "so many thoughts", "I find a lot of these boring", "whichever works"]) check(`not an ask, one text: "${m}"`, !T.askedForSomething(m));
+  check("'recommend a good book on hiring' still asks", T.askedForSomething("recommend a good book on hiring") && T.askedForSomething("I need help finding a venue") && T.askedForSomething("any thoughts on this?") && T.askedForSomething("can you find a quiet bar"));
 }
 // Pure.
 check("asked: a question or a request", T.askedForSomething(VENT_ASK.message) && T.askedForSomething(MATCHING.message) && !T.askedForSomething(COMPLETE.message) && !T.askedForSomething(PRIYA.message));
