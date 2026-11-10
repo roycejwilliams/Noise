@@ -400,7 +400,8 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
   // Each showing with the date or deadline it carried (a material change since is judged against these; repeatRule).
   const shownRows = await pool
     .query(
-      `SELECT created_at AS at, coalesce(content::jsonb -> 'match' ->> 'deadline', content::jsonb ->> 'deadline', content::jsonb -> 'match' ->> 'event_date', content::jsonb ->> 'event_date') AS date FROM co_memories
+      `SELECT created_at AS at, coalesce(content::jsonb -> 'match' ->> 'deadline', content::jsonb ->> 'deadline', content::jsonb -> 'match' ->> 'event_date', content::jsonb ->> 'event_date') AS date,
+              coalesce(content::jsonb -> 'match' ->> 'url', content::jsonb ->> 'url') AS url FROM co_memories
        WHERE user_id = $1
          AND memory_type IN ('recommendation_offered', 'event_offer_pending')
          AND (
@@ -408,13 +409,13 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
            OR lower(coalesce(content::jsonb ->> 'name', content::jsonb -> 'match' ->> 'name')) = lower($3)
          )
        UNION ALL
-       SELECT surfaced_at, NULL FROM surfaced_events WHERE user_id = $1 AND $2::text IS NOT NULL AND event_api_id = $2
+       SELECT surfaced_at, NULL, NULL FROM surfaced_events WHERE user_id = $1 AND $2::text IS NOT NULL AND event_api_id = $2
        UNION ALL
-       SELECT created_at, NULL FROM tier3_offered_opportunities WHERE user_id = $1 AND lower(name) = lower($3)`,
+       SELECT created_at, NULL, NULL FROM tier3_offered_opportunities WHERE user_id = $1 AND lower(name) = lower($3)`,
       [userId, eventId, match.name],
     )
-    .then((r) => r.rows.map((row: { at: Date; date: string | null }) => ({ at: new Date(row.at), date: row.date ? String(row.date) : null })))
-    .catch(() => [] as { at: Date; date: string | null }[]);
+    .then((r) => r.rows.map((row: { at: Date; date: string | null; url: string | null }) => ({ at: new Date(row.at), date: row.date ? String(row.date) : null, url: row.url ? String(row.url) : null })))
+    .catch(() => [] as { at: Date; date: string | null; url: string | null }[]);
   const shown = shownRows.map((r) => r.at);
   // The same event shown under another link (Royce, 2026-10-28: one event on two platforms, services/eventIdentity.ts sameEvent): read
   // from what was offered by its record, for an event with a start of its own. A time already counted isn't counted twice.
@@ -469,7 +470,9 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
     const { mentionsSince } = await import("../services/conversationRecall.js");
     const first = new Date(Math.min(...shownAt.map((d) => d.getTime())));
     const names = [...new Set([match.name, ...twins.map((t) => t.name), ...programTwins.map((t) => t.name)].filter(Boolean))];
-    discussed = await Promise.all(names.map((n) => mentionsSince({ query: (sql, args) => pool.query(sql, args as any[]) as any }, userId, n, first, { sends: shownAt, url: (match as any).url ?? null })))
+    // Every earlier showing's link (the first offer often carried the official page; the candidate now may be an X post).
+    const shownUrls = [...new Set([...shownRows.map((r) => r.url), ...programTwins.map((t) => t.url)].filter((u): u is string => !!u))];
+    discussed = await Promise.all(names.map((n) => mentionsSince({ query: (sql, args) => pool.query(sql, args as any[]) as any }, userId, n, first, { sends: shownAt, url: (match as any).url ?? null, urls: shownUrls })))
       .then((all) => all.some((m) => m.member.length > 0 || m.cue.length > 0))
       .catch((err: any) => {
         console.error("offerHistory: their conversation since couldn't be read (treated as unknown):", err?.message ?? err);
@@ -481,19 +484,20 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
 
 // Openings offered before that are the same program as this name under another one (knowledge/sent.ts sameProgram "same"), with when
 // and the date or deadline each carried. Every offered opening, no window: what was sent stays sent.
-async function shownSameProgram(userId: string, name: string): Promise<{ at: Date; name: string; date: string | null }[]> {
+async function shownSameProgram(userId: string, name: string): Promise<{ at: Date; name: string; date: string | null; url: string | null }[]> {
   const { sameProgram } = await import("../services/knowledge/sent.js");
   const rows = await pool
     .query(
       `SELECT created_at AS at, coalesce(content::jsonb -> 'match' ->> 'name', content::jsonb ->> 'name') AS name,
-              coalesce(content::jsonb -> 'match' ->> 'deadline', content::jsonb ->> 'deadline') AS date
+              coalesce(content::jsonb -> 'match' ->> 'deadline', content::jsonb ->> 'deadline') AS date,
+              coalesce(content::jsonb -> 'match' ->> 'url', content::jsonb ->> 'url') AS url
        FROM co_memories WHERE user_id = $1 AND memory_type IN ('recommendation_offered', 'event_offer_pending')
          AND coalesce(content::jsonb -> 'match' ->> 'tier', content::jsonb ->> 'tier') = '3'`,
       [userId],
     )
-    .then((r) => r.rows as { at: Date; name: string | null; date: string | null }[])
-    .catch(() => [] as { at: Date; name: string | null; date: string | null }[]);
-  return rows.flatMap((r) => (r.name && r.name.toLowerCase() !== name.toLowerCase() && sameProgram(r.name, name) === "same" ? [{ at: new Date(r.at), name: r.name, date: r.date }] : []));
+    .then((r) => r.rows as { at: Date; name: string | null; date: string | null; url: string | null }[])
+    .catch(() => [] as { at: Date; name: string | null; date: string | null; url: string | null }[]);
+  return rows.flatMap((r) => (r.name && r.name.toLowerCase() !== name.toLowerCase() && sameProgram(r.name, name) === "same" ? [{ at: new Date(r.at), name: r.name, date: r.date, url: r.url ?? null }] : []));
 }
 
 export function repeatInput(match: TierMatch, shortNotice: boolean): { isEvent: boolean; date: string | null; shortNotice: boolean } {

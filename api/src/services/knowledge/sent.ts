@@ -378,11 +378,13 @@ function orgOf(name: string): { words: string[]; acronym: string | null } {
 // The organization counts only when the thing's own link carries it (re-review of #441: "AI Builders Residency" on an unrelated host made
 // "any ai builders events this week?" a mention, and the program never came back): its words joined, or its acronym, in the host.
 // No link known: only the name itself counts.
-export function mentionsThing(text: string, name: string, url: string | null = null): boolean {
+// urls: the candidate's link and every earlier showing's (round-3 review of #441: at sweep time the candidate's link is often the X post,
+// while the first showing carried the official one).
+export function mentionsThing(text: string, name: string, urls: string | null | readonly (string | null)[] = null): boolean {
   if (namesThing(text, name)) return true;
   const org = orgOf(name);
-  const host = (hostOf(url) ?? "").replace(/[^a-z0-9]/g, "");
-  const verified = !!host && ((org.words.length >= 2 && host.includes(org.words.join(""))) || (!!org.acronym && host.includes(org.acronym)));
+  const hosts = (Array.isArray(urls) ? urls : [urls]).map((u) => (hostOf(u as string | null) ?? "").replace(/[^a-z0-9]/g, "")).filter(Boolean);
+  const verified = hosts.some((host) => (org.words.length >= 2 && host.includes(org.words.join(""))) || (!!org.acronym && host.includes(org.acronym)));
   if (!verified) return false;
   const toks = String(text ?? "").toLowerCase().replace(/['\u2019]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const have = new Set(toks);
