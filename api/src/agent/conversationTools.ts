@@ -270,18 +270,48 @@ export const ONE_REPLY_NOTE = "Your reply already went out this turn and nothing
 // while it was going out (a guard refusal landing during the send stays owed, review of #310).
 type SendState = { sent: boolean; sentMessages: string[]; partialUnsent: string | null; laneNotes: string[]; workSinceSend: boolean; sendsInFlight: number; extraSendsRefused: number; newsCount?: number };
 // Pure on its inputs: whether another sendReply may go this turn.
-export function anotherSendAllowed(state: SendState, answerOwed: boolean): boolean {
+// o.continues: this send carries new content and they asked for something (2026-11-10, needQuality: "Tell me more about your matching
+// system" and "What should I do differently in first meetings?" each went out as a first line, and the second sendReply with the
+// substance was held as "nothing new"). A reaction to a share stays one text (the 10-28 job-offer turn, #310), and a repeat never goes.
+export function anotherSendAllowed(state: SendState, answerOwed: boolean, o: { continues?: boolean } = {}): boolean {
   const replied = state.sent || state.sendsInFlight > 0;
   if (!replied) return true;
-  return state.workSinceSend || !!state.partialUnsent || state.laneNotes.length > 0 || answerOwed;
+  return state.workSinceSend || !!state.partialUnsent || state.laneNotes.length > 0 || answerOwed || !!o.continues;
 }
+
+// What a second text may continue, at most, after the reply (it never runs on).
+export const MAX_CONTINUING_SENDS = 2;
+const STOP = new Set(["the", "and", "that", "this", "with", "for", "you", "your", "its", "it's", "are", "was", "but", "not", "just", "they", "them", "then", "there", "what", "when", "have", "has", "had", "from", "into", "about", "like", "really", "very", "also", "can", "will", "would", "could", "should"]);
+const contentWords = (t: string) => (t.toLowerCase().replace(/[\u2019']/g, "").match(/[a-z0-9]+/g) ?? []).filter((w) => w.length > 2 && !STOP.has(w));
+const flat = (t: string) => t.toLowerCase().replace(/[\u2019']/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+// Pure: a send that repeats what already went (or is going) this turn: the same text, contained in it, or nearly all of its words already
+// said (85%). An actual duplicate is always held; a second take is held by the one-reply rule above.
+export function repeatsSent(message: string, said: readonly string[]): boolean {
+  const m = flat(message);
+  if (!m) return true;
+  const all = flat(said.join(" "));
+  if (all.includes(m)) return true;
+  const words = contentWords(message);
+  if (!words.length) return true;
+  const have = new Set(contentWords(said.join(" ")));
+  return words.filter((w) => have.has(w)).length / words.length >= 0.85;
+}
+// Pure: their message asks for something (a question or a request), so the answer may run to a second text. A share or a reaction
+// never does.
+const ASKS = /\?|\b(?:tell me|explain|walk me|describe|show me|give me|help me|how (?:do|does|did|should|would|can|could|to)|what (?:should|would|do|does|is|are|can)|why|which|can you|could you|would you|should i|any (?:good |ideas|tips|advice))\b/i;
+export const askedForSomething = (message: string | null | undefined): boolean => ASKS.test(String(message ?? ""));
 // Pure: whether a tool's result opens a second text. A guard refusal does only when it tells Cue to tell them (switched off, nothing was
 // made, their yes couldn't be checked); otherwise only a declared tool's own result does.
 export function resultIsNewForThem(name: string, out: unknown): boolean {
   if (isGuardRefusal(out)) return guardRefusalTellsThem(out);
   return NEW_FOR_THEM.has(name);
 }
-export function wrapSendsForOneReply(tools: Record<string, any>, state: SendState, answerOwed: () => boolean, dryRun?: boolean): void {
+// asked: whether their message asks for something (askedForSomething), read when a second text arrives.
+export function wrapSendsForOneReply(tools: Record<string, any>, state: SendState, answerOwed: () => boolean, dryRun?: boolean, asked: () => boolean = () => false): void {
+  // What went or is going out this turn (an in-flight send counts, so two identical calls in one step never both go), and how many
+  // continuing texts went.
+  const going: string[] = [];
+  let continuing = 0;
   const news = () => {
     state.newsCount = (state.newsCount ?? 0) + 1;
     state.workSinceSend = true;
@@ -299,11 +329,21 @@ export function wrapSendsForOneReply(tools: Record<string, any>, state: SendStat
   if (typeof send !== "function") return;
   tools.sendReply.execute = async (...args: any[]) => {
     // Checked and claimed before any await, so a second call in the same step sees the first.
-    if (!anotherSendAllowed(state, answerOwed())) {
+    const message = String(args[0]?.message ?? "");
+    const replied = state.sent || state.sendsInFlight > 0;
+    const said = [...state.sentMessages, ...going];
+    // An actual duplicate of what already went (a retry of the same text, the plain text after the same reply) is held whatever else holds.
+    const duplicate = replied && repeatsSent(message, said);
+    const continues = replied && !duplicate && asked() && continuing < MAX_CONTINUING_SENDS;
+    const owedOtherwise = anotherSendAllowed(state, answerOwed());
+    if (duplicate || (!owedOtherwise && !continues)) {
       state.extraSendsRefused += 1;
-      if (dryRun) console.log(`[conversationReply dryRun] held a second text with nothing new since the reply: "${String(args[0]?.message ?? "").slice(0, 160)}"`);
+      if (dryRun) console.log(`[conversationReply dryRun] held a second text with nothing new since the reply: "${message.slice(0, 160)}"`);
       return { ok: true, note: ONE_REPLY_NOTE };
     }
+    const counted = replied && !owedOtherwise;
+    if (counted) continuing += 1;
+    going.push(message);
     const before = state.sentMessages.length;
     const newsBefore = state.newsCount ?? 0;
     state.sendsInFlight += 1;
@@ -312,6 +352,12 @@ export function wrapSendsForOneReply(tools: Record<string, any>, state: SendStat
     } finally {
       state.sendsInFlight -= 1;
       if (state.sentMessages.length > before) state.workSinceSend = (state.newsCount ?? 0) > newsBefore;
+      // Didn't go (failed, or emptied by the check): it isn't something said, and a continuing slot it took is given back.
+      else {
+        const i = going.lastIndexOf(message);
+        if (i !== -1) going.splice(i, 1);
+        if (counted) continuing -= 1;
+      }
     }
   };
 }
@@ -2305,6 +2351,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // send (its result can be new to say), or the last one left something owed: the rest of a partly sent reply, a lane move's line, an
   // answer meant to ride with a link. Parallel calls in one step count: the first claims the turn's reply before it awaits anything.
   // Outermost, after the guard, so a held second text never reaches the guard's log as a send.
-  wrapSendsForOneReply(tools as Record<string, any>, state, () => !!ctx.answerOwed, ctx.dryRun);
+  wrapSendsForOneReply(tools as Record<string, any>, state, () => !!ctx.answerOwed, ctx.dryRun, () => askedForSomething(ctx.resolvedContent));
   return { tools: orderForCache(tools), state, flushLinks, loop: () => turnLoop };
 }
