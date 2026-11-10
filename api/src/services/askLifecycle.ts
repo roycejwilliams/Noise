@@ -69,6 +69,9 @@ export type Closure = { askId: string; ask: string; how: "answered" | "delivered
 // closes a search.
 export const PAUSE = /\b(?:for now|a break|take a break|taking a break|pause|paus(?:e|ing)|later|for a bit|for a while|not right now|hold off|step back)\b/i;
 export const WEARY = /\b(?:tired|exhausted|worn out|drain(?:ed|ing)|burn(?:ed|t) out|sick of|over it|frustrat\w*)\b/i;
+// Found or hired ends it, whatever else they say ("found one! talk later"); "done looking" or "stop looking" gives way to a pause
+// ("done looking for now") (re-review of #441).
+export const FOUND = /\b(?:found (?:one|someone|somebody|an? \w+|my \w+|our \w+)|hired)\b/i;
 export const FINISHED = /\b(?:found (?:one|someone|somebody|an? \w+|my \w+|our \w+)|hired|done looking|all done|stop looking)\b/i;
 
 const norm = (s: string) => String(s).toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -103,7 +106,7 @@ export function verifyClosures(raw: { ask?: unknown; how?: unknown; quote?: unkn
     if (how === "answered" && (atTheirWordOnly ? atTheirWordOnly.has(a.row.id) : ONGOING.test(a.row.ask_text))) continue;
     // Tired of it, or a break, is not finished (Royce, 2026-11-10): "I'm tired of looking" keeps the search, gentler; only their word
     // that it's done, found, off or no longer wanted closes it.
-    if (how === "moved_on" && (PAUSE.test(quote) || (WEARY.test(quote) && !FINISHED.test(quote)))) continue;
+    if (how === "moved_on" && !FOUND.test(quote) && (PAUSE.test(quote) || (WEARY.test(quote) && !FINISHED.test(quote)))) continue;
     const side = how === "answered" ? "co" : "member";
     const q = norm(quote);
     const hit = convo.find((m) => m.side === side && +new Date(m.at) > +new Date(a.row.created_at) && norm(m.text).includes(q));
