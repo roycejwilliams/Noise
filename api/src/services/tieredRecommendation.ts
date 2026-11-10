@@ -67,7 +67,8 @@ import { skipsPaidSearch } from "./testMemberSpend.js";
 // foundInRoundup / roundupUrl (Royce, 2026-11-10): it was found in a post that lists several things (services/sendCheck.ts roundupOf);
 // its url is then its own page, resolved at send, and roundupUrl the post. The post proves a mention, never current terms or fit.
 // pageIsAbout: the page it resolved to is about it, not its own (its host doesn't carry its name or acronym).
-type MatchExtras = { foundInRoundup?: string; roundupUrl?: string; pageIsAbout?: boolean; startAt?: string; searchedIn?: import("./eventSurfacingSweep.js").SearchedIn; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
+// sendAsRoundup: no page of its own read; the post goes as what it is, a list of several places (services/sendCheck.ts roundupShare).
+type MatchExtras = { foundInRoundup?: string; roundupUrl?: string; pageIsAbout?: boolean; sendAsRoundup?: boolean; startAt?: string; searchedIn?: import("./eventSurfacingSweep.js").SearchedIn; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)

@@ -62,6 +62,9 @@ export type RecheckDeps = {
   // event date get their page re-verified at send time"). The word list (closedOnPage) missed "Applications for Batch 4 are closed"
   // because the name wasn't in that sentence, and "applications open now" went out. Optional: without it only the word list runs.
   openRead?: (i: { name: string; page: string; today: string; onFile: string | null; isOpening: boolean }) => Promise<OpenRead | null>;
+  // The names of everything already sent to this member (knowledge/sent.ts sentByReferent), for a roundup shared as a roundup: it must
+  // add something beyond what they already have. null: unreadable (the roundup is held). Absent: the roundup is held.
+  sentNames?: () => Promise<string[] | null>;
 };
 // open: the page shows it still taking applications or still ahead; closed: the page says it is closed, over, full or past (quote is
 // the page's own words); unclear: the page doesn't say either way.
@@ -216,7 +219,27 @@ const WRITE_UP = /(?:^|\.)(?:lu\.ma|luma\.com|eventbrite(?:\.[a-z]{2,3}){1,2}|pa
 // Its own page, from the roundup's links: the first that reads, names it near its top, and isn't itself a roundup. Then the usual
 // send-time read runs on that page (dates, closing words), with the roundup kept as where it was found. None: held and read again (the
 // defers bound it), never sent as the post and never described from the post as if it were its page.
-async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: { now: Date; zone: string | null; deps: RecheckDeps }): Promise<Recheck> {
+// A roundup shared as a roundup (Royce, 2026-11-10): when no page of its own reads, the post itself may go, as what it is, only when it
+// is readable, adds something beyond what they already have, and its value doesn't rest on details nobody checked. Whether the list as a
+// whole helps their goal is the composer's call, at the same bar as any find (it skips what doesn't fit). Pure.
+// A post whose value is a deadline, a closing date or a spots count: those can't be checked here, so it stays held.
+const UNCHECKED_VALUE = /\b(?:deadlines?|due (?:by|on)|apply by|applications? (?:close|due|end)|closes? (?:on|in|this|next|soon|today|tomorrow)|last (?:chance|call|day)|ends? (?:on|this|next|soon)|spots? (?:left|remaining)|limited spots|(?:before|by) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*)\b/i;
+export const ROUNDUP_MIN_POST_CHARS = 40;
+export function roundupShare(post: string, sentNames: readonly string[] | null): { ok: true; items: number; fresh: number } | { ok: false; why: string } {
+  const t = String(post ?? "").trim();
+  if (t.length < ROUNDUP_MIN_POST_CHARS) return { ok: false, why: "the post itself couldn't be read" };
+  if (UNCHECKED_VALUE.test(t)) return { ok: false, why: "its value rests on deadlines or spots nobody checked" };
+  if (!sentNames) return { ok: false, why: "what they already have couldn't be read" };
+  const items = t.split(/\n+/).map((l) => l.trim()).filter((l) => LIST_LINE.test(l));
+  if (items.length < 2) return { ok: false, why: "the post doesn't list its places" };
+  const known = (line: string) => sentNames.some((n) => namesThing(line, n) || namesThing(n, line.replace(LIST_MARK, "")));
+  const fresh = items.filter((l) => !known(l)).length;
+  if (fresh < 2 || fresh * 2 <= items.length) return { ok: false, why: `mostly what they already have (${items.length - fresh} of ${items.length} already sent)` };
+  return { ok: true, items: items.length, fresh };
+}
+const LIST_MARK = /^\s*(?:[-*\u2022\u25aa\u25e6\u2192>]|\d{1,2}[.)]|\p{Extended_Pictographic})\s*/u;
+
+async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: { now: Date; zone: string | null; deps: RecheckDeps }, post = ""): Promise<Recheck> {
   const label = r.line ? `listed as: ${r.line}` : "listed among several things";
   // A link whose host carries its name or acronym first (its own page); only when none of those reads, the line's other links, and then
   // the page is "a page about it", never its own or official page (round-3 review of #441).
@@ -230,7 +253,14 @@ async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: 
     const next = await recheckFind(own, o);
     return next.ok ? { ...next, changed: [...next.changed, about ? "a page about it instead of the post that listed it" : "its own page instead of the post that listed it"] } : next;
   }
-  return { ok: false, exit: false, why: `its link is a post listing several things (${label.slice(0, 100)}), not its own page, and no page of its own could be read` };
+  // No page of its own: the post itself, as a roundup, when it qualifies (roundupShare); otherwise held, as before.
+  const sent = o.deps.sentNames ? await o.deps.sentNames().catch(() => null) : null;
+  const share = roundupShare(post, sent);
+  if (share.ok) {
+    const asList = { ...match, url, roundupUrl: url, foundInRoundup: label, sendAsRoundup: true, opportunity: { ...(match.opportunity ?? {}), postText: post.slice(0, 3000) } } as TierMatch;
+    return { ok: true, match: asList, checkedAt: o.now.toISOString(), changed: [`shared as a roundup (${share.fresh} of ${share.items} not sent before): no page of its own could be read`], verified: false };
+  }
+  return { ok: false, exit: false, why: `its link is a post listing several things (${label.slice(0, 100)}), not its own page, and no page of its own could be read; not shared as a roundup: ${share.why}` };
 }
 
 // Pure-with-deps: one find's own page, read again now. Never throws.
@@ -283,7 +313,7 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   if (match.kind === "opportunity" && url && !match.foundInRoundup) {
     const listed = isX(url) ? postText : "";
     const r = listed ? roundupOf(listed, match.name) : null;
-    if (r) return resolveFromRoundup(match, url, r, o);
+    if (r) return resolveFromRoundup(match, url, r, o, listed);
   }
   // No page to read again: a Co event with no link, or an X post with no event page behind it (the post can't be read again without
   // the X API). It goes as it was found, marked unverified; its caption may not claim spots or a price its record doesn't state.
@@ -300,7 +330,7 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   // A web page that is itself a roundup of several things, this among them (an article, a list): the same rule as a post.
   if (!match.foundInRoundup) {
     const listed = roundupOf(r.text, match.name, { page: true });
-    if (listed) return resolveFromRoundup(match, url, listed, o);
+    if (listed) return resolveFromRoundup(match, url, listed, o, r.text);
   }
   // Words are never certain: held and read again.
   const onFile = eventDateOf(match, zone) ?? (isOpening && "deadline" in match ? match.deadline ?? null : null);
@@ -338,6 +368,8 @@ export const realSendCheckDeps: SendCheckDeps = {
   luma: async (url) => (await import("./eventPage.js")).eventPageDetails(url, RECHECK_FRESH_MS),
   page: async (url) => (await import("./webOpportunitySearch.js")).readPageChecked(url),
   openRead: (i) => readOpenNow(i),
+  // Bound to the member per send (checkBeforeSend).
+  sentNames: undefined,
   now: () => new Date(),
   writeFact: async (e) => (await import("./workingSet.js")).realExitDeps.writeFact(e),
   saveMatch: async (id, match) => {
@@ -369,6 +401,13 @@ export async function checkBeforeSend(c: SendCandidate, zone: string | null, dep
   if (!match) return { skip: "no find on the waiting text", exited: false };
   const now = deps.now();
   const later = new Date(now.getTime() + RECHECK_RETRY_HOURS * 3_600_000);
+  // What they already have, for a roundup shared as a roundup: read once, only if it's needed (knowledge/sent.ts).
+  if (!deps.sentNames) {
+    deps = { ...deps, sentNames: async () => {
+      const [{ default: pool }, S] = await Promise.all([import("../db/db.js"), import("./knowledge/sent.js")]);
+      return (await S.sentByReferent((sql, args) => pool.query(sql, args as any[]).then((r) => r.rows), c.userId)).map((x) => x.name);
+    } };
+  }
   // Read moments ago (stillRelevant ran first this tick): no second read.
   const at = match.checkedAt ? Date.parse(match.checkedAt) : NaN;
   // Its start still decides: read 20 minutes ago, it may have started since (or come inside the hour).
