@@ -32,6 +32,11 @@ export type Fixture = {
   loginCode?: string;
   // The submit reached the server but the page never showed the answer (a lost response): the server keeps the registration.
   lost?: boolean;
+  // Luma's header (live test 2026-11-09): "Skip to Content", the time, "Discover Events" and a "Sign In" link, on every page.
+  nav?: boolean;
+  // Where the page answers a submit: inside the dialog (default), or in the event's RSVP card after the dialog closes, with the
+  // guest's name and email shown there.
+  resultIn?: "dialog" | "card";
   captcha?: boolean;
   closed?: boolean;
 };
@@ -63,13 +68,14 @@ export function fixtureHtml(f: Fixture): string {
       },
     },
   };
-  const cfg = { slug: f.slug, fields: f.fields ?? NAME_EMAIL, button: f.button === undefined ? "Register" : f.button, result: f.result ?? "registered", signIn: f.signIn ?? null, code: f.code ?? null, closed: !!f.closed, loginCode: f.signIn?.code ?? f.loginCode ?? null, lost: !!f.lost };
+  const cfg = { nav: !!f.nav, resultIn: f.resultIn ?? "dialog", slug: f.slug, fields: f.fields ?? NAME_EMAIL, button: f.button === undefined ? "Register" : f.button, result: f.result ?? "registered", signIn: f.signIn ?? null, code: f.code ?? null, closed: !!f.closed, loginCode: f.signIn?.code ?? f.loginCode ?? null, lost: !!f.lost };
   return `<!doctype html><html><head><title>${data.props.pageProps.initialData.data.event.name} · Luma</title>
 <script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data)}</script></head><body>
-<h1>${data.props.pageProps.initialData.data.event.name}</h1>
+${f.nav ? '<header><a href="#main">Skip to Content</a> <span>4:02 PM PST</span> <nav><a href="https://luma.com/discover">Discover Events</a> <a href="https://luma.com/signin">Sign In</a></nav></header>' : ""}
+<main id="main"><h1>${data.props.pageProps.initialData.data.event.name}</h1><p>Hosted By Host Collective</p>
 ${f.captcha ? '<iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile"></iframe><p>Verify you are human</p>' : ""}
 ${cfg.closed ? "<p>Registration Closed</p>" : ""}
-<div id="root"></div>
+<div class="rsvp-card" id="card"></div><div id="root"></div></main>
 <script>
 const cfg = ${JSON.stringify(cfg)};
 window.__submits = 0; window.__submitted = null; window.__signIns = 0;
@@ -131,7 +137,12 @@ function regForm() {
     // What the page received, where the test can read it (the page's own text, outside the dialog).
     let rec = document.getElementById("rec"); if (!rec) { rec = el("pre", { id: "rec" }); document.body.appendChild(rec); }
     rec.textContent = "RECORD " + JSON.stringify(out) + " COUNT " + window.__submits;
-    const show = (t) => dialog(el("div", {}, "<p>" + t + "</p>"));
+    const show = (t) => {
+      if (cfg.resultIn === "card") {
+        root.innerHTML = "";
+        document.getElementById("card").innerHTML = "<p>" + t + "</p><p>" + (out.name || "") + " · " + (out.email || signedInEmail || "") + "</p>";
+      } else dialog(el("div", {}, "<p>" + t + "</p>"));
+    };
     const email = out.email || signedInEmail || "";
     const status = cfg.result === "pending" ? "pending" : cfg.result === "waitlist" ? "waitlist" : "registered";
     const record = cfg.result === "error" || (cfg.result === "timeout" && !cfg.lost) ? Promise.resolve(null) : server("register", { email, status });
@@ -167,18 +178,18 @@ const start = async () => {
   const held = signedInEmail ? await server("state", { email: signedInEmail }) : null;
   if (held && held.status) {
     const words = held.status === "pending" ? "Pending Approval. Your request is waiting on the host." : held.status === "waitlist" ? "You're on the waitlist." : "You're Going";
-    document.body.insertBefore(el("p", { id: "state" }, words), root);
+    document.getElementById("card").appendChild(el("p", { id: "state" }, words));
     return;
   }
   if (cfg.button && !cfg.closed) {
     const b = el("button", { type: "button" }, cfg.button);
     b.onclick = () => (signedIn ? regForm() : signInForm());
-    document.body.insertBefore(b, root);
+    document.getElementById("card").appendChild(b);
   }
   if (cfg.loginCode && !signedInEmail && !cfg.signIn) {
     const s = el("button", { type: "button" }, "Sign In");
     s.onclick = () => signInForm();
-    document.body.insertBefore(s, root);
+    document.getElementById("card").appendChild(s);
   }
 };
 start();
