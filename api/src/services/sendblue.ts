@@ -277,6 +277,13 @@ export async function outboundSentSince(q: { number: string; since: Date; conten
   }
 }
 
+// The reply's sends never retry inside the SDK (review of #442: its default maxRetries=2 resent on a timeout or a 5xx with no idempotency
+// key, before our record check could run). A failed reply send is decided by Sendblue's own record of this exact text (wentDespiteError).
+// Other send paths keep the SDK default: they have no record check, so dropping their retries would lose real failures (follow-up).
+export const REPLY_SEND_OPTIONS = { maxRetries: 0 } as const;
+// How far before a reply send its record is read from (review of #442: 1s left no room for clock skew).
+export const REPLY_RECORD_LOOKBACK_MS = 15_000;
+
 // A reply send that threw may still have gone (Royce, 2026-11-10: accidental duplicates at delivery). A refusal by the send layer or a
 // 4xx from Sendblue never went (false, no read). Anything else (a timeout, a 5xx, no status) is read from Sendblue's own record of this
 // exact text to this number since the send began, after a short settle (its record can lag a send it accepted): true it went, false it
