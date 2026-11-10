@@ -5,7 +5,7 @@
 // it must not make: two programs from one organization collapsed, a new cohort hidden, a reminder or a requested resurface swallowed,
 // unreadable history read as "never discussed".
 import { readFileSync } from "node:fs";
-import { cohortOf, findSent, matchSent, namesThing, sameProgram, sameProgramSent, thingSearchTerms, wasSent, type SentRecord } from "../../src/services/knowledge/sent.js";
+import { cohortOf, findSent, hostTerms, matchSent, mentionsThing, namesThing, sameProgram, sameProgramSent, thingSearchTerms, wasSent, type SentRecord } from "../../src/services/knowledge/sent.js";
 import { materialChange, repeatRule, type OfferHistory } from "../../src/harness/matchGate.js";
 import { mentionsSince, SEND_ECHO_HOURS } from "../../src/services/conversationRecall.js";
 import { buildShadowPool, sentHistory } from "../../src/services/sweepShadow.js";
@@ -37,6 +37,11 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("same program, either order", sameProgram(OFFICIAL, SHORT) === "same");
   check("two programs from one organization: NOT the same (residency vs fellowship)", sameProgram(OFFICIAL, FELLOWSHIP) === null);
   check("organization alone is not its program", sameProgram("Harbor Point Collective", OFFICIAL) === null);
+  // Review of #441 (MED): "same" needs two words of substance in common, or the same host; acronyms only at three letters or more.
+  check("'Fellowship' vs 'Fellowship applications open': different", sameProgram("Fellowship", "Fellowship applications open") === null);
+  check("...unless both links are on the same host", sameProgram("Fellowship", "Fellowship applications open", { a: "https://lattice.example/f", b: "https://www.lattice.example/apply" }) === "same");
+  check("'AI Grant' vs 'Accelerate Innovation Grant': different", sameProgram("AI Grant", "Accelerate Innovation Grant") === null);
+  check("the SPC names: same", sameProgram("SPC Member Residency", "South Park Commons Member Residency") === "same" && sameProgram("spc residency", "South Park Commons Residency") === "same");
   check("a new cohort of it: other_cohort", sameProgram(`${OFFICIAL} Spring 2027`, `${OFFICIAL} Fall 2026`) === "other_cohort");
   check("batch codes are cohorts (W27 vs S27)", sameProgram("Northgate Accelerator W27", "Northgate Accelerator S27") === "other_cohort");
   check("one side names no cohort: same", sameProgram(`${OFFICIAL} 2027`, OFFICIAL) === "same");
@@ -55,9 +60,17 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
 {
   check("'the HPC residency' names the program", namesThing("did you look at the HPC residency at all?", OFFICIAL));
   check("the spelled-out name names the X post's short name", namesThing("Harbor Point Collective's member residency looked good", SHORT));
-  check("the organization alone doesn't name the residency", !namesThing("I know someone at Harbor Point Collective", OFFICIAL));
-  check("the fellowship doesn't name the residency", !namesThing("applied to the HPC founder fellowship", OFFICIAL));
+  check("for sameness, the organization alone doesn't name the residency", !namesThing("I know someone at Harbor Point Collective", OFFICIAL));
+  check("for sameness, the fellowship doesn't name the residency", !namesThing("applied to the HPC founder fellowship", OFFICIAL));
   check("search terms carry the acronym", thingSearchTerms(OFFICIAL).includes("hpc"));
+  // Review of #441 (HIGH): for "discussed" only, acronyms in any case and the organization alone count.
+  const SPC = "South Park Commons Member Residency";
+  check("discussed: lower-case 'spc residency'", mentionsThing("was the spc residency any good?", SPC));
+  check("discussed: 'I'm thinking about SPC'", mentionsThing("I'm thinking about SPC", SPC));
+  check("discussed: the organization only ('I applied to South Park Commons last week')", mentionsThing("I applied to South Park Commons last week", SPC) && mentionsThing("South Park Commons", SPC));
+  check("discussed: the X post's short name, organization only", mentionsThing("I applied to South Park Commons last week", "SPC Member Residency") && mentionsThing("thinking about spc", "SPC Member Residency"));
+  check("discussed: another organization isn't a mention", !mentionsThing("I applied to Lattice Fund last week", SPC) && !mentionsThing("a park downtown", SPC));
+  check("no two-letter acronyms anywhere (pc, mr)", !thingSearchTerms(SPC).some((t) => t.length < 3) && !hostTerms(SPC).some((t) => t.length < 3));
 }
 
 // ---------------------------------------------------------------- the repeat rule
@@ -84,6 +97,7 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("legitimate reminder: an event within a day, never answered: still a reminder", repeatRule(h({ discussed: true }), { isEvent: true, date: "2026-11-11", shortNotice: true }, today, now).action === "remind");
   // A texted search (they asked) keeps the old rule and reads no conversation: a requested resurface isn't blocked by "discussed".
   const gate = readFileSync(new URL("../../src/harness/matchGate.ts", import.meta.url), "utf8");
+  check("review of #441 (LOW): the talked-about read runs only past the gap, shown once, with no outcome or answer", /const pastGap = showings\.length === 1 && Date\.now\(\) - showings\[0\]\.getTime\(\) >= RESURFACE_AFTER_DAYS \* 86_400_000;\s*if \(pastGap && !outcome && !answered\)/.test(gate));
   check("requested resurfacing: a texted search's repeat check doesn't read 'discussed'", /wasAlreadyOffered[\s\S]{0,300}offerHistory\(userId, match, \[\], \{ discussion: false \}\)/.test(gate));
 }
 
@@ -100,9 +114,9 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   const seen: unknown[][] = [];
   const db = { query: async (sql: string, args: unknown[]) => { seen.push(args); return { rows: /co_memories/.test(sql) ? rows : [] }; } };
   const m = await mentionsSince(db, "u1", OFFICIAL, shown, { sends: [shown] });
-  check("the member's later lines count (a text and a call)", m.member.length === 2, m);
+  check("the member's later lines count (a text, a call, and the organization alone)", m.member.length === 3, m);
   check("Cue's own later answer counts; the offer text itself (within the send window) doesn't", m.cue.length === 1 && m.cue[0].toISOString() === "2026-09-24T18:01:00.000Z", m);
-  check("the organization alone isn't a mention", !m.member.some((d) => d.toISOString().startsWith("2026-10-02")));
+  check("the organization alone is a mention, for discussed", m.member.some((d) => d.toISOString().startsWith("2026-10-02")));
   check("owner-bound: the member is $1", seen.every((a) => a[0] === "u1"));
   check("send echo window is a few hours", SEND_ECHO_HOURS >= 1 && SEND_ECHO_HOURS <= 12);
   const broken = { query: async () => { throw new Error("db down"); } };
@@ -128,21 +142,24 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
 
 // ---------------------------------------------------------------- a roundup is not the thing
 {
-  const roundup = `Five places to look for founder support this winter:\n1. ${SHORT}: https://harborpoint.example/residency\n2. Lattice Fund fellowship\n3. Northgate Accelerator\n4. Openbench grants\n5. Quarry Labs`;
+  const roundup = `Five places to look for founder support this winter:\n1. ${SHORT}: https://hpcollective.example/residency\n2. Lattice Fund fellowship\n3. Northgate Accelerator\n4. Openbench grants\n5. Quarry Labs`;
   const r = roundupOf(roundup, SHORT);
-  check("an X roundup naming it among others is a roundup", !!r && r.links[0] === "https://harborpoint.example/residency", r);
-  check("an announcement about only this program is not a roundup", roundupOf(`${SHORT} applications are open now. Apply by Dec 15: https://harborpoint.example/residency`, SHORT) === null);
+  check("an X roundup naming it among others is a roundup", !!r && r.links[0] === "https://hpcollective.example/residency", r);
+  check("review of #441 (MED): pcmag.com and mrbeast.com links never resolve as its page", roundupOf(`Five places to look for founder support:\n1. South Park Commons Member Residency https://www.pcmag.com/picks\n2. Lattice Fund fellowship https://mrbeast.com/x\n3. Northgate Accelerator\n4. Openbench grants`, "South Park Commons Member Residency")?.links.length === 0);
+  check("a Medium write-up or a shortened link on its own line never resolves as its page", roundupOf(`Five places to look:\n1. ${SHORT} https://medium.com/@someone/hpc-review https://bit.ly/hpc1\n2. Lattice Fund fellowship\n3. Northgate Accelerator`, SHORT)?.links.length === 0);
+  check("review of #441 (LOW): a first line naming the program is not a roundup", roundupOf(`${SHORT} is open: here's what you get\n- a desk\n- dinners\n- demo day\n1. Lattice Fund\n2. Northgate`, SHORT) === null);
+  check("an announcement about only this program is not a roundup", roundupOf(`${SHORT} applications are open now. Apply by Dec 15: https://hpcollective.example/residency`, SHORT) === null);
   check("its own page with benefit bullets is not a roundup", roundupOf(`${OFFICIAL}\n- $50K\n- a desk for six months\n- weekly dinners\nApply now`, OFFICIAL, { page: true }) === null);
   check("an article headlined as a list is a roundup", !!roundupOf(`7 residencies for technical founders\nOur picks this season.\n${OFFICIAL} is a six-month residency.`, OFFICIAL, { page: true }));
 
   const pages: Record<string, { text: string | null; gone: boolean }> = {
-    "https://harborpoint.example/residency": { text: `${OFFICIAL}\nA six-month residency for builders. Applications open until 2026-12-15.`, gone: false },
+    "https://hpcollective.example/residency": { text: `${OFFICIAL}\nA six-month residency for builders. Applications open until 2026-12-15.`, gone: false },
   };
   const deps: RecheckDeps = { luma: async () => null, page: async (u) => pages[u] ?? { text: null, gone: false } };
   const now = at("2026-11-10T17:00:00Z");
   const match: any = { tier: 3, kind: "opportunity", name: SHORT, url: "https://x.com/i/status/1", reason: "", source: "x", opportunity: { postText: roundup } };
   const ok = await recheckFind(match, { now, zone: null, deps });
-  check("resolved to its official page: that link goes, read and verified", ok.ok && (ok as any).match.url === "https://harborpoint.example/residency" && (ok as any).verified === true, ok);
+  check("resolved to its official page: that link goes, read and verified", ok.ok && (ok as any).match.url === "https://hpcollective.example/residency" && (ok as any).verified === true, ok);
   check("the roundup is kept as where it was found, never as its page", ok.ok && (ok as any).match.roundupUrl === "https://x.com/i/status/1" && /listed as/.test((ok as any).match.foundInRoundup), ok);
   check("described from its own page", ok.ok && /six-month residency/.test((ok as any).match.pageNow ?? ""));
   const noLink = { ...match, opportunity: { postText: roundup.replace(/: https:\S+/, "") } };
@@ -157,7 +174,7 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
 
   const item = revealItem("find another engineer to build with", false, { ...(ok as any).match });
   check("the text's facts label the roundup and carry no roundup text as its description", !("source_post" in item.facts) && /not this thing's page/.test(String(item.facts.where_it_was_found)) && /six-month/.test(String(item.facts.its_own_page_read_at_send)), item.facts);
-  check("its link is its own page", item.url === "https://harborpoint.example/residency");
+  check("its link is its own page", item.url === "https://hpcollective.example/residency");
 }
 
 // ---------------------------------------------------------------- the text says a resend is a resend
@@ -166,7 +183,7 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("a changed one leads with the change", /lead with what changed/.test(againNote("changed since it was shown: its date was 2026-10-01, now 2026-12-15")));
   check("'came across' / 'distinct from' are new-claims", NEW_CLAIM.test("Came across the HPC residency") && NEW_CLAIM.test("distinct from the one I sent"));
   check("a plain circle-back isn't a new-claim", !NEW_CLAIM.test("Circling back on the HPC residency: still open through Dec 15."));
-  const item = revealItem("find another engineer to build with", false, { tier: 3, kind: "opportunity", name: OFFICIAL, url: "https://harborpoint.example/residency", reason: "" } as any);
+  const item = revealItem("find another engineer to build with", false, { tier: 3, kind: "opportunity", name: OFFICIAL, url: "https://hpcollective.example/residency", reason: "" } as any);
   const input: ComposeInput = { firstName: "Jordan", items: [{ candidate: { id: "c1" } as any, item, pick: null, again: true, againWhy: "shown 49 days ago" }], set: null, leadWhy: null, memberBlock: null, feeling: null, thread: "", recent: "", threadLive: false } as any;
   check("the composer is told it was sent before", /you sent this before/.test(composePrompt(input)));
   const c = checkComposed({ opening: null, items: [{ n: 1, caption: `Just came across the ${OFFICIAL}: open through mid-December.` }], closing: "Worth a look?", connects: null }, input);
@@ -196,6 +213,12 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("'I'm tired of looking' does NOT close it", A.verifyClosures([{ ask: "A1", how: "moved_on", quote: "honestly I'm tired of looking for now" }], [ask as any], convo("honestly I'm tired of looking for now")).length === 0);
   check("an explicit pause does NOT close it", A.verifyClosures([{ ask: "A1", how: "moved_on", quote: "let's pause the engineer search for two weeks" }], [ask as any], convo("let's pause the engineer search for two weeks")).length === 0);
   check("tired AND done closes it (their word that it's over)", A.verifyClosures([{ ask: "A1", how: "moved_on", quote: "I'm tired of it, we hired someone, stop looking" }], [ask as any], convo("I'm tired of it, we hired someone, stop looking")).length === 1);
+  // Review of #441 (MED): a pause wins over the finished words; "done" or "found" alone never closes.
+  const closes = (q: string) => A.verifyClosures([{ ask: "A1", how: "moved_on", quote: q }], [ask as any], convo(q)).length === 1;
+  check("'I'm done looking for now, too tired': not closed", !closes("I'm done looking for now, too tired"));
+  check("'I found it draining, taking a break': not closed", !closes("I found it draining, taking a break"));
+  check("'I'm done with this search, frustrated': not closed", !closes("I'm done with this search, frustrated"));
+  check("'we hired someone, stop looking': closed", closes("we hired someone, stop looking"));
   check("a closed ask's queued finds leave (existing: servesClosedAsk)", A.servesClosedAsk({ askId: "a1", reminder: false }, new Set(["a1"])) && !A.servesClosedAsk({ askId: "a1", reminder: true }, new Set(["a1"])));
 }
 
