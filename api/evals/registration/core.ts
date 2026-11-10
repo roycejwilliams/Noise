@@ -162,6 +162,15 @@ check("event key", R.eventKeyOf("https://lu.ma/demo-night") === "luma:demo-night
   check("restrictions: the live page's 'open to Stanford students and affiliates' is read, verbatim", r[0] === "This event is open to Stanford students and affiliates." && !r.some((x) => /Northwind/.test(x)), r);
   check("restrictions: 21+, invite only, members only, ID required", R.restrictionsIn("Drinks provided. Must be 21+ to enter.")[0] === "Must be 21+ to enter." && R.restrictionsIn("This is an invite-only dinner.").length === 1 && R.restrictionsIn("Members only.").length === 1 && R.restrictionsIn("Please bring your student ID.").length === 1);
   check("restrictions: an open, unrestricted description has none", R.restrictionsIn("Join us for demos, pizza and good conversation. Everyone welcome.").length === 0);
+  check("restrictions: never capacity, food, or 'open to all'", ["Space is limited, so register early.", "Seats are limited to 50 students.", "Pizza and drinks will be provided.", "This event is open to all.", "Open to everyone, students welcome!", "Limited spots for members."].every((x) => R.restrictionsIn(x).length === 0), ["Space is limited, so register early.", "Seats are limited to 50 students.", "Pizza and drinks will be provided.", "This event is open to all.", "Open to everyone, students welcome!", "Limited spots for members."].map((x) => [x, R.restrictionsIn(x)]));
+  check("restrictions: eligibility kinds are read (employees only, alumni, invite only, 18+, a badge, a group that must RSVP)", ["Open only to Acme employees.", "Reserved for Cal alumni.", "Invitation only.", "18+ with ID.", "Please bring your company badge to enter.", "Members must RSVP to attend."].every((x) => R.restrictionsIn(x).length === 1), ["Open only to Acme employees.", "Reserved for Cal alumni.", "Invitation only.", "18+ with ID.", "Please bring your company badge to enter.", "Members must RSVP to attend."].map((x) => [x, R.restrictionsIn(x)]));
+  check("restrictions: a plain 'you must RSVP' isn't eligibility", R.restrictionsIn("You must RSVP to attend.").length === 0);
+  {
+    const f1 = base({ restrictions: R.restrictionsIn("This event is open to Stanford students and affiliates. Must be 21+.") });
+    const f2 = base({ restrictions: R.restrictionsIn("Must be 21+! This event is open to Stanford students & affiliates") });
+    const s1 = R.scopeOf(f1, R.planFill(f1, facts)), s2 = R.scopeOf(f2, R.planFill(f2, facts));
+    check("restrictions: a cosmetic edit (order, punctuation, '&') changes neither the hash nor the scope", R.scopeHash(s1) === R.scopeHash(s2) && R.scopeChanges(s1, s2).length === 0, { s1: s1.restrictions, s2: s2.restrictions });
+  }
   const form = base({ restrictions: r });
   const plan = R.planFill(form, facts);
   check("restrictions: part of the scope their yes covers", JSON.stringify(R.scopeOf(form, plan).restrictions) === JSON.stringify(r));

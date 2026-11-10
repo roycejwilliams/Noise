@@ -264,18 +264,30 @@ export const readyForYes = (p: Plan) => !p.blockers.length && !p.missing.length 
 // Pure: the sentences of the event's own description that say who it's for or what attending requires, verbatim and clipped (live test
 // 2026-11-09: "This event is open to Stanford students and affiliates. You must RSVP to attend." was never asked by the form, and a
 // non-affiliate was registered). Cue puts them in front of the member as a fact to confirm; it never decides whether they qualify.
-const RESTRICTION = /\b(?:open (?:only )?to|only (?:open )?(?:to|for)|exclusively (?:for|to)|restricted to|limited to|reserved for|invite[- ]only|invitation[- ]only|by invitation|(?:students|members|employees|alumni|affiliates|faculty|staff|founders|investors) only|must be (?:\d{2}\+|over|at least|a (?:current )?(?:member|student|employee)|an? (?:alumn|affiliate|employee|member|student))|(?:\d{2}\+|21 and over|18 and over)(?: only| event)?\b|ages? \d{2}(?:\+| and (?:up|over))|(?:valid |student |government |photo )?id (?:is )?required|bring (?:a |your )?(?:valid |student |photo )?id|proof of (?:enrollment|employment|membership)|you must (?:be|have|show|bring|hold))/i;
+// Only eligibility (review 2026-11-09): who may attend (students, affiliates, members, employees, alumni, faculty, staff), invite-only,
+// an age floor, an ID or badge, or an RSVP required of such a group. Never capacity ("space is limited"), food, or "open to all".
+const WHO = /\b(?:students?|affiliates?|members?|employees?|alumni|alumnae|faculty|staff|residents?)\b/i;
+const NARROWS = /\b(?:open (?:only )?to|only (?:open )?(?:to|for)|exclusively|restricted to|reserved for|limited to|must be|is for|are for|(?:students?|affiliates?|members?|employees?|alumni|faculty|staff)[- ]only|eligible)\b/i;
+const INVITE = /\b(?:invite|invitation)[- ]only\b|\bby invitation\b|\bprivate event\b/i;
+const AGE = /\b(?:21|18)\s?\+|\b(?:21|18) (?:and|or) (?:over|older|up)\b|\bages? (?:21|18)\b|\bmust be (?:21|18)\b/i;
+const IDS = /\b(?:valid |student |government |photo |company )?(?:id|identification|badge)\b[^.]{0,40}\b(?:required|needed|must|bring|show|present)\b|\b(?:bring|show|present) (?:a |your )?(?:valid |student |government |photo |company )?(?:id|identification|badge)\b/i;
+const RSVP_GROUP = /\b(?:students?|affiliates?|members?|employees?|alumni|faculty|staff)\b[^.]{0,60}\bmust (?:rsvp|register)\b/i;
+const NOT_ELIGIBILITY = /\bopen to (?:all|everyone|the public|anyone)\b|\beveryone (?:is )?welcome\b|\b(?:space|spots?|seats?|capacity)\b[^.]{0,30}\blimited\b|\blimited (?:space|spots?|seats?|capacity)\b|\bfirst come\b/i;
 export function restrictionsIn(description: string | null | undefined): string[] {
-  const text = String(description ?? "").replace(/[\u200b\u00a0]/g, " ").replace(/\s+/g, " ").trim();
+  const text = String(description ?? "").replace(/[​ ]/g, " ").replace(/\s+/g, " ").trim();
   if (!text) return [];
   const out: string[] = [];
   for (const s of text.split(/(?<=[.!?])\s+/)) {
     const t = s.trim();
-    if (t && RESTRICTION.test(t) && !out.includes(t)) out.push(t.length > 220 ? `${t.slice(0, 219).trimEnd()}…` : t);
-    if (out.length >= 3) break;
+    if (!t || NOT_ELIGIBILITY.test(t) && !INVITE.test(t) && !AGE.test(t)) continue;
+    const eligible = (WHO.test(t) && NARROWS.test(t)) || INVITE.test(t) || AGE.test(t) || IDS.test(t) || RSVP_GROUP.test(t);
+    if (eligible && !out.includes(t)) out.push(t.length > 220 ? `${t.slice(0, 219).trimEnd()}…` : t);
   }
-  return out;
+  // Uncapped, in a stable order, so a page that reorders its sentences asks nothing new.
+  return out.sort((x, y) => normRestriction(x).localeCompare(normRestriction(y)));
 }
+// Pure: a restriction as compared and hashed: case, punctuation, "&" and spacing don't count (a cosmetic edit never re-asks).
+export const normRestriction = (r: string) => r.toLowerCase().replace(/&/g, " and ").replace(/[’']/g, "").replace(/[^a-z0-9+]+/g, " ").trim();
 
 // ---------------------------------------------------------------- tailored answers stay with their registration (pure)
 
@@ -357,7 +369,8 @@ export function scopeOf(form: FormRead, plan: Plan): Scope {
   };
 }
 
-export const scopeHash = (s: Scope) => createHash("sha256").update(JSON.stringify(s)).digest("hex").slice(0, 32);
+// The hash compares restrictions by their normalized words, sorted: the page's own wording is what the member reads.
+export const scopeHash = (s: Scope) => createHash("sha256").update(JSON.stringify({ ...s, restrictions: s.restrictions ? [...new Set(s.restrictions.map(normRestriction))].sort() : undefined })).digest("hex").slice(0, 32);
 
 // Pure: what changed between the scope they said yes to and the page now, in plain terms. Material changes stop the submit and go back
 // to them: a new time, a price, a different outcome (approval or waitlist), a new thing to share, a new term to agree to.
@@ -372,8 +385,8 @@ export function scopeChanges(asked: Scope, now: Scope): string[] {
   const askedAgrees = new Set(asked.agrees.map((a) => `${a.label}|${a.termsText ?? ""}`));
   for (const a of now.agrees) if (!askedAgrees.has(`${a.label}|${a.termsText ?? ""}`)) out.push(`there are new terms to agree to ("${a.label.slice(0, 80)}")`);
   if (asked.eventName && now.eventName && asked.eventName !== now.eventName) out.push("the event's name changed");
-  const askedR = new Set(asked.restrictions ?? []);
-  if ((now.restrictions ?? []).some((r) => !askedR.has(r))) out.push("the page now says more about who it's for");
+  const askedR = new Set((asked.restrictions ?? []).map(normRestriction));
+  if ((now.restrictions ?? []).some((r) => !askedR.has(normRestriction(r)))) out.push("the page now says more about who it's for");
   return out;
 }
 
