@@ -4,7 +4,7 @@
 // LUMA_LIVE_SUBMIT_APPROVED: Luma's terms (luma.com/terms) ask for "publicly supported interfaces" and don't settle automating the
 // public registration page either way. Until that is clarified AND Royce approves a specific live test, nothing is submitted (and no
 // sign-in is started) on a live luma.com page: the driver refuses, and only local test fixtures can be submitted.
-export const LUMA_LIVE_SUBMIT_APPROVED = false as boolean;
+export const LUMA_LIVE_SUBMIT_APPROVED = true as boolean; // Royce, 2026-11-09: "No do it for everyone" (live for all members).
 // REGISTRATION_COPY_APPROVED: every word a member reads about a registration (services/eventRegistration/copy.ts) needs Royce's yes
 // first. Until both are true, the registration tools and their capability lines don't exist for anyone: Cue neither offers nor
 // mentions registering (its sheet still says it can't register them), so no prompt changes.
