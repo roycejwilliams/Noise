@@ -280,7 +280,7 @@ export type LumaPublicEvent = {
   requireApproval: boolean | null;
   spotsRemaining: number | null;
 };
-// Why a call gave no answer, kept apart from "Luma knows no such event" (null), which is only a 404 or a 200 naming no event
+// Why a call gave no answer, kept apart from Luma knowing no such event (null), which is only a 404 or a 200 naming no event
 // (Royce, 2026-11-10: "a failed verification service must never become 'nothing found'"):
 //   "refused": Luma said 429. "limited": our own per-minute stop. "off": no LUMA_API_KEY.
 //   "denied": Luma refused the key itself (401 or 403; from 2026-10-31 every call answered 403 "Your calendar must have an active
