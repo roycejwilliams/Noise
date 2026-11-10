@@ -191,6 +191,58 @@ export function ownStateFrom(text: string, registerButton: boolean): { state: "r
   return { state: "unknown", why: "the page shows neither a registration nor a way to register" };
 }
 
+// What the page shows in the registration's own region, read in the page (plain JavaScript in a string, like READ_FORM_JS).
+//   region: the open dialog, else the RSVP/ticket block the register button sat in (tagged when it was clicked), else the page's main
+//   content with its header, nav and footer taken out ("main"), else nothing.
+export type RegionRead = { region: "dialog" | "rsvp" | "main" | "none"; text: string; codeInput: boolean; signInForm: boolean; formStillOpen: boolean; tied: boolean; ticket: string | null };
+const REGION_JS = String.raw`((member) => {
+  const visible = (el) => !!el && el.isConnected && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const dialog = document.querySelector("[role=dialog]");
+  const rsvp = document.querySelector("[data-cue-region]");
+  let region = "none", node = null;
+  if (visible(dialog)) { region = "dialog"; node = dialog; }
+  else if (visible(rsvp)) { region = "rsvp"; node = rsvp; }
+  else {
+    const main = document.querySelector("main") || document.body;
+    if (main) { region = "main"; node = main.cloneNode(true); node.querySelectorAll("header, nav, footer, [role=navigation], [role=banner], [role=contentinfo]").forEach((x) => x.remove()); }
+  }
+  if (!node) return { region: "none", text: "", codeInput: false, signInForm: false, formStillOpen: false, tied: false, ticket: null };
+  const text = ((node.innerText !== undefined && node.isConnected ? node.innerText : node.textContent) || "").replace(/\s+/g, " ").trim().slice(0, 4000);
+  const q = (s) => node.querySelector(s);
+  const codeInput = !!q("input[autocomplete=one-time-code]") || (!!q("input[inputmode=numeric]") && /code/i.test(text));
+  const hasName = !!q("input[name=name], input[autocomplete=name], input[autocomplete=given-name]");
+  const hasEmail = !!q("input[type=email], input[autocomplete=email]");
+  const signInForm = hasEmail && !hasName && /sign in|log in|continue with email/i.test(text);
+  const formStillOpen = region === "dialog" && hasName && !!q("button[type=submit]");
+  const low = text.toLowerCase();
+  const tiedWords = (member.email && low.includes(String(member.email).toLowerCase())) || (member.name && low.includes(String(member.name).toLowerCase()));
+  const links = Array.from(node.querySelectorAll("a[href]")).map((a) => a.href);
+  const ticket = links.find((h) => /^https:\/\/(?:lu\.ma|luma\.com)\/(?:ticket|e\/ticket|tickets?)\//i.test(h)) || null;
+  return { region, text, codeInput, signInForm, formStillOpen, tied: !!tiedWords || !!ticket, ticket };
+})`;
+
+// A string expression is evaluated as is (Playwright passes no argument to it), so the member is written into the call.
+const regionCall = (member: { email: string | null; name: string | null }) => `${REGION_JS}(${JSON.stringify(member)})`;
+
+// Pure: the result of a submit from its region's read. A code input in the region is the code step. Success, pending, waitlist and
+// already-registered count only from the dialog or the RSVP block (generic words in the page's main content are not proof). An error
+// counts as failed only while the dialog's form is still open (the submit was refused there); everything else after a click is unknown,
+// which the record keeps as uncertain: never "blocked", never a guessed "failed", never a second submit.
+export function resultFrom(r: RegionRead | null, eventUrl: string): SubmitRead {
+  const none: SubmitRead = { state: "unknown", detail: null, link: eventUrl, linkKind: "event_page" };
+  if (!r) return none;
+  if (r.codeInput) return { state: "needs_code", detail: "Luma sent a code to their email", link: null, linkKind: "event_page" };
+  if (r.signInForm) return none;
+  const words = readResultText(r.text);
+  const scoped = r.region === "dialog" || r.region === "rsvp";
+  const link = r.ticket ?? eventUrl;
+  const linkKind = r.ticket ? ("confirmation" as const) : ("event_page" as const);
+  const detail = `${r.text.slice(0, 200)}${r.tied ? "" : " [not tied to them on the page]"}`;
+  if (words === "failed") return r.formStillOpen ? { state: "failed", detail: r.text.slice(0, 200), link: eventUrl, linkKind: "event_page" } : none;
+  if (words === "unknown" || words === "blocked" || words === "uncertain" || !scoped) return none;
+  return { state: words, detail, link, linkKind };
+}
+
 // ---------------------------------------------------------------- held sessions (in memory only)
 
 // A session waiting on the member (their emailed code), by registration id. In memory only: a restart drops it (the member is asked to
@@ -332,6 +384,11 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
     const b = page.getByRole("button", { name: REGISTER_BUTTON }).first();
     if (!(await b.count().catch(() => 0))) { button = null; return; }
     button = (await b.innerText().catch(() => "")).trim() || null;
+    // The block the register button sits in (the event's RSVP/ticket card): where the page answers a submit when its dialog closes.
+    await b.evaluate((el) => {
+      const r = el.closest("section, [class*=card], [class*=rsvp], [class*=ticket], [class*=register]") ?? el.parentElement?.parentElement ?? el.parentElement;
+      r?.setAttribute("data-cue-region", "1");
+    }).catch(() => {});
     await b.click({ timeout: 5_000 }).catch(() => {});
     await page.waitForTimeout(fixtureMode ? 100 : LUMA_LIMITS.settleMs);
   };
@@ -350,13 +407,11 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
     for (const f of r.fields) if (f.combo) { const o = extra[i++]; if (o && !f.options.length) try { f.options = JSON.parse(o); } catch {} }
     return r;
   };
-  const resultNow = async (): Promise<SubmitRead> => {
-    const text = await page.evaluate(() => document.body.innerText ?? "").catch(() => "");
-    if (/enter the code|verification code|code we (?:sent|emailed)/i.test(text) || (await page.$("input[autocomplete=one-time-code]"))) return { state: "needs_code", detail: "Luma sent a code to their email", link: null, linkKind: "event_page" };
-    const state = readResultText(text);
-    // The page's own ticket or confirmation link when it shows one (never made up); else the event page.
-    const ticket = await page.$$eval("a[href]", (as) => as.map((a) => (a as HTMLAnchorElement).href).find((h) => /^https:\/\/(?:lu\.ma|luma\.com)\/(?:ticket|e\/ticket|tickets?)\//i.test(h)) ?? null).catch(() => null);
-    return { state, detail: state === "unknown" ? null : text.replace(/\s+/g, " ").slice(0, 200), link: ticket ?? url, linkKind: ticket ? "confirmation" : "event_page" };
+  // The registration RESULT, read from its own region only (live test 2026-11-09: the whole page's text, header nav "Sign In" included,
+  // read a successful signup as blocked). member: their email and name, to tie the result to them where the page shows it.
+  const resultNow = async (member?: { email?: string | null; name?: string | null }): Promise<SubmitRead> => {
+    const r = (await page.evaluate(regionCall({ email: member?.email ?? null, name: member?.name ?? null })).catch(() => null)) as RegionRead | null;
+    return resultFrom(r, url);
   };
   // A field by the id its read gave it (READ_FORM_JS tags each one with data-cue-id), else by its name.
   const fieldLocator = (id: string) => page.locator(`[role=dialog] [data-cue-id=${JSON.stringify(id)}], [role=dialog] [name=${JSON.stringify(id)}]`).first();
@@ -426,7 +481,7 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
       }
       return { ok: true };
     },
-    async submit() {
+    async submit(member) {
       if (!submitAllowed(fixtureMode)) throw new LiveSubmitDisabled();
       mode = "submit";
       // Whether the click happened decides what a crash means: before it, nothing was sent; after it, the result is unknown.
@@ -438,10 +493,10 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
         clicked = true;
         await go.click({ timeout: 5_000 });
         const until = Date.now() + (fixtureMode ? 1_500 : LUMA_LIMITS.resultMs);
-        let r = await resultNow();
+        let r = await resultNow(member);
         while (r.state === "unknown" && Date.now() < until) {
           await page.waitForTimeout(LUMA_LIMITS.pollMs);
-          r = await resultNow();
+          r = await resultNow(member);
         }
         return r;
       } catch (err: any) {
@@ -453,12 +508,13 @@ async function openLuma(urlIn: string, deps: LumaDeps): Promise<RegistrationSess
       if (!signedIn) return { state: "unknown", why: "not signed in to Luma in this session" };
       await page.reload({ waitUntil: "domcontentloaded", timeout: LUMA_LIMITS.pageMs });
       await page.waitForTimeout(fixtureMode ? 150 : LUMA_LIMITS.settleMs);
-      const text = await page.evaluate(() => document.body.innerText ?? "").catch(() => "");
+      // The page's own content, never its header or nav (a nav "Sign In" or "Discover Events" says nothing about this guest).
+      const r = (await page.evaluate(regionCall({ email: null, name: null })).catch(() => null)) as RegionRead | null;
       const button = await page.getByRole("button", { name: REGISTER_BUTTON }).count().catch(() => 0);
-      return ownStateFrom(text, button > 0);
+      return ownStateFrom(r?.text ?? "", button > 0);
     },
-    async readResult() {
-      return resultNow();
+    async readResult(member) {
+      return resultNow(member);
     },
     async pageText() {
       return page.evaluate(() => document.body.innerText ?? "").catch(() => "");

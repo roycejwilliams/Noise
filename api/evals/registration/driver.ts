@@ -285,6 +285,46 @@ if (browser) {
       await B.closeBrowser();
     }
   }
+  {
+    // Live test 2026-11-09 (luma.com/example-event): Luma's header nav carries "Sign In" on every page; a signup that succeeded was read as
+    // blocked from the whole page's text. The result is read from its own region only, here with that nav on every page.
+    const navFix: Fixture[] = [
+      { slug: "nav-in", name: "Nav Night", nav: true, resultIn: "card" },
+      { slug: "nav-pending", name: "Nav Partner Day", nav: true, resultIn: "card", button: "Request to Join", result: "pending" },
+      { slug: "nav-wait", name: "Nav Pitch Night", nav: true, resultIn: "card", button: "Join Waitlist", result: "waitlist", ticketInfo: { is_free: true, is_sold_out: true } },
+      { slug: "nav-unclear", name: "Nav Slow Night", nav: true, resultIn: "card", result: "timeout" },
+      { slug: "nav-dialog", name: "Nav Dialog Night", nav: true },
+    ];
+    const dn = D.lumaDriver({ ...deps, fixtures: fixtureMap(navFix) });
+    const me = { email: "jordan@example.com", name: "Jordan Ellis" };
+    const run = async (slug: string) => {
+      const s = await dn.open(fixtureUrl({ slug }));
+      try {
+        const plan = R.planFill(await s.read(), facts);
+        await s.fill(Object.fromEntries(plan.fill.map((x) => [x.fieldId, x.value])), []);
+        const r = await s.submit(me);
+        return { r, page: await s.pageText() };
+      } finally { await s.close(); }
+    };
+    const a = await run("nav-in");
+    check("the live collision: nav 'Sign In' on the page, result 'You're In' in the RSVP card: registered, tied to them", a.page.includes("Sign In") && a.r.state === "registered" && !/not tied/.test(a.r.detail ?? ""), a);
+    const b = await run("nav-pending");
+    check("nav 'Sign In' + pending in the card: pending_approval", b.r.state === "pending_approval", b.r);
+    const c = await run("nav-wait");
+    check("nav 'Sign In' + waitlisted in the card: waitlisted", c.r.state === "waitlisted", c.r);
+    const u = await run("nav-unclear");
+    check("nav 'Sign In' + no answer: unknown (uncertain after the click), never blocked", u.r.state === "unknown", u.r);
+    const dd = await run("nav-dialog");
+    check("nav 'Sign In' + the result in the dialog: registered", dd.r.state === "registered", dd.r);
+    // Pure: what counts and what doesn't.
+    const base = { region: "rsvp" as const, text: "", codeInput: false, signInForm: false, formStillOpen: false, tied: false, ticket: null };
+    check("pure: success words only in the page's main content are not proof (unknown)", D.resultFrom({ ...base, region: "main", text: "You're In" }, "https://luma.com/x").state === "unknown");
+    check("pure: a code input in the region is the code step", D.resultFrom({ ...base, region: "dialog", codeInput: true, text: "Enter the code" }, "https://luma.com/x").state === "needs_code");
+    check("pure: a sign-in form in place of the registration form is unknown (uncertain), never blocked", D.resultFrom({ ...base, region: "dialog", signInForm: true, text: "Sign in Continue with email" }, "https://luma.com/x").state === "unknown");
+    check("pure: an error counts as failed only while the dialog's form is still open; otherwise unknown", D.resultFrom({ ...base, region: "dialog", formStillOpen: true, text: "Something went wrong. Please try again." }, "https://luma.com/x").state === "failed" && D.resultFrom({ ...base, region: "rsvp", text: "Something went wrong" }, "https://luma.com/x").state === "unknown");
+    check("pure: a ticket link in the region is the confirmation link and ties it to them", (() => { const r = D.resultFrom({ ...base, text: "You're In", ticket: "https://luma.com/ticket/abc", tied: true }, "https://luma.com/x"); return r.state === "registered" && r.link === "https://luma.com/ticket/abc" && r.linkKind === "confirmation"; })());
+    check("pure: no read at all is unknown", D.resultFrom(null, "https://luma.com/x").state === "unknown");
+  }
   check("page slots: every session released", open === 0, open);
   await browser.close();
 }

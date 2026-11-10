@@ -18,9 +18,10 @@ export type RegistrationSession = {
   fill(values: Record<string, string>, agreed: string[]): Promise<{ ok: true } | { ok: false; detail: string }>;
   // Submit once and read the page's answer. Refused unless live submission is approved or the page is a test fixture. A failure
   // carries `clicked`: false means nothing was sent; true means the result is unknown (never retried on a guess).
-  submit(): Promise<SubmitRead>;
+  // member: their email and name, to tie the page's result to them where it shows them.
+  submit(member?: { email?: string | null; name?: string | null }): Promise<SubmitRead>;
   // Read the page's current state again without submitting (a reconcile read).
-  readResult(): Promise<SubmitRead>;
+  readResult(member?: { email?: string | null; name?: string | null }): Promise<SubmitRead>;
   // The page's visible text, as it stands (read only).
   pageText(): Promise<string>;
   // What Luma itself holds for their email on this event, read from the signed-in page (the external duplicate check). Unknown unless
