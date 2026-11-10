@@ -49,6 +49,12 @@ export type EventDetails = {
   // Its zone came from its city, not its page, and its start doesn't carry that zone's offset (eventPage.ts settleZone): its time is
   // said as a guess (renderEventDetails).
   zoneGuessed?: boolean;
+  // Luma's own registration state on its page (registration_availability: "open", "waitlist", "sold-out", ...), as the page says it.
+  // Upcoming isn't the same as taking registrations: a waitlisted or sold-out event exists, it just isn't open (soldOut is true for
+  // both, as the page's own sold_out flag already was for a waitlist).
+  registration?: string | null;
+  // The page's own schema.org record says it's cancelled (eventStatus EventCancelled). Absent: the page didn't say (unknown, not live).
+  cancelled?: boolean;
 };
 
 // Tier 3: what the source post actually says.
@@ -88,6 +94,10 @@ export function parseLumaEventPage(html: string): EventDetails | null {
   const ticket = data.ticket_info ?? {};
   const cents = ticket.price?.cents;
   const description = proseMirrorText(data.description_mirror).replace(/\n{3,}/g, "\n\n").trim();
+  const registration = typeof data.registration_availability === "string" ? data.registration_availability : null;
+  // Sold out by any of the page's own flags (2026-11-10 sample: one real event page said registration "sold-out" with sold_out false).
+  const soldOut = data.sold_out === true || ticket.is_sold_out === true || registration === "sold-out" ? true : typeof data.sold_out === "boolean" ? false : null;
+  const cancelled = lumaPageCancelled(html);
   return {
     startAt: ev.start_at ?? data.start_at ?? null,
     endAt: ev.end_at ?? null,
@@ -100,9 +110,73 @@ export function parseLumaEventPage(html: string): EventDetails | null {
     price: ticket.is_free ? "free" : typeof cents === "number" ? `${(cents / 100).toFixed(cents % 100 ? 2 : 0)} ${String(ticket.price.currency ?? "usd").toUpperCase()}` : null,
     spotsRemaining: typeof ticket.spots_remaining === "number" ? ticket.spots_remaining : null,
     requiresApproval: typeof ticket.require_approval === "boolean" ? ticket.require_approval : null,
-    soldOut: typeof data.sold_out === "boolean" ? data.sold_out : null,
+    soldOut,
     guestCount: typeof data.guest_count === "number" ? data.guest_count : null,
     description: description ? description.slice(0, DESCRIPTION_MAX) : null,
+    // Who the host listed it for, as the page's own record says ("public", or "private": anyone with the link, never listed).
+    visibility: typeof ev.visibility === "string" ? ev.visibility : null,
+    ...(registration ? { registration } : {}),
+    ...(cancelled ? { cancelled: true } : {}),
+  };
+}
+
+// Pure: whether a Luma page's own schema.org record says the event is cancelled. Only its own words count: no record, or a record that
+// doesn't say, is not "cancelled" (unknown).
+export function lumaPageCancelled(html: string): boolean {
+  for (const m of html.matchAll(/<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const d = JSON.parse(m[1]);
+      for (const x of Array.isArray(d) ? d : [d]) if (/EventCancelled/i.test(String(x?.eventStatus ?? ""))) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+// Pure: a Luma event page's record in the shape Luma's API gives (services/luma.ts LumaPublicEvent), so the Luma search through Exa
+// (services/lumaViaExa.ts) checks a page and an API answer by the same rules; null when the page holds no event (a calendar's or a
+// city's page). Only what the page's own embedded data says: nothing inferred. noindex: the page asks search engines not to list it
+// (Luma does this for its "private" events, 2026-11-10 sample), read as one more sign it isn't for public discovery.
+export type LumaPageRecord = import("./luma.js").LumaPublicEvent & { details: EventDetails; registration: string | null; soldOut: boolean | null; cancelled: boolean; noindex: boolean };
+export function lumaPageRecord(html: string): LumaPageRecord | null {
+  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  let data: any;
+  try {
+    data = JSON.parse(m[1])?.props?.pageProps?.initialData?.data;
+  } catch {
+    return null;
+  }
+  const ev = data?.event;
+  const details = parseLumaEventPage(html);
+  if (!ev || !details || typeof ev.api_id !== "string" || typeof ev.start_at !== "string") return null;
+  const geo = ev.geo_address_info ?? {};
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const registration = details.registration ?? null;
+  return {
+    id: ev.api_id,
+    name: String(ev.name ?? "").trim(),
+    slug: str(ev.url),
+    startAt: ev.start_at,
+    endAt: str(ev.end_at),
+    timezone: str(ev.timezone),
+    visibility: str(ev.visibility),
+    locationType: str(ev.location_type),
+    locationVisibility: str(ev.geo_address_visibility),
+    city: str(geo.city),
+    address: str(geo.address),
+    fullAddress: str(geo.full_address),
+    hosts: details.hosts,
+    description: details.description,
+    registrationOpen: registration ? registration === "open" : null,
+    requireApproval: details.requiresApproval,
+    spotsRemaining: details.spotsRemaining,
+    details,
+    registration,
+    soldOut: details.soldOut,
+    cancelled: details.cancelled === true,
+    noindex: /<meta[^>]+name="robots"[^>]+content="[^"]*noindex/i.test(html),
   };
 }
 
@@ -148,25 +222,35 @@ export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: numb
 // One fetch of a Luma page: its html and its event record (null for a calendar's or a city's page), the record cached as above. The web
 // search's page check reads both from this one response (taskWeb.ts pickPage; re-review of #293: it fetched the page to check it, then
 // read it again).
-export async function readLumaPage(url: string): Promise<{ html: string | null; details: EventDetails | null }> {
+// status: the page's HTTP status (null when no answer came: timed out, unreachable, or a redirect hop refused); error: why there's no
+// html, said plainly. A 404 is a page that isn't there; a 403, 429 or 503 is Luma not serving it to us (never "no such event").
+export async function readLumaPage(url: string, fetchImpl: typeof fetch = fetch): Promise<{ html: string | null; details: EventDetails | null; status: number | null; error: string | null }> {
   const key = lumaUrl(url);
   let html: string | null = null;
+  let status: number | null = null;
+  let error: string | null = null;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PAGE_TIMEOUT_MS);
     try {
-      const res = await fetchCheckedHops(key, controller.signal);
-      if (res?.ok) html = await res.text();
+      const res = await fetchCheckedHops(key, controller.signal, fetchImpl);
+      if (!res) error = "a redirect hop was refused";
+      else {
+        status = res.status;
+        if (res.ok) html = await res.text();
+        else error = `HTTP ${res.status}`;
+      }
     } finally {
       clearTimeout(timer);
     }
   } catch (err: any) {
+    error = /abort/i.test(String(err?.name ?? err?.message ?? "")) ? `timed out (${PAGE_TIMEOUT_MS / 1000}s)` : String(err?.message ?? err).slice(0, 120);
     console.error(`eventDetails: fetch failed for ${key} (non-fatal):`, err?.message ?? err);
   }
   const details = html ? parseLumaEventPage(html) : null;
   if (detailCache.size > 500) detailCache.clear();
   detailCache.set(key, { at: Date.now(), details });
-  return { html, details };
+  return { html, details, status, error };
 }
 
 // Plain facts for any prompt, one per line. Only what's actually on record.
