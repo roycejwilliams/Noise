@@ -167,7 +167,8 @@ const LIST_LINE = /^\s*(?:[-*•▪◦→>]|\d{1,2}[.)]|\p{Extended_Pictographic
 // A headline that counts things ("Five places to look for founder support", "10 fellowships open now").
 const COUNT_HEADLINE = /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|top \d{1,2})\s+(?:[\w'-]+\s+){0,3}?(?:places|programs|programmes|ways|resources|things|options|opportunities|accelerators|fellowships|residencies|communities|grants|picks|orgs|organizations|funds|incubators)\b/i;
 const URLS = /https?:\/\/[^\s)"'<>\]]+/gi;
-export type Roundup = { items: number; line: string | null; links: string[] };
+// links: every candidate, those whose host carries its name or acronym first (named); the rest are only pages about it.
+export type Roundup = { items: number; line: string | null; links: string[]; named?: string[] };
 // Pure: is this text a roundup that lists several things, this one among them? A post: three or more list lines with this one in some
 // but not all of them, or a counting headline whose opening line isn't about this thing. A page: only the counting headline (its own
 // page lists its benefits in bullets; that's not a roundup). links: candidates for its own page, the ones on the line that names it
@@ -202,24 +203,32 @@ export function roundupOf(text: string, name: string, o: { page?: boolean } = {}
   const allowed = (u: string) => { const h = bare(u); return !!h && !isX(u) && !SHORTENER.test(h) && !WRITE_UP.test(h); };
   const all = (t.match(URLS) ?? []).map(clean);
   const onLine = (line?.match(URLS) ?? []).map(clean).filter(allowed);
-  const links = [...new Set([...onLine, ...all.filter(ownPage)])];
-  return { items: items.length, line: line ? line.slice(0, 200) : null, links };
+  const byName = [...new Set(all.filter(ownPage))];
+  const links = [...new Set([...byName, ...onLine])];
+  return { items: items.length, line: line ? line.slice(0, 200) : null, links, named: byName };
 }
 // Hosts that shorten links, and hosts where a third party writes about things: never a thing's own page.
 const SHORTENER = /^(?:t\.co|bit\.ly|tinyurl\.com|buff\.ly|ow\.ly|lnkd\.in|rebrand\.ly|is\.gd|cutt\.ly|shorturl\.at)$/;
-const WRITE_UP = /(?:^|\.)(?:medium\.com|substack\.com|linkedin\.com|youtube\.com|youtu\.be|reddit\.com|facebook\.com|instagram\.com|threads\.net|tiktok\.com|news\.ycombinator\.com|techcrunch\.com|forbes\.com|businessinsider\.com|venturebeat\.com|wired\.com|theverge\.com|pcmag\.com|crunchbase\.com|wikipedia\.org|github\.com|notion\.site|beehiiv\.com|ghost\.io)$/;
+// Event platforms too, for this resolution only (round-3 review of #441): a Luma, Eventbrite, Partiful or Meetup page about a program is
+// never the program's own page. Event finds never pass through here (roundupOf runs only for openings).
+const WRITE_UP = /(?:^|\.)(?:lu\.ma|luma\.com|eventbrite(?:\.[a-z]{2,3}){1,2}|partiful\.com|meetup\.com|medium\.com|substack\.com|linkedin\.com|youtube\.com|youtu\.be|reddit\.com|facebook\.com|instagram\.com|threads\.net|tiktok\.com|news\.ycombinator\.com|techcrunch\.com|forbes\.com|businessinsider\.com|venturebeat\.com|wired\.com|theverge\.com|pcmag\.com|crunchbase\.com|wikipedia\.org|github\.com|notion\.site|beehiiv\.com|ghost\.io)$/;
 
 // Its own page, from the roundup's links: the first that reads, names it near its top, and isn't itself a roundup. Then the usual
 // send-time read runs on that page (dates, closing words), with the roundup kept as where it was found. None: held and read again (the
 // defers bound it), never sent as the post and never described from the post as if it were its page.
 async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: { now: Date; zone: string | null; deps: RecheckDeps }): Promise<Recheck> {
   const label = r.line ? `listed as: ${r.line}` : "listed among several things";
-  for (const link of r.links.slice(0, 3)) {
+  // A link whose host carries its name or acronym first (its own page); only when none of those reads, the line's other links, and then
+  // the page is "a page about it", never its own or official page (round-3 review of #441).
+  const named = new Set(r.named ?? []);
+  const ordered = [...r.links.filter((l) => named.has(l)), ...r.links.filter((l) => !named.has(l))].slice(0, 3);
+  for (const link of ordered) {
     const page = await o.deps.page(link).catch((): PageRead => ({ text: null, gone: false }));
     if (!page.text || page.gone || !namesThing(page.text.slice(0, 6000), match.name) || roundupOf(page.text, match.name, { page: true })) continue;
-    const own = { ...match, url: link, roundupUrl: url, foundInRoundup: label } as TierMatch;
+    const about = !named.has(link);
+    const own = { ...match, url: link, roundupUrl: url, foundInRoundup: label, ...(about ? { pageIsAbout: true } : {}) } as TierMatch;
     const next = await recheckFind(own, o);
-    return next.ok ? { ...next, changed: [...next.changed, "its own page instead of the post that listed it"] } : next;
+    return next.ok ? { ...next, changed: [...next.changed, about ? "a page about it instead of the post that listed it" : "its own page instead of the post that listed it"] } : next;
   }
   return { ok: false, exit: false, why: `its link is a post listing several things (${label.slice(0, 100)}), not its own page, and no page of its own could be read` };
 }
@@ -240,7 +249,8 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   // The Luma page that is its record: a Co or public event's own link (a full link or a slug: both come from Luma's own API,
   // services/tieredRecommendation.ts), a Luma link, else a Luma link in the post it came from.
   const postText = String(match.opportunity?.postText ?? ("evidence" in match ? match.evidence ?? "" : ""));
-  const lumaUrl = match.kind !== "opportunity" && url ? url : isLuma(url) ? url : (postText.match(/https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\/[^\s)"'<>]+/i)?.[0] ?? null);
+  // A roundup's own Luma links are other things (or a page about this one), never its record (round-3 review of #441).
+  const lumaUrl = match.kind !== "opportunity" && url ? url : isLuma(url) ? url : match.foundInRoundup || (isX(url) && roundupOf(postText, match.name)) ? null : (postText.match(/https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\/[^\s)"'<>]+/i)?.[0] ?? null);
   if (lumaUrl) {
     const d = await deps.luma(lumaUrl).catch(() => null);
     if (!d) return { ok: false, exit: false, why: "its event page couldn't be read just now" };

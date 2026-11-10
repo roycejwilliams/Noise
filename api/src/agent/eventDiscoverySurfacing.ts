@@ -69,7 +69,7 @@ function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): F
   return {
     ...matchFacts(askText, fromProfile, match),
     details: match.details ? renderEventDetails(match.name, match.details) : null,
-    ...(match.pageNow ? { its_own_page_read_at_send: match.pageNow.slice(0, 1500) } : {}),
+    ...(match.pageNow ? (match.pageIsAbout ? { a_page_about_it_read_at_send: match.pageNow.slice(0, 1500) } : { its_own_page_read_at_send: match.pageNow.slice(0, 1500) }) : {}),
     ...(roundup
       ? { where_it_was_found: `a post listing several things, this among them (${match.foundInRoundup}); the post is not this thing's page and says nothing current about its terms` }
       : { source_post: match.opportunity?.postText ?? null }),
