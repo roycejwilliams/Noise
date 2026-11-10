@@ -119,6 +119,8 @@ export const PROACTIVE_CLASS: Record<string, SendClass> = {
   debrief: "checkin",
   window_followup: "checkin",
   goal_nudge: "checkin",
+  // A search they asked for didn't go through (services/searchFailedNotice.ts): optional, so the send-time read judges it.
+  search_failed: "checkin",
   // Tied to what they asked for or signed up for.
   post_call: "requested",
   pre_arrival: "requested",

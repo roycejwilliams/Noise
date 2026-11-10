@@ -34,7 +34,7 @@ type Q = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowC
 // that reply wrote from its words. Never anything a job, a sweep or a call makes: those candidate types and task sources stay.
 export type TakeBackWindow = { from: Date; until: Date; texts: string[] };
 // Candidate types a text reply never queues (calls, sweeps, finds, events, matching, Cue's own announcements): never settled here.
-const NOT_FROM_A_REPLY = ["post_call", "event_offer", "co_event", "event_change", "pre_arrival", "event_brief", "event_followthrough", "noshow_note", "in_room", "direct_ask", "intro_nudge", "intro_close", "event_match_nudge", "announcement", "product_update", "name_change", "companion", "debrief"];
+const NOT_FROM_A_REPLY = ["post_call", "event_offer", "co_event", "event_change", "pre_arrival", "event_brief", "event_followthrough", "noshow_note", "in_room", "direct_ask", "intro_nudge", "intro_close", "search_failed", "event_match_nudge", "announcement", "product_update", "name_change", "companion", "debrief"];
 const SETTLE_TIMEOUT_MS = 3000;
 const flat = (t: string) => t.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 // Pure: a row's words come from the taken-back text: at least two content words shared, and most of the row's own content words are in

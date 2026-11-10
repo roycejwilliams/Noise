@@ -171,6 +171,9 @@ export type ProactiveType =
   // The one neutral close for an intro they asked for by name, 7 days on, when no intro email went (services/introRequestClose.ts,
   // 2026-10-28): fixed words, the same whatever happened.
   | "intro_close"
+  // A search they asked for failed days in a row (services/searchFailedNotice.ts, 2026-11-09): Cue says so once per failure streak,
+  // in its own words, judged at send time like any optional message.
+  | "search_failed"
   // Texts another path wrote that wait at the door for the pick instead of sending themselves (harness/door.ts, Royce 2026-11-02): a
   // task's results or check-in, Cue's own event announcement, a heads-up about something they were interested in, an intro ask.
   | DoorType;
@@ -255,6 +258,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   voice_read_ask: { priority: 15 },
   // Once per request (its own target key); the caps, spacing and pauses apply as to any text Cue starts.
   intro_close: { priority: 46 },
+  // Once per failure streak per ask (its own target key), good only until the end of their day.
+  search_failed: { priority: 47 },
   // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
   // One deadline heads-up a day at most (final review of #108).
   deadline_nudge: { priority: 75, typeGapDays: 1 },
@@ -389,7 +394,8 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
 
 // Fixed texts that also wait out a safety hold (delay only: they stay pending and go once it lifts): the voice read's question.
 // And the one neutral close of an intro they asked for, the same for every outcome, so the hold says nothing about what happened.
-export const SAFETY_HOLD_ALSO = new Set<ProactiveType>(["voice_read_ask", "intro_close"]);
+// And the note that a search they asked for didn't go through: news about their own ask, so a safety hold delays it too.
+export const SAFETY_HOLD_ALSO = new Set<ProactiveType>(["voice_read_ask", "intro_close", "search_failed"]);
 
 // Pure: whether a hard day holds what waits on it now (the emotional_timing check, the stopped-looking line riding a paced text, a find
 // the composer skipped while they were struggling).
