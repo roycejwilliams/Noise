@@ -119,7 +119,7 @@ export function matchSent(rec: SentRecord, p: SentProbe): "url" | "event" | "nam
   const recKnown = !!(rec.eventId || rd), probeKnown = !!(pid || pd);
   // Neither side says which event it is (an opening, a program): the same program under another name or link is the same thing
   // (sameProgram; Royce 2026-11-10). Another cohort of it is not "already sent" here: it is new, and the picker is told what it updates.
-  if (a && b && a !== b && !recKnown && !probeKnown && sameProgram(rec.name, p.name ?? p.ident?.name ?? "") === "same") return "name";
+  if (a && b && a !== b && !recKnown && !probeKnown && sameProgram(rec.name, p.name ?? p.ident?.name ?? "", { a: rec.url, b: p.url ?? p.ident?.url ?? null }) === "same") return "name";
   if (!a || a !== b) return null;
   // Same name. Two events that each say which one they are (an id, or a date) are the same only if those agree: a new id or a new date
   // is a recurrence, a new find. A side that doesn't say leaves the name to decide (an opening, a link shared in a reply).
@@ -288,12 +288,13 @@ const BATCH_CODE = /^[wsf]\d{2}$/;
 const YEAR = /^20\d{2}$/;
 const COHORT_WORD = /^(?:batch|cohort|class)$/;
 
-// Pure: the acronyms a name spells out, from its runs of capitalized words ("South Park Commons" -> spc).
+// Pure: the acronyms a name spells out, from its runs of capitalized words ("South Park Commons" -> spc). Three letters or more only
+// (review of #441: two-letter pieces like "pc" and "mr" matched pcmag.com and mrbeast.com, and "AI" read as any two capitalized words).
 function acronymRuns(name: string): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const words = String(name ?? "").split(/[^\p{L}\p{N}&]+/u).filter(Boolean);
   for (let i = 0; i < words.length; i++) {
-    for (let len = 2; len <= 5 && i + len <= words.length; len++) {
+    for (let len = 3; len <= 5 && i + len <= words.length; len++) {
       const run = words.slice(i, i + len);
       if (!run.every((w) => /^\p{Lu}[\p{Ll}\p{N}]/u.test(w))) break;
       out.set(run.map((w) => w[0]).join("").toLowerCase(), run.map((w) => w.toLowerCase()));
@@ -309,7 +310,8 @@ function wordsWithAcronyms(name: string, other: string): string[] {
   const out: string[] = [];
   for (const raw of String(name ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/['’]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
     const w = raw.toLowerCase();
-    const full = /^\p{Lu}{2,5}$/u.test(raw) ? runs.get(w) : undefined;
+    // Any case ("spc residency" as well as "SPC"), three to five letters.
+    const full = w.length >= 3 && w.length <= 5 ? runs.get(w) : undefined;
     out.push(...(full ?? [w]));
   }
   return out;
@@ -332,10 +334,14 @@ const programWords = (name: string, other: string): Set<string> =>
 // Pure: are two opening names the same program? "same": one program (the same words once acronyms, cohort words and filler are set
 // aside); "other_cohort": the same program, a different cohort each name states; null: two things (a word of substance differs: a
 // residency is not a fellowship, even from one organization). A new link or headline alone never makes two.
-export function sameProgram(a: string, b: string): "same" | "other_cohort" | null {
+// Same also needs two words of substance in common, or the same host (review of #441: "Fellowship" and "Fellowship applications open"
+// were one program on a single shared word). hosts: each name's link, when known.
+export function sameProgram(a: string, b: string, hosts?: { a?: string | null; b?: string | null }): "same" | "other_cohort" | null {
   const wa = programWords(a, b), wb = programWords(b, a);
   if (!wa.size || !wb.size || wa.size !== wb.size) return null;
   for (const w of wa) if (!wb.has(w)) return null;
+  const ha = hostOf(hosts?.a), hb = hostOf(hosts?.b);
+  if (wa.size < 2 && !(ha && hb && ha === hb)) return null;
   const ca = cohortOf(a), cb = cohortOf(b);
   return ca && cb && ca !== cb ? "other_cohort" : "same";
 }
@@ -344,6 +350,36 @@ export function sameProgram(a: string, b: string): "same" | "other_cohort" | nul
 // "South Park Commons Member Residency"): all of them, or all but one for a long name (five or more), so the organization alone ("I know
 // someone at South Park Commons") or its other program ("the SPC fellowship") never counts. Used to tell whether something already
 // sent was talked about since (harness/matchGate.ts offerHistory).
+// Kind words: what sort of thing it is, not whose. The organization is the name's words before the first of these.
+const KIND = new Set(["residency", "residencies", "fellowship", "fellowships", "grant", "grants", "accelerator", "incubator", "program", "programs", "programme", "member", "members", "cohort", "batch", "class", "fund", "summit", "conference", "school", "camp", "lab", "labs", "prize", "award"]);
+// Pure: the organization a name opens with: its words (two or more, before the first kind word) and its acronym (three letters or more),
+// or one all-caps token of three to five letters ("SPC Member Residency" -> spc).
+function orgOf(name: string): { words: string[]; acronym: string | null } {
+  const toks = String(name ?? "").replace(/['\u2019]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const lead: string[] = [];
+  for (const t of toks) {
+    if (KIND.has(t.toLowerCase()) || WEAK.has(t.toLowerCase()) || !/^\p{Lu}/u.test(t)) break;
+    lead.push(t);
+  }
+  if (lead.length === 1 && /^\p{Lu}{3,5}$/u.test(lead[0])) return { words: [], acronym: lead[0].toLowerCase() };
+  if (lead.length < 2) return { words: [], acronym: null };
+  const acronym = lead.length >= 3 ? lead.map((w) => w[0]).join("").toLowerCase() : null;
+  return { words: lead.map((w) => w.toLowerCase()), acronym };
+}
+
+// Pure: is this thing talked about in a line, for "discussed" only (review of #441)? Its name (namesThing), or its organization alone:
+// all of the organization's words, or its acronym in any case ("I'm thinking about SPC", "I applied to South Park Commons last week").
+// Looser than namesThing on purpose: talked about only stops a month-later resend; it never marks anything handled or the same.
+export function mentionsThing(text: string, name: string): boolean {
+  if (namesThing(text, name)) return true;
+  const org = orgOf(name);
+  const toks = String(text ?? "").toLowerCase().replace(/['\u2019]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const have = new Set(toks);
+  if (org.words.length && org.words.every((w) => have.has(w))) return true;
+  if (org.acronym && (have.has(org.acronym) || acronymRuns(text).has(org.acronym))) return true;
+  return false;
+}
+
 export function namesThing(text: string, name: string): boolean {
   const stem = (w: string) => w.replace(/s$/, "");
   const want = [...programWords(name, text)].filter((w) => w.length >= 3);
@@ -357,15 +393,30 @@ export function namesThing(text: string, name: string): boolean {
 // namesThing decides.
 export function thingSearchTerms(name: string): string[] {
   const words = [...programWords(name, "")].filter((w) => w.length >= 3);
-  return [...new Set([...words, ...[...acronymRuns(name).keys()]])];
+  const org = orgOf(name);
+  return [...new Set([...words, ...[...acronymRuns(name).keys()], ...(org.acronym ? [org.acronym] : [])])];
+}
+
+// Pure: what an address must carry to be this thing's own page: a whole word of substance of five letters or more, or its organization's
+// acronym (three letters or more). Never a two-letter piece or a sub-run's initials (review of #441).
+export function hostTerms(name: string): string[] {
+  const org = orgOf(name);
+  const words = [...programWords(name, "")].filter((w) => w.length >= 5 && !KIND.has(w));
+  return [...new Set([...words, ...(org.acronym ? [org.acronym] : []), ...(org.words.length >= 2 ? [org.words.join("")] : [])])];
+}
+
+// Pure: a link's host, lower-cased, without www. null when there's none.
+export function hostOf(u: string | null | undefined): string | null {
+  const m = String(u ?? "").trim().match(/^https?:\/\/(?:www\.)?([^/?#]+)/i);
+  return m ? m[1].toLowerCase() : null;
 }
 
 // Pure: the sent record that is the same program as this opening under another name (or another cohort of it). Only for finds that
 // don't say which event they are: an event keeps eventIdentity's rules.
-export function sameProgramSent(records: readonly SentRecord[], name: string): { record: SentRecord; how: "same" | "other_cohort" } | null {
+export function sameProgramSent(records: readonly SentRecord[], name: string, url: string | null = null): { record: SentRecord; how: "same" | "other_cohort" } | null {
   for (const record of records) {
     if (record.eventId || dayOf(record.ident)) continue;
-    const how = sameProgram(record.name, name);
+    const how = sameProgram(record.name, name, { a: record.url, b: url });
     if (how) return { record, how };
   }
   return null;
