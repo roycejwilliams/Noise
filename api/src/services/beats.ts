@@ -12,11 +12,11 @@ export const MAX_BEATS = 5;
 export const asksThem = (p: string) => /\?/.test(p);
 // A list item: a number, a bullet or "Step N" at its start. Consecutive items, and the line that introduces them (ending in a colon),
 // are one connected explanation: one text, never a fragment per step (Royce, 2026-11-10: split only when it helps them read or use it).
-const FILLER = new Set(["the", "and", "that", "thats", "this", "its", "it", "is", "are", "was", "with", "for", "you", "your", "just", "really", "very", "also", "but", "has", "have"]);
+// A list item: a number, a bullet or "Step N" at its start. Consecutive items, and the line that introduces them (ending in a colon),
+// are one connected explanation: one text, never a fragment per step (Royce, 2026-11-10: split only when it helps them read or use it).
+// Nothing is ever dropped here (review of #443: a code-level "restates an earlier paragraph" rule dropped drafts, alternative versions
+// and should / should-not pairs); a repeat is the prompt's to avoid (the send tool's description).
 const LIST_ITEM = /^\s*(?:\d{1,2}[.)]|[-*\u2022]|step \d{1,2}\b)/i;
-// Pure: a reply's paragraphs with each list kept whole and a paragraph that only repeats an earlier one left out (Royce, 2026-11-10: a
-// link, its description, the description restated, a question). Repeats: nearly every word of substance in it (85%, five words or
-// more) is in one earlier paragraph, and it carries no link and no question of its own.
 export function keepTogether(parts: string[]): string[] {
   const out: string[] = [];
   for (const p of parts) {
@@ -24,13 +24,7 @@ export function keepTogether(parts: string[]): string[] {
     if (prev !== undefined && LIST_ITEM.test(p) && (LIST_ITEM.test(prev.split("\n").pop() ?? "") || /:\s*$/.test(prev))) out[out.length - 1] = `${prev}\n${p}`;
     else out.push(p);
   }
-  const words = (t: string) => new Set((t.toLowerCase().replace(/[\u2019']/g, "").match(/[a-z0-9]+/g) ?? []).filter((w) => w.length > 2 && !FILLER.has(w)));
-  return out.filter((p, i) => {
-    if (/https?:\/\//.test(p) || /\?/.test(p)) return true;
-    const w = words(p);
-    if (w.size < 5) return true;
-    return !out.slice(0, i).some((q) => { const qw = words(q); return [...w].filter((x) => qw.has(x)).length / w.size >= 0.85; });
-  });
+  return out;
 }
 export function toBeats(message: string): string[] {
   const parts = keepTogether(message.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean));
