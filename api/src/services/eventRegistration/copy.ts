@@ -58,10 +58,12 @@ export function submitAsk(c: Ctx, plan: Plan, scope: Scope, fit: string | null, 
   if (fit) out.push(fit.trim());
   out.push(status);
   out.push(`I'd use ${list(details)}${answers.length ? `, with ${answers.length === 1 ? "this answer" : "these answers"}: ${answers.join("; ")}` : ""}.`);
+  // Who the event's own page says it's for (registration.ts restrictionsIn), word for word: a fact for them to confirm, never Cue's
+  // judgment of whether they qualify (live test 2026-11-09: "open to Stanford students and affiliates" was never asked by the form).
+  if (scope.restrictions?.length) out.push(`Their page also says: ${scope.restrictions.map((r) => q(r)).join(" ")} Only say yes if that fits you.`);
   if (plan.attestations.length) out.push(`Registering also means agreeing to ${plan.attestations.length === 1 ? "their terms" : "these terms"}: ${plan.attestations.map((a) => q(clip(a.termsText || a.label, 300))).join("; ")}.`);
   if (plan.leftBlank.some((l) => l.why === "marketing")) out.push("I'll leave their mailing-list boxes unchecked.");
   out.push(`Want me to register you for this event using these details${answers.length ? " and answers" : ""}${plan.attestations.length ? `, and agree to ${plan.attestations.length === 1 ? "those terms" : "these terms"}` : ""}?`);
-  void scope;
   return out.join(" ");
 }
 

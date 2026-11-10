@@ -29,6 +29,12 @@ The only words of Cue's own in an ask are one optional "why it fits" sentence pl
 
 With more than one box: "agreeing to these terms: "…"; "…"."
 
+**Who the event is for**, only when the event's own description says who it's for or what attending needs ("open to …", "members only", "invite only", "21+", "ID required"). The sentence is quoted word for word; Cue never judges whether they qualify. New line (2026-11-09), needs Royce's approval:
+> Their page also says: "{the page's sentence}" Only say yes if that fits you.
+
+Example, from the live test page:
+> Their page also says: "This event is open to Stanford students and affiliates." Only say yes if that fits you.
+
 **Mailing list**, only when the form has a mailing-list box (it stays unchecked):
 > I'll leave their mailing-list boxes unchecked.
 

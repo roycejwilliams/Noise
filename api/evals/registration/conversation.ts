@@ -66,6 +66,19 @@ check("not a code: a time, money, a zip, an address, a phone number, a sentence"
   check("a signup answer can only be removed, not rewritten", !!(await W.applyOne(db, "u", raw, detail!, "correct", "Acme", "change it to Acme") as any).why);
 }
 
+// ---- who the event is for, put in the submit ask as the page's own words (live test 2026-11-09)
+{
+  const RGx = await import("../../src/services/eventRegistration/registration.js");
+  const capturedText = fs.readFileSync(new URL("./fixtures/luma-registered-capture.txt", import.meta.url), "utf8");
+  const form: any = { url: "https://luma.com/example-event", eventName: "Sam Example @ Stanford AI Club", when: "Wed Nov 11, 5:30 PM", action: "register", tickets: [], priceText: "Free", gate: "none", readAt: "x", restrictions: RGx.restrictionsIn(capturedText.split("About Event")[1] ?? ""), fields: [{ id: "name", label: "Name", kind: "name", required: true }, { id: "email", label: "Email", kind: "email", required: true }] };
+  const facts: any = { first_name: { value: "Jordan", source: "account" }, last_name: { value: "Ellis", source: "account" }, email: { value: "member@example.com", source: "account" } };
+  const plan = RGx.planFill(form, facts);
+  const ask = C.submitAsk({ eventName: form.eventName, when: form.when, email: "member@example.com", link: form.url }, plan, RGx.scopeOf(form, plan), null);
+  check("the captured page's restriction is put to them word for word, before the question, never judged", ask.includes(`Their page also says: "This event is open to Stanford students and affiliates." Only say yes if that fits you.`) && /Want me to register you for this event using these details\?$/.test(ask), ask);
+  const plain = RGx.planFill({ ...form, restrictions: [] }, facts);
+  check("no restriction on the page: no such line", !C.submitAsk({ eventName: "x", when: null, email: "a@b.c", link: "l" }, plain, RGx.scopeOf({ ...form, restrictions: [] }, plain), null).includes("Their page also says"));
+}
+
 // ---- today: nothing exists for members, nothing in any prompt changes
 check("approvals: live submission and copy both unapproved (code constants)", A.LUMA_LIVE_SUBMIT_APPROVED === false && A.REGISTRATION_COPY_APPROVED === false && !A.registrationLive());
 check("today: no registration ability in the registry Cue reads (no sheet line, no tool, no prompt change)", !Cap.ABILITIES.some((a) => Cap.REGISTRATION_ABILITIES.some((r) => r.id === a.id)) && !Cap.capabilitySheet().some((l) => /register them for a free Luma/i.test(l)));
