@@ -118,6 +118,7 @@
     "evals/search/askPlace.ts",
     "evals/search/lumaViaExa.ts",
     "evals/search/lumaFailures.ts",
+    "evals/search/lumaPages.ts",
     "evals/search/intent.ts",
     "evals/loop/rules.ts",
     "evals/loop/probes.ts",
