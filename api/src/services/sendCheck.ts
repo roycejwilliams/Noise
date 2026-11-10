@@ -65,6 +65,9 @@ export type RecheckDeps = {
   // The names of everything already sent to this member (knowledge/sent.ts sentByReferent), for a roundup shared as a roundup: it must
   // add something beyond what they already have. null: unreadable (the roundup is held). Absent: the roundup is held.
   sentNames?: () => Promise<string[] | null>;
+  // Which of these places were talked about in their conversation, ever (services/conversationRecall.ts talkedAboutAmong: one owner-bound
+  // query per roundup). null: unreadable (the roundup is held). Absent: the roundup is held.
+  discussedAmong?: (names: string[]) => Promise<Set<string> | null>;
 };
 // open: the page shows it still taking applications or still ahead; closed: the page says it is closed, over, full or past (quote is
 // the page's own words); unclear: the page doesn't say either way.
@@ -223,21 +226,32 @@ const WRITE_UP = /(?:^|\.)(?:lu\.ma|luma\.com|eventbrite(?:\.[a-z]{2,3}){1,2}|pa
 // is readable, adds something beyond what they already have, and its value doesn't rest on details nobody checked. Whether the list as a
 // whole helps their goal is the composer's call, at the same bar as any find (it skips what doesn't fit). Pure.
 // A post whose value is a deadline, a closing date or a spots count: those can't be checked here, so it stays held.
-const UNCHECKED_VALUE = /\b(?:deadlines?|due (?:by|on)|apply by|applications? (?:close|due|end)|closes? (?:on|in|this|next|soon|today|tomorrow)|last (?:chance|call|day)|ends? (?:on|this|next|soon)|spots? (?:left|remaining)|limited spots|(?:before|by) (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*)\b/i;
+// Round-5 review: "apps close Friday", "open until Dec 1", "closing soon", "only 10 seats", "due 12/1", "first come first served" too.
+const MONTH = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*";
+const UNCHECKED_VALUE = new RegExp(`\\b(?:deadlines?|due (?:by|on)|apply by|(?:applications?|apps?) (?:close|closes|closing|due|end)|clos(?:e|es|ing) (?:on|in|this|next|soon|today|tomorrow)|closing|last (?:chance|call|day)|ends? (?:on|this|next|soon)|until (?:${MONTH}|\\d{1,2}(?:st|nd|rd|th)?\\b|(?:mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow|tonight|the \\d)|spots? (?:left|remaining)|limited (?:spots|seats)|seats?|first come|(?:before|by) ${MONTH})\\b|\\b\\d{1,2}\\/\\d{1,2}\\b`, "i");
 export const ROUNDUP_MIN_POST_CHARS = 40;
-export function roundupShare(post: string, sentNames: readonly string[] | null): { ok: true; items: number; fresh: number } | { ok: false; why: string } {
+// discussed: the listed places talked about in their conversation (sent OR talked about is not new: Royce's ruling). null: unreadable.
+export function roundupShare(post: string, sentNames: readonly string[] | null, discussed: ReadonlySet<string> | null = new Set()): { ok: true; items: number; fresh: number } | { ok: false; why: string } {
   const t = String(post ?? "").trim();
   if (t.length < ROUNDUP_MIN_POST_CHARS) return { ok: false, why: "the post itself couldn't be read" };
   if (UNCHECKED_VALUE.test(t)) return { ok: false, why: "its value rests on deadlines or spots nobody checked" };
-  if (!sentNames) return { ok: false, why: "what they already have couldn't be read" };
+  if (!sentNames || !discussed) return { ok: false, why: "what they already have or talked about couldn't be read" };
   const items = t.split(/\n+/).map((l) => l.trim()).filter((l) => LIST_LINE.test(l));
   if (items.length < 2) return { ok: false, why: "the post doesn't list its places" };
-  const known = (line: string) => sentNames.some((n) => namesThing(line, n) || namesThing(n, line.replace(LIST_MARK, "")));
+  const known = (line: string) => discussed.has(roundupPlace(line)) || sentNames.some((n) => namesThing(line, n) || namesThing(n, roundupPlace(line)));
   const fresh = items.filter((l) => !known(l)).length;
-  if (fresh < 2 || fresh * 2 <= items.length) return { ok: false, why: `mostly what they already have (${items.length - fresh} of ${items.length} already sent)` };
+  if (fresh < 2 || fresh * 2 <= items.length) return { ok: false, why: `mostly what they already have (${items.length - fresh} of ${items.length} already sent or talked about)` };
   return { ok: true, items: items.length, fresh };
 }
 const LIST_MARK = /^\s*(?:[-*\u2022\u25aa\u25e6\u2192>]|\d{1,2}[.)]|\p{Extended_Pictographic})\s*/u;
+// Pure: a list line's place, without its marker or links (what the talked-about read is asked about).
+export function roundupPlace(line: string): string {
+  return line.replace(LIST_MARK, "").replace(/https?:\/\/\S+/g, "").replace(/[:,\-\u2013\u2014]\s*$/, "").trim();
+}
+// Pure: a roundup post's places (its list lines), for the talked-about read.
+export function roundupPlaces(post: string): string[] {
+  return String(post ?? "").split(/\n+/).map((l) => l.trim()).filter((l) => LIST_LINE.test(l)).map(roundupPlace).filter(Boolean);
+}
 
 async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: { now: Date; zone: string | null; deps: RecheckDeps }, post = ""): Promise<Recheck> {
   const label = r.line ? `listed as: ${r.line}` : "listed among several things";
@@ -255,7 +269,8 @@ async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: 
   }
   // No page of its own: the post itself, as a roundup, when it qualifies (roundupShare); otherwise held, as before.
   const sent = o.deps.sentNames ? await o.deps.sentNames().catch(() => null) : null;
-  const share = roundupShare(post, sent);
+  const discussed = o.deps.discussedAmong ? await o.deps.discussedAmong(roundupPlaces(post)).catch(() => null) : null;
+  const share = roundupShare(post, sent, discussed);
   if (share.ok) {
     const asList = { ...match, url, roundupUrl: url, foundInRoundup: label, sendAsRoundup: true, opportunity: { ...(match.opportunity ?? {}), postText: post.slice(0, 3000) } } as TierMatch;
     return { ok: true, match: asList, checkedAt: o.now.toISOString(), changed: [`shared as a roundup (${share.fresh} of ${share.items} not sent before): no page of its own could be read`], verified: false };
@@ -406,6 +421,12 @@ export async function checkBeforeSend(c: SendCandidate, zone: string | null, dep
     deps = { ...deps, sentNames: async () => {
       const [{ default: pool }, S] = await Promise.all([import("../db/db.js"), import("./knowledge/sent.js")]);
       return (await S.sentByReferent((sql, args) => pool.query(sql, args as any[]).then((r) => r.rows), c.userId)).map((x) => x.name);
+    } };
+  }
+  if (!deps.discussedAmong) {
+    deps = { ...deps, discussedAmong: async (names) => {
+      const [{ default: pool }, R] = await Promise.all([import("../db/db.js"), import("./conversationRecall.js")]);
+      return R.talkedAboutAmong({ query: (sql, args) => pool.query(sql, args as any[]) as any }, c.userId, names);
     } };
   }
   // Read moments ago (stillRelevant ran first this tick): no second read.
