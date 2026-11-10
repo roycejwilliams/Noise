@@ -64,15 +64,19 @@ export const IMPLIES_IDENTITY = { pattern: /\b(?:women|girls|ladies|men|guys|mom
 // The reveal can use the real record; the tease can't (it names nothing).
 // What it is comes from its own page (Royce, 2026-11-10): the page read at send (services/sendCheck.ts) when there is one. A post that
 // listed it among other things (a roundup) only proves it was mentioned: it's labelled as that, never described as the thing itself.
+// A roundup shared as a roundup (Royce, 2026-11-10): what it is, from the post's own words; nothing about the listed programs checked.
+export const ROUNDUP_SHARED_FACT = "this link is a post listing several places, not one program's page: share it as that list, described from the post's own words (source_post); none of the listed programs' terms, availability or deadlines were checked";
 function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): Facts {
   const roundup = !!match.foundInRoundup;
   return {
     ...matchFacts(askText, fromProfile, match),
     details: match.details ? renderEventDetails(match.name, match.details) : null,
     ...(match.pageNow ? (match.pageIsAbout ? { a_page_about_it_read_at_send: match.pageNow.slice(0, 1500) } : { its_own_page_read_at_send: match.pageNow.slice(0, 1500) }) : {}),
-    ...(roundup
-      ? { where_it_was_found: `a post listing several things, this among them (${match.foundInRoundup}); the post is not this thing's page and says nothing current about its terms` }
-      : { source_post: match.opportunity?.postText ?? null }),
+    ...(match.sendAsRoundup
+      ? { where_it_was_found: ROUNDUP_SHARED_FACT, source_post: match.opportunity?.postText ?? null }
+      : roundup
+        ? { where_it_was_found: `a post listing several things, this among them (${match.foundInRoundup}); the post is not this thing's page and says nothing current about its terms` }
+        : { source_post: match.opportunity?.postText ?? null }),
   };
 }
 
@@ -122,7 +126,8 @@ export const REVEAL_LENGTH = `Keep it under ${REVEAL_MAX_CHARS - 40} characters:
 // short notice. The link (if any) goes out first as its own message.
 // One find as the bundle composer (harness/bundleComposer.ts) and the single reveal both see it: its confirmed facts, the rules its
 // caption is checked against, its link, and what a caption may say about who they are (identity grounding). Pure.
-export type RevealItem = { facts: Facts; rules: OutputRules; url: string | null; grounding: string; name: string; fromProfile: boolean; shortNotice: boolean };
+// roundup: it goes as a post listing several places (bundleComposer.ts frames it so).
+export type RevealItem = { facts: Facts; rules: OutputRules; url: string | null; grounding: string; name: string; fromProfile: boolean; shortNotice: boolean; roundup?: boolean };
 export function revealItem(askText: string, fromProfile: boolean, match: TierMatch, opts: { dots?: string[]; why?: string } = {}): RevealItem {
   const dots = opts.dots ?? [];
   const why = opts.why ?? "";
@@ -143,6 +148,7 @@ export function revealItem(askText: string, fromProfile: boolean, match: TierMat
     name: match.name,
     fromProfile,
     shortNotice: isShortNotice(match),
+    ...(match.sendAsRoundup ? { roundup: true } : {}),
   };
 }
 

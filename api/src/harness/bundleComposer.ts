@@ -120,6 +120,10 @@ export function mayWait(items: { waits: number; expiresAt: Date | null }[], now:
 
 // ---------------------------------------------------------------- the prompt (pure)
 
+// A roundup shared as a roundup (Royce, 2026-11-10): framed as what it is; it clears the same fit bar as any find.
+export const ROUNDUP_NOTE = " (a post listing several places, not one program: say it's a list and what it covers, from the post's own words; never say any listed program's terms, availability or deadlines are checked or current; skip it if the list as a whole doesn't help what they're after)";
+// A caption claiming what nobody checked about a roundup's programs.
+export const VERIFIED_CLAIM = /\b(?:verified|confirmed|checked|still open|(?:applications?|apps) (?:are )?(?:still )?open|deadline is|due (?:on|by)|spots? left|accepting applications)\b/i;
 // A caption that presents a resend as a fresh find.
 export const NEW_CLAIM = /\b(?:new (?:find|one|program|opportunity|opening)|just (?:found|came across|spotted|saw)|came across|found (?:this|another|one)|another (?:one|program|residency|fellowship|opening)|distinct from|different from (?:the|what)|not the same as)\b/i;
 
@@ -136,7 +140,7 @@ export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: 
   const items = i.items
     .map((b, n) => {
       const pick = b.pick ? `\nwhy Cue's daily pick chose it for them: ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now: ${b.pick.whyNow}` : ""}` : "";
-      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? againNote(b.againWhy) : ""}\n${renderFacts(b.item.facts)}${pick}`;
+      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? againNote(b.againWhy) : ""}${b.item.roundup ? ROUNDUP_NOTE : ""}\n${renderFacts(b.item.facts)}${pick}`;
     })
     .join("\n\n");
   return `${CO_VOICE}
@@ -226,6 +230,7 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if ((stripUngroundedIdentity(c, b.item.grounding) ?? "").trim() !== c.trim()) problems.push({ at: n, why: `thing ${n}'s caption says who they are beyond what they've told Cue` });
     // A resend is never news (Royce, 2026-11-10): its caption and the reason it came back must agree. A rewrite, never a veto.
     if (b.again && NEW_CLAIM.test(c)) problems.push({ at: n, why: `thing ${n} was sent to them before; its caption calls it new or different from what was sent` });
+    if (b.item.roundup && VERIFIED_CLAIM.test(c)) problems.push({ at: n, why: `thing ${n} is a post listing several places; its caption says something about a listed program's terms, availability or deadline that nobody checked` });
     captions.set(n, c);
   });
   // The reason doesn't repeat (C1).
