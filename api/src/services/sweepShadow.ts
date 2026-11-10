@@ -109,7 +109,7 @@ export function sentHistory(r: Pick<RawCandidate, "name" | "date" | "reminder" |
   if (r.reminder) return `ALREADY SENT${when}: this is a reminder of it, not news`;
   if (r.again) return `ALREADY SENT${when}: not new to them; it comes back only because ${r.againWhy ?? "it was never answered and is still open"}. Say what's new, never pitch it as a discovery`;
   if (r.ident?.event_api_id || r.date) return null;
-  const twin = sameProgramSent(sent, r.name);
+  const twin = sameProgramSent(sent, r.name, r.ident?.url ?? null);
   return twin?.how === "other_cohort" ? `a newer cohort of "${twin.record.name}", sent on ${day(twin.record.at)}: the same program, so it's an update to that, never a new discovery` : null;
 }
 
