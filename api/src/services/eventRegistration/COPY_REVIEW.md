@@ -130,8 +130,10 @@ The code they text back is caught before the ordinary reply and used once. Nothi
   > You're on the waitlist for {Event}, not confirmed yet. If a spot opens, Luma will email {email}.\n{link}
 - Already registered. The page or Luma's own state says so, a second yes, or a reconcile found it; nothing is submitted again:
   > You're already registered for {Event} with {email}, so I didn't sign you up again.\n{link}
-- The page said the submit failed:
+- The page said the submit failed, and its words don't name the member:
   > The signup for {Event} didn't go through: the page said "{page's words, up to 140 characters}". Nothing is confirmed. Here's the page if you'd like to try it yourself:\n{link}
+- The page said the submit failed, and its words name the member (their name or email): the quote is dropped (Royce, 2026-11-09, #438), no stand-in tokens:
+  > The signup for {Event} didn't go through. Nothing is confirmed. Here's the page if you'd like to try it yourself:\n{link}
 - Submitted, but the page never showed a result (timeout, lost response, or the browser stopped after the click):
   > I submitted the signup for {Event}, but the page didn't confirm it, so I can't say you're in. A confirmation from Luma at {email} would settle it. I won't submit again unless you want me to.\n{link}
 - They ask about it again, or say yes to the old ask, after an unconfirmed submit. A yes to this leads to the reconcile code ask (section 3), never straight to a submit:

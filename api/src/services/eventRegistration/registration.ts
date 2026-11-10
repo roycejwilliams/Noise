@@ -282,12 +282,20 @@ const IDS = new RegExp(
     String.raw`\bmust (?:bring|show|present|have|carry|wear)\b[^.]{0,30}\b${ID_THING}\b`,
     String.raw`\b(?:required|needed) (?:for|to) (?:entry|enter|admission|get in)\b[^.]{0,40}\b${ID_THING}\b`,
     String.raw`\b(?:no (?:entry|admission)|(?:won't|will not|cannot|can't) (?:be admitted|enter|get in)|not be admitted)\b[^.]{0,40}\b(?:without|unless)\b[^.]{0,30}\b${ID_THING}\b`,
-    String.raw`\b(?:show|present|bring)\b[^.]{0,30}\b${ID_THING}\b[^.]{0,30}\b(?:at the door|at check-?in|to enter|for entry|for admission|upon entry|on entry|to get in)\b`,
+    String.raw`\b(?:show|present|bring)\b[^.]{0,30}\b${ID_THING}\b[^.]{0,30}\b(?:at the door|(?:at|to|for) check-?in|to enter|for entry|for admission|upon entry|on entry|to get in)\b`,
   ].join("|"),
   "i",
 );
 // "No ID required", "badges aren't needed": the opposite of a gate.
-const NO_ID = new RegExp(String.raw`\bno ${ID_THING}\b[^.]{0,20}\b(?:required|needed|necessary)\b|\b${ID_THING} (?:is |are )?(?:not|n't|isn't|aren't) (?:required|needed|necessary)\b`, "i");
+// And one needed only for something optional ("Badge needed if you want swag.", "ID needed for the raffle"): not entry either.
+const NO_ID = new RegExp(
+  [
+    String.raw`\bno ${ID_THING}\b[^.]{0,20}\b(?:required|needed|necessary)\b`,
+    String.raw`\b${ID_THING} (?:is |are )?(?:not|n't|isn't|aren't) (?:required|needed|necessary)\b`,
+    String.raw`\b(?:required|needed|necessary)\b[^.]{0,12}\b(?:if you (?:want|wish|would like|'d like|’d like)|(?:for|to get) (?:the )?(?:swag|merch|raffles?|giveaways?|prizes?|drinks?|a drink|a free drink|discounts?))\b`,
+  ].join("|"),
+  "i",
+);
 const RSVP_GROUP = /\b(?:students?|affiliates?|members?|employees?|alumni|faculty|staff)\b[^.]{0,60}\bmust (?:rsvp|register)\b/i;
 const NOT_ELIGIBILITY = /\bopen to (?:all|everyone|the public|anyone)\b|\beveryone (?:is )?welcome\b|\b(?:space|spots?|seats?|capacity)\b[^.]{0,30}\blimited\b|\blimited (?:space|spots?|seats?|capacity)\b|\bfirst come\b/i;
 export function restrictionsIn(description: string | null | undefined): string[] {
