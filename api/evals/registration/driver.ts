@@ -382,6 +382,21 @@ if (browser) {
     check("several events: another event's 'You're In' is never this event's status", forDemo.region !== "status" && D.ownStateFromRegion(forDemo).state !== "registered", forDemo);
     const forOther = await read(two, "Other Night");
     check("several events: the status block of the event asked about is read as its own", forOther.region === "status" && D.ownStateFromRegion(forOther).state === "registered", forOther);
+    // Review 2026-11-09: the heading must be the whole title (normalized) or contain the whole title as words; a part of it never
+    // claims the block, and with no title known no block is this event's status.
+    const statusUnder = (heading: string) => `<main><section><h2>${heading}</h2><div><div>You’re In</div><button aria-label="My Ticket">t</button><div>No longer able to attend? <span role="button">canceling your registration</span></div></div></section></main>`;
+    const partOf = await read(statusUnder("Demo"), "Demo Night");
+    check("heading: a heading that's only part of the title ('Demo' for 'Demo Night') isn't this event's status", partOf.region !== "status" && D.ownStateFromRegion(partOf).state === "unknown", partOf);
+    const shorter = await read(statusUnder("Demo Night"), "Demo Night After Party");
+    check("heading: a shorter event's heading ('Demo Night') never lends its status to 'Demo Night After Party'", shorter.region !== "status" && D.ownStateFromRegion(shorter).state === "unknown", shorter);
+    const midWord = await read(statusUnder("Demo Nightcap"), "Demo Night");
+    check("heading: the title inside another word ('Demo Nightcap') isn't a match", midWord.region !== "status", midWord);
+    const exact = await read(statusUnder("Demo Night!"), "demo night");
+    check("heading: the same title, case and punctuation aside, is a match", exact.region === "status" && D.ownStateFromRegion(exact).state === "registered", exact);
+    const contains = await read(statusUnder("Demo Night · Hosted by Northwind"), "Demo Night");
+    check("heading: a heading containing the whole title is a match", contains.region === "status", contains);
+    const untitled = await read(statusUnder("Demo Night"), null);
+    check("heading: no title known: no block is accepted as this event's status (unknown)", untitled.region !== "status" && D.ownStateFromRegion(untitled).state === "unknown", untitled);
     await ctx.close();
   }
   check("page slots: every session released", open === 0, open);

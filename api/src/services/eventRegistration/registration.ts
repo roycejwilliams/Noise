@@ -273,7 +273,21 @@ const WHO = /\b(?:students?|affiliates?|members?|employees?|alumni|alumnae|facul
 const NARROWS = /\b(?:open (?:only )?to|only (?:open )?(?:to|for)|exclusively|restricted to|reserved for|limited to|must be|is for|are for|(?:students?|affiliates?|members?|employees?|alumni|faculty|staff)[- ]only|eligible)\b/i;
 const INVITE = /\b(?:invite|invitation)[- ]only\b|\bby invitation\b|\bprivate event\b/i;
 const AGE = /\b(?:21|18)\s?\+|\b(?:21|18) (?:and|or) (?:over|older|up)\b|\bages? (?:21|18)\b|\bmust be (?:21|18)\b/i;
-const IDS = /\b(?:valid |student |government |photo |company )?(?:id|identification|badge)\b[^.]{0,40}\b(?:required|needed|must|bring|show|present)\b|\b(?:bring|show|present) (?:a |your )?(?:valid |student |government |photo |company )?(?:id|identification|badge)\b/i;
+// An ID or a badge only when it gates entry ("ID required", "must show ID", "badge required for entry", "no entry without ID", "show your
+// ID at the door"), never a reminder to bring something ("Bring ID.", "bring your badge if you have one": review 2026-11-09).
+const ID_THING = String.raw`(?:id|ids|identification|badges?)`;
+const IDS = new RegExp(
+  [
+    String.raw`\b${ID_THING}\b[^.]{0,40}\b(?:required|mandatory|checked|(?<!\bif )needed|must be (?:shown|presented|provided|worn))\b`,
+    String.raw`\bmust (?:bring|show|present|have|carry|wear)\b[^.]{0,30}\b${ID_THING}\b`,
+    String.raw`\b(?:required|needed) (?:for|to) (?:entry|enter|admission|get in)\b[^.]{0,40}\b${ID_THING}\b`,
+    String.raw`\b(?:no (?:entry|admission)|(?:won't|will not|cannot|can't) (?:be admitted|enter|get in)|not be admitted)\b[^.]{0,40}\b(?:without|unless)\b[^.]{0,30}\b${ID_THING}\b`,
+    String.raw`\b(?:show|present|bring)\b[^.]{0,30}\b${ID_THING}\b[^.]{0,30}\b(?:at the door|at check-?in|to enter|for entry|for admission|upon entry|on entry|to get in)\b`,
+  ].join("|"),
+  "i",
+);
+// "No ID required", "badges aren't needed": the opposite of a gate.
+const NO_ID = new RegExp(String.raw`\bno ${ID_THING}\b[^.]{0,20}\b(?:required|needed|necessary)\b|\b${ID_THING} (?:is |are )?(?:not|n't|isn't|aren't) (?:required|needed|necessary)\b`, "i");
 const RSVP_GROUP = /\b(?:students?|affiliates?|members?|employees?|alumni|faculty|staff)\b[^.]{0,60}\bmust (?:rsvp|register)\b/i;
 const NOT_ELIGIBILITY = /\bopen to (?:all|everyone|the public|anyone)\b|\beveryone (?:is )?welcome\b|\b(?:space|spots?|seats?|capacity)\b[^.]{0,30}\blimited\b|\blimited (?:space|spots?|seats?|capacity)\b|\bfirst come\b/i;
 export function restrictionsIn(description: string | null | undefined): string[] {
@@ -283,7 +297,7 @@ export function restrictionsIn(description: string | null | undefined): string[]
   for (const s of text.split(/(?<=[.!?])\s+/)) {
     const t = s.trim();
     if (!t || NOT_ELIGIBILITY.test(t) && !INVITE.test(t) && !AGE.test(t)) continue;
-    const eligible = (WHO.test(t) && NARROWS.test(t)) || INVITE.test(t) || AGE.test(t) || IDS.test(t) || RSVP_GROUP.test(t);
+    const eligible = (WHO.test(t) && NARROWS.test(t)) || INVITE.test(t) || AGE.test(t) || (IDS.test(t) && !NO_ID.test(t)) || RSVP_GROUP.test(t);
     if (eligible && !out.includes(t)) out.push(t.length > 220 ? `${t.slice(0, 219).trimEnd()}…` : t);
   }
   // Uncapped, in a stable order, so a page that reorders its sentences asks nothing new.

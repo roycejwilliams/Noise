@@ -258,14 +258,19 @@ const REGION_JS = String.raw`((member, event) => {
   const REGISTER = /^(register|request to join|join waitlist|rsvp|one-click rsvp|get tickets?)$/i;
   const registerButtons = Array.from(document.querySelectorAll("button, [role=button]")).filter((b) => live(b) && REGISTER.test((b.innerText || "").trim()));
   const title = norm(event.title || (document.querySelector("meta[property='og:title']") || {}).content || "").replace(/ luma$/, "");
-  // The event a block belongs to: the first heading met climbing up from it. Unknown title: any.
-  const ofThisEvent = (el) => {
-    if (!title) return true;
+  // The event a block belongs to: the first heading met climbing up from it. It is this event's only when that heading is its whole
+  // title (normalized) or contains the whole title as words (review 2026-11-09: a two-way substring let a heading "Demo" claim the event
+  // "Demo Night", and a heading "Demo Night" claim the event "Demo Night After Party"). strict (the guest-status block): with no title known, no
+  // block is this event's status (unknown, never an arbitrary block's). Otherwise (the RSVP block around a register button) an unknown
+  // title still takes it, as before: that block is never proof on its own (resultFrom).
+  const headingIsTitle = (h) => { const t = norm(h); return !!t && (t === title || (" " + t + " ").includes(" " + title + " ")); };
+  const ofThisEvent = (el, strict) => {
+    if (!title) return !strict;
     for (let up = el; up && up !== document.documentElement; up = up.parentElement) {
       const hs = Array.from(up.querySelectorAll("h1, h2, h3")).filter((h) => !h.closest("[inert], [aria-hidden=true], header, nav, footer"));
-      if (hs.length) return hs.some((h) => { const t = norm(h.innerText || h.textContent); return t && (t === title || t.includes(title) || title.includes(t)); });
+      if (hs.length) return hs.some((h) => headingIsTitle(h.innerText || h.textContent));
     }
-    return true;
+    return !strict;
   };
   const mainNode = document.querySelector("main") || document.body;
   const mainHasStatus = !!mainNode && STATE.test(words(mainNode));
@@ -276,13 +281,13 @@ const REGION_JS = String.raw`((member, event) => {
     const controls = Array.from(document.querySelectorAll("button, [role=button], a")).filter((el) => live(el) && (CONTROL.test(el.innerText || "") || CONTROL.test(el.getAttribute("aria-label") || "")));
     for (const c of controls) {
       let up = c;
-      for (let i = 0; i < 7 && up && up !== document.body; i++, up = up.parentElement) if (STATE.test(words(up))) { if (ofThisEvent(up)) { node = up; region = "status"; } break; }
+      for (let i = 0; i < 7 && up && up !== document.body; i++, up = up.parentElement) if (STATE.test(words(up))) { if (ofThisEvent(up, true)) { node = up; region = "status"; } break; }
       if (node) break;
     }
   }
   if (!node) {
     const tagged = document.querySelector("[data-cue-region]");
-    const around = registerButtons.map((b) => b.closest("section, [class*=card], [class*=rsvp], [class*=ticket], [class*=register]") || b.parentElement).find((x) => x && ofThisEvent(x));
+    const around = registerButtons.map((b) => b.closest("section, [class*=card], [class*=rsvp], [class*=ticket], [class*=register]") || b.parentElement).find((x) => x && ofThisEvent(x, false));
     const rsvp = live(tagged) ? tagged : around;
     if (rsvp) { region = "rsvp"; node = rsvp; }
   }

@@ -97,6 +97,21 @@ check("not a code: a time, money, a zip, an address, a phone number, a sentence"
   const red = T.redactMember("You’re In Jordan Ellis · member@example.com Add to Calendar other@example.org", ["member@example.com"], facts);
   check("outcome detail: name and email redacted (and any other email)", red === "You’re In [member] · [member] Add to Calendar [email]", red);
   check("outcome detail: nothing to redact stays as it is", T.redactMember("You’re In", [], facts) === "You’re In" && T.redactMember(null, [], facts) === null);
+  check("outcome detail: their name in another case is still theirs", T.redactMember("Welcome, JORDAN ELLIS (Member@Example.com)", ["member@example.com"], facts) === "Welcome, [member] ([member])", T.redactMember("Welcome, JORDAN ELLIS (Member@Example.com)", ["member@example.com"], facts));
+  // Review 2026-11-09: the "didn't go through" line quoted the page's raw words to the member. Now their name and email are out, capped.
+  const raw = "Sorry Jordan Ellis, we couldn't register member@example.com: this event is at capacity and the waitlist is closed. Contact host@example.org with questions about future dates and other events in the series this winter.";
+  const qt = T.failedQuote(raw, ["member@example.com"], facts);
+  check("failed quote: their name and email are out of it", !!qt && !/Jordan|Ellis|member@example\.com/i.test(qt) && qt.includes("[your name]") && qt.includes("[your email]"), qt);
+  check("failed quote: capped at FAILED_QUOTE_CHARS, ending in an ellipsis", !!qt && qt.length <= T.FAILED_QUOTE_CHARS && qt.endsWith("…"), qt);
+  const ctxF = { eventName: "Demo Night", when: null, email: "member@example.com", link: "https://luma.com/demo-night" };
+  const line = C.outcomeLine(ctxF, "failed", { detail: qt, link: ctxF.link });
+  check("failed line: the quote in the member's line carries no name or page email of theirs", line.startsWith("The signup for Demo Night didn't go through: the page said \"Sorry [your name], we couldn't register [your email]") && !/Jordan|Ellis/.test(line), line);
+  check("failed quote: nothing on the page, no quote", T.failedQuote(null, [], facts) === null && T.failedQuote("   ", [], facts) === null);
+  const st = src("agent/registrationTools.ts");
+  const settleFn = st.slice(st.indexOf("async function settle("), st.indexOf("async function settleFound("));
+  check("settle: the line quotes failedQuote (never the raw page text)", /detail: res\.state === "failed" \? failedQuote\(res\.detail, theirs, facts\) : null/.test(settleFn) && !/detail: res\.detail, link/.test(settleFn), settleFn.slice(0, 200));
+  check("settle: no separate 'blocked' branch (resultFrom never returns it); a blocked read is uncertain, with no page words kept", !/if \(res\.state === "blocked"\)/.test(settleFn) && /res\.state === "unknown" \|\| res\.state === "uncertain" \|\| res\.state === "blocked"\) \{\n\s*await S\.recordOutcome\(userId, rec\.id, \{ state: "uncertain", link: rec\.eventUrl, linkKind: "event_page", detail: null, at \}/.test(settleFn));
+  check("driver: resultFrom never returns 'blocked'", !/state: "blocked"/.test(src("services/eventRegistration/lumaDriver.ts")));
   check("removing an answer also scrubs it from the stored outcome detail", JSON.stringify(W.scrubSignupValue({ scope: null, askText: null, drafts: [], outcome: { state: "registered", detail: "You’re In Northwind" } }, "c", "Northwind").outcome) === JSON.stringify({ state: "registered", detail: "You’re In [removed]" }));
   check("the forget-residue audit checks the outcome too", /cols: \["answers", "drafts", "ask_text", "scope", "outcome"\]/.test(src("scripts/forgetResidueAudit.ts")));
 }
