@@ -245,8 +245,11 @@ export function roundupShare(post: string, sentNames: readonly string[] | null, 
 }
 const LIST_MARK = /^\s*(?:[-*\u2022\u25aa\u25e6\u2192>]|\d{1,2}[.)]|\p{Extended_Pictographic})\s*/u;
 // Pure: a list line's place, without its marker or links (what the talked-about read is asked about).
+// The name only: cut at the first ", ", ": ", " - ", " \u2013 ", " \u2014 " or "(" (final review of #441: "- Thiel Fellowship, $100k for young
+// founders" was searched for whole, so the talked-about read missed almost every real roundup).
 export function roundupPlace(line: string): string {
-  return line.replace(LIST_MARK, "").replace(/https?:\/\/\S+/g, "").replace(/[:,\-\u2013\u2014]\s*$/, "").trim();
+  const bare = line.replace(LIST_MARK, "").replace(/https?:\/\/\S+/g, "").trim();
+  return bare.split(/,\s|:\s|\s[-\u2013\u2014]\s|\(/)[0].replace(/[:,\-\u2013\u2014]\s*$/, "").trim();
 }
 // Pure: a roundup post's places (its list lines), for the talked-about read.
 export function roundupPlaces(post: string): string[] {

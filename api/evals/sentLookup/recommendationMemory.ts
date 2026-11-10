@@ -357,5 +357,19 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   check("draftEventReveal and bounce_proposal add the roundup note", /match\.sendAsRoundup \? `This link is\$\{ROUNDUP_NOTE/.test(evs) && /p\.match\?\.sendAsRoundup/.test(reg) && /forbidden: \[R\.UNCHECKED_CLAIM\]/.test(reg));
 }
 
+// ---------------------------------------------------------------- final review of #441: a place is its name, not the whole line
+{
+  const S = await import("../../src/services/sendCheck.js");
+  const { talkedAboutAmong } = await import("../../src/services/conversationRecall.js");
+  const places = S.roundupPlaces("Where founders get funded:\n- Thiel Fellowship, $100k for young founders\n- Pioneer: remote accelerator\n- Lattice Fund\n- Northgate (SF) residency");
+  check("places are cut at the first comma, colon, dash or bracket", places.join("|") === "Thiel Fellowship|Pioneer|Lattice Fund|Northgate", places);
+  const rows = [
+    { memory_type: "text_exchange", content: "User said: I already applied to the thiel fellowship", created_at: at("2026-10-01T00:00:00Z") },
+    { memory_type: "text_exchange", content: "User said: pioneer was a bust for me", created_at: at("2026-10-02T00:00:00Z") },
+  ];
+  const seen = await talkedAboutAmong({ query: async () => ({ rows }) }, "u1", places);
+  check("'thiel fellowship' and 'pioneer' are found as talked about; a bare name line still works", seen.has("Thiel Fellowship") && seen.has("Pioneer") && !seen.has("Lattice Fund"), [...seen]);
+}
+
 console.log(`\nrecommendation memory: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
