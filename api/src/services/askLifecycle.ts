@@ -71,8 +71,10 @@ export const PAUSE = /\b(?:for now|a break|take a break|taking a break|pause|pau
 export const WEARY = /\b(?:tired|exhausted|worn out|drain(?:ed|ing)|burn(?:ed|t) out|sick of|over it|frustrat\w*)\b/i;
 // Found or hired ends it, whatever else they say ("found one! talk later"); "done looking" or "stop looking" gives way to a pause
 // ("done looking for now") (re-review of #441).
-export const FOUND = /\b(?:found (?:one|someone|somebody|an? \w+|my \w+|our \w+)|hired)\b/i;
-export const FINISHED = /\b(?:found (?:one|someone|somebody|an? \w+|my \w+|our \w+)|hired|done looking|all done|stop looking)\b/i;
+// "found a" + a person or role only (round-3 review of #441: "found a great article on it" closed a search).
+const ROLE = "(?:engineer|cofounder|co-founder|developer|dev|designer|hire|person|partner|candidate|cto|founder|teammate|match|someone|contractor|freelancer)";
+export const FOUND = new RegExp(`\\b(?:found (?:one|someone|somebody|my \\w+|our \\w+|an? (?:\\w+ )?${ROLE})|hired)\\b`, "i");
+export const FINISHED = new RegExp(`${FOUND.source}|\\b(?:done looking|all done|stop looking)\\b`, "i");
 
 const norm = (s: string) => String(s).toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 export type Msg = { at: Date | string; side: "member" | "co"; text: string };
