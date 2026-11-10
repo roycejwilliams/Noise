@@ -67,7 +67,7 @@ const handle = async (sql: string, p: any[] = []) => {
   if (/FROM revealed_offers WHERE user_id = \$1 AND item_key = ANY/.test(sql)) return { rows: world.reactions.map((reaction) => ({ reaction })) };
   if (/FROM users u LEFT JOIN event_presence/.test(sql)) return { rows: [{ email: "jordan@example.com", phone_number: "+14155550101", not_going_at: null, noshow_asked_at: null }] };
   if (/SELECT email, phone_number FROM users/.test(sql)) return { rows: [{ email: "jordan@example.com", phone_number: "+14155550101" }] };
-  if (/FROM event_registrations WHERE user_id = \$1 AND status = ANY/.test(sql)) return { rows: (p[2] as string[]).some((k) => world.registered.includes(k)) ? [{ x: 1 }] : [] };
+  if (/FROM event_registrations WHERE user_id = \$1 AND status = ANY/.test(sql)) return { rows: [...(p[2] as string[]), ...((p[3] as string[]) ?? [])].some((k) => world.registered.includes(k)) ? [{ x: 1 }] : [] };
   if (/UPDATE recommendation_outcome_followups SET harness_status = \$2, drop_reason = \$3 WHERE id = \$1/.test(sql)) { const r = world.rof.find((x) => x.id === p[0]); if (r) { r.harness_status = p[1]; r.drop_reason = p[2]; } return { rows: [], rowCount: 1 }; }
   if (/arrived_at IS NOT NULL/.test(sql)) return { rows: world.presence ? [{ x: 1 }] : [] };
   if (/event_walkin_checkins/.test(sql)) return { rows: world.walkin ? [{ x: 1 }] : [] };
@@ -368,6 +368,30 @@ CF.setDoorDepsForTests({ ours: async () => false });
   const d5 = await draft({ eventApiId: "evt-ft", eventName: "Founder Table", eventDate: yesterday, outcomeFollowupIds: [r5.id], checkinFollowupIds: [], walkinCheckinIds: [], askText: "Seeking smaller founder mixers or dinners in the Bay Area" });
   check("an already-queued debrief with no evidence: dropped at send, specific reason, no model call", kind(d5) === "skip" && /Cue sending it isn't one/.test(String(d5.r.skip ?? d5.r.reason ?? JSON.stringify(d5.r))) && d5.prompts.length === 0, d5.r);
   check("…its row is dropped with the reason kept", r5.harness_status === "dropped" && /no sign/.test(r5.drop_reason ?? ""), r5);
+}
+
+// ================================================================ 9. queue time and send time read evidence the same way (review of #445)
+{
+  const legacy = (over: any = {}) => { const r: Row = { id: `rof-${world.nextId++}`, user_id: u, ask_text: "founder dinners", tier: 2, match_name: "Founder Table", match: eventFind(), created_at: new Date(Date.now() - 11 * 86_400_000), send_at: new Date(Date.now() - 3_600_000), harness_status: null, drop_reason: null, ...over }; world.rof.push(r); return r; };
+  CF.setDoorDepsForTests({ ours: async () => false });
+  reset();
+  const a = legacy();
+  world.reactions = ["already_did_it"];
+  const qa = await dueRows();
+  const da = qa[0] ? await draft(payloadFor(qa[0])) : null;
+  check("reactions ['already_did_it'], no outcome rows: intent when queued and when sent (the neutral question)", qa.length === 1 && a.harness_status === "queued" && !!da && kind(da) === "neutral", { qa, a, r: da?.r });
+  reset();
+  const b = legacy();
+  world.registered = ["https://lu.ma/ft"];
+  const qb = await dueRows();
+  const db = qb[0] ? await draft(payloadFor(qb[0])) : null;
+  check("a registration matched by the event link only: intent when queued and when sent", qb.length === 1 && b.harness_status === "queued" && !!db && kind(db) === "neutral", { qb, b, r: db?.r });
+  reset();
+  const c = legacy({ harness_status: "queued" });
+  const dc = await draft({ eventApiId: "evt-ft", eventName: "Founder Table", eventDate: yesterday, outcomeFollowupIds: [c.id], checkinFollowupIds: [], walkinCheckinIds: [], askText: "founder dinners" });
+  check("no evidence: dropped at send", kind(dc) === "skip" && c.harness_status === "dropped", dc.r);
+  const RO = await import("../../src/services/recommendationOutcome.js");
+  check("one mapping: evidenceOf reads already_did_it as intent, a not_interested as a no", RO.evidenceOf({ rows: [], reactions: ["already_did_it"], registered: false }).level === "intent" && RO.evidenceOf({ rows: [], reactions: ["not_interested"], registered: false }).declined);
 }
 
 console.log(`${total - failed}/${total} passed`);
