@@ -21,7 +21,7 @@ const SCENARIOS: Scenario[] = [
 ];
 
 // The fit guidance Cue's tool carries (agent/registrationTools.ts prepareEventRegistration `fit`; capabilities.ts prepare_registration).
-const FIT_GUIDANCE = "fit: one short sentence on why it fits, only from the event's own page or what the find said, or leave it out. No guesses, nothing private.";
+const FIT_GUIDANCE = (await import("../../src/agent/registrationTools.js")).FIT_DESCRIBE;
 const prompt = (s: Scenario) => `You are Cue, a texting companion that helps a member meet the right people. You're about to ask Avery whether to register them for an event Cue found and sent. Write the optional "why it fits" sentence that goes first in that ask.
 
 ${FIT_GUIDANCE}

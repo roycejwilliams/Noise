@@ -24,6 +24,10 @@ import type { CodeSource } from "../services/eventRegistration/codeSources.js";
 
 export type SentFind = FindLike & { key: string };
 
+// The fit line's own guidance (Royce, 2026-11-09, after the paid fit run): their specific reason, backed by both their own words and the
+// event's page, or nothing. Pinned in evals/registration/conversation.ts.
+export const FIT_DESCRIBE = "One short sentence naming their SPECIFIC reason, from their own words or what they've told you, that the event's own page backs. Never a vague one (\"lines up with where you are right now\") and never just a description of the event. No specific reason backed by both: leave it out. No guesses, nothing private.";
+
 export type RegistrationEnv = {
   q?: S.Q;
   driver: () => Promise<RegistrationDriver>;
@@ -62,6 +66,17 @@ const inTheirMessage = (value: string, message: string) => normText(value).trim(
 
 export function registrationTools(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => Promise<RegistrationEnv>), notDone: (what: string) => void) {
   return registrationFlow(ctx, envIn, notDone).tools;
+}
+
+// Pure: a page's words with the member's own name and email taken out (the outcome detail is kept; who they are isn't).
+export function redactMember(text: string | null, values: (string | null | undefined)[], facts: R.MemberFacts = {}): string | null {
+  if (text == null) return null;
+  const known = [...values, facts.email?.value, facts.first_name?.value, facts.last_name?.value, facts.first_name && facts.last_name ? `${facts.first_name.value} ${facts.last_name.value}` : null]
+    .filter((v): v is string => typeof v === "string" && v.trim().length >= 2)
+    .sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const v of known) out = out.split(v).join("[member]");
+  return out.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]");
 }
 
 // Their emailed code, caught before the ordinary reply (routes/sendblue.ts): entered once in the held session, and the line to send.
@@ -289,7 +304,8 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
       await S.recordOutcome(userId, rec.id, { state: "uncertain", link: rec.eventUrl, linkKind: "event_page", detail: res.detail, blocker: b, at }, "uncertain", q);
       return { ok: false, ...said(C.outcomeLine(c, "uncertain")) };
     }
-    const outcome: R.Outcome = { state: res.state, link: res.link ?? rec.eventUrl, linkKind: res.linkKind, detail: res.detail, at };
+    // The page's words are kept as the outcome's detail, but never the member's own name or email in them.
+    const outcome: R.Outcome = { state: res.state, link: res.link ?? rec.eventUrl, linkKind: res.linkKind, detail: redactMember(res.detail, [c.email, ...Object.values(rec.answers).map((a) => a.value)], await factsFor(rec)), at };
     await S.recordOutcome(userId, rec.id, outcome, res.state as R.Status, q);
     const text = C.outcomeLine(c, res.state, { detail: res.detail, link: outcome.link });
     if (res.state === "failed") {
@@ -335,7 +351,7 @@ function registrationFlow(ctx: RegistrationCtx, envIn: RegistrationEnv | (() => 
       description: toolUse("prepareEventRegistration"),
       inputSchema: z.object({
         event: z.string().describe("The event's link, or its name exactly as Cue sent it."),
-        fit: z.string().optional().describe("One short sentence on why it fits, only from the event's own page or what the find said. No guesses, nothing private."),
+        fit: z.string().optional().describe(FIT_DESCRIBE),
         drafts: z.array(z.object({ fieldId: z.string(), text: z.string(), basis: z.string().describe("Their own words the draft rests on, copied exactly.") })).optional(),
       }),
       execute: async ({ event, fit, drafts }) => {
