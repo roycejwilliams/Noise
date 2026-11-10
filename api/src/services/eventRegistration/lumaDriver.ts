@@ -21,9 +21,8 @@
 // While reading (inspect), the context refuses every request that isn't a GET, so nothing on the page can register anyone even if
 // something were clicked by mistake. While submitting, POSTs may go to Luma's own hosts only.
 //
-// LIVE SUBMISSION IS OFF. Luma's terms (luma.com/terms) ask for "publicly supported interfaces" and don't settle automation of the public
-// registration page either way; this stays off until that is clarified and Royce approves a specific live test. A code constant, not an
-// env switch (no feature toggles; approvals.ts). Inspect mode (reading a public page) works live; submit works only on local fixtures.
+// LIVE SUBMISSION IS ON for all members (Royce, 2026-11-09, after one approved live signup). A code constant, not an env switch (no
+// feature toggles; approvals.ts): turning it off again is a one-line reviewed commit, and with it off submit works only on local fixtures.
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { DateTime } from "luxon";
 import { classifyField, readResultText, restrictionsIn, canonicalEventUrl, type FormField, type FormRead, type Ticket } from "./registration.js";

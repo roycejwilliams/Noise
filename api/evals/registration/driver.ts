@@ -12,7 +12,7 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 700)}` : ""}`); } };
 
 // ---- pure parts
-check("live submission is off (a code constant)", D.LUMA_LIVE_SUBMIT_APPROVED === false && !D.submitAllowed(false) && D.submitAllowed(true));
+check("live submission approved (a code constant): submit allowed on a live page; the gate itself still refuses when it's off", D.LUMA_LIVE_SUBMIT_APPROVED === true && D.submitAllowed(false) && D.submitAllowed(true) && !D.submitAllowed(false, false) && D.submitAllowed(true, false));
 check("driver source: no env switch for live submission", !/process\.env\.[A-Z_]*LIVE/.test(fs.readFileSync(new URL("../../src/services/eventRegistration/lumaDriver.ts", import.meta.url), "utf8")));
 const real = D.pageDataFrom({ props: { pageProps: { initialData: { kind: "event", data: { event: { name: "partner demo day", start_at: "2026-11-10T23:00:00.000Z", timezone: "America/Los_Angeles" }, ticket_info: { price: null, is_free: true, is_sold_out: false, require_approval: true }, ticket_types: [{ name: "Standard", type: "free" }], registration_questions: [] } } } } });
 check("page data: Luma's real shape (2026-11-09) reads as free, approval", real.free === true && real.requireApproval === true && D.priceTextOf(real) === "Free" && D.whenOf(real) === "Tue Nov 10, 3:00 PM", real);
@@ -156,7 +156,8 @@ if (browser) {
     const r = await s.submit();
     check("uncertain result: unknown (the record keeps it uncertain; nothing retried)", r.state === "unknown", r);
   });
-  // live submission off: a non-fixture driver refuses to submit
+  // A live page in a test (live submission is on now): every host refused by publicHost, so nothing ever reaches luma.com and the
+  // page never loads; a submit on it can't happen.
   {
     const liveLike = D.lumaDriver({ ...deps, fixtures: undefined, publicHost: async () => false });
     let threw = false;
@@ -168,7 +169,7 @@ if (browser) {
       // Opening a live page with every host refused fails to load: also nothing submitted.
       threw = true;
     }
-    check("live page: submit refused while LUMA_LIVE_SUBMIT_APPROVED is false", threw);
+    check("a live page with every host refused never loads, so nothing is submitted (no network in tests)", threw);
   }
 
   // ---- runtime: isolation between members, Luma's own state when signed in, crashes, held sessions

@@ -129,9 +129,15 @@ check("not a code: a time, money, a zip, an address, a phone number, a sentence"
 }
 
 // ---- today: nothing exists for members, nothing in any prompt changes
-check("approvals: copy approved, live submission still off, so registration stays off for members (code constants)", A.LUMA_LIVE_SUBMIT_APPROVED === false && A.REGISTRATION_COPY_APPROVED === true && !A.registrationLive());
-check("today: no registration ability in the registry Cue reads (no sheet line, no tool, no prompt change)", !Cap.ABILITIES.some((a) => Cap.REGISTRATION_ABILITIES.some((r) => r.id === a.id)) && !Cap.capabilitySheet().some((l) => /register them for a free Luma/i.test(l)));
-check("today: the sheet still says Cue can't register them", Cap.LIMITS.some((l) => /can't book, buy, register them for events/.test(l)));
+check("approvals: copy approved and live submission approved (Royce, 2026-11-09: for all members), so registration is live (code constants)", A.LUMA_LIVE_SUBMIT_APPROVED === true && A.REGISTRATION_COPY_APPROVED === true && A.registrationLive());
+check("the gate itself still holds: either approval off means no registration (registrationLive is the one switch, code constants only)", !A.registrationLive({ submit: false }) && !A.registrationLive({ copy: false }) && A.registrationLive({ submit: true, copy: true }) && !/process\.env/.test(src("services/eventRegistration/approvals.ts")));
+check("live: every registration ability is in the registry Cue reads", Cap.REGISTRATION_ABILITIES.every((r) => Cap.ABILITIES.some((a) => a.id === r.id)));
+{
+  const CT = await import("../../src/agent/conversationTools.js");
+  const t = CT.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "hi", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any);
+  check("live: the reply offers the registration tools", ["prepareEventRegistration", "saveRegistrationAnswers", "registerForEvent", "stopEventRegistration"].every((n) => n in t.tools), Object.keys(t.tools).filter((n) => /Registration|registerFor/.test(n)));
+}
+check("live: the sheet says its one signup is a free Luma event, on their yes to its explicit question, and no longer that it can't register them", Cap.capabilitySheet().some((l) => /its one signup is a free Luma event it sent or they linked, on their yes to its explicit question/.test(l)) && !Cap.capabilitySheet().some((l) => /register them for events/.test(l)));
 {
   const { offerNeedingPath } = await import("../../src/services/offerGuard.js");
   const { REGISTRATION_ABILITIES } = Cap;

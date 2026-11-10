@@ -252,6 +252,8 @@ export const NEW_FOR_THEM = new Set([
   "firstRead", "deleteImages",
   "searchEvents", "webSearch", "searchPosts", "readPage", "readDocument",
   "shareFinds", "researchBrief",
+  // Registering for an event (agent/registrationTools.ts): each gives the line to send, which is new for them.
+  "prepareEventRegistration", "saveRegistrationAnswers", "registerForEvent", "stopEventRegistration",
   "calendarConnection", "setSearchArea",
   // Re-review of #310: each of these can return something to say (a link that moved, the next step on a yes, a playback of their time).
   "findReaction", "noteFreeTime",

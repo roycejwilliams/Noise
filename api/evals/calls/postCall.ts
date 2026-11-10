@@ -40,7 +40,7 @@ user: Thanks.`;
   check("2026-10-08: 'I can learn who's coming, who each person is trying to meet' is refused as a correction, even citing a limit", !today.save && /co_events/.test(today.why), today);
   check("refused when the audit names the registry line that covers it", !G.capabilityCorrectionVerdict({ quote: "I'll point you to who's worth meeting", what: "x", ability: "co_events", limit: "L8" }).save);
   check("refused when it names no can't line it breaks (the old audit's shape)", !G.capabilityCorrectionVerdict({ quote: "I can book that table for you tonight", what: "x" }).save);
-  const book = G.capabilityCorrectionVerdict({ quote: "I can book that table for you tonight", what: "Cue can't book", limit: String(`L${reg.limits.findIndex((l) => /can't book, buy, register/.test(l)) + 1}`) });
+  const book = G.capabilityCorrectionVerdict({ quote: "I can book that table for you tonight", what: "Cue can't book", limit: String(`L${reg.limits.findIndex((l) => /can't book or buy/.test(l)) + 1}`) });
   check("a real wrong claim (booking) that cites the limit it breaks is still saved", book.save, book);
   const plan = G.planCallAudit([{ quote: q, type: "capability", what: "Cue cannot learn attendee identities", limit: "L8" }], CALL, { knownBefore: "", records: "", tasks: [] });
   check("the plan saves no correction for it and says why", plan.corrections.length === 0 && plan.refused.length === 1 && /registry has it/.test(plan.refused[0].why));
