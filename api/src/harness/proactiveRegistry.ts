@@ -1181,6 +1181,23 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // A search they asked for didn't go through (services/searchFailedNotice.ts, approved by Royce 2026-11-09): Cue gets the facts and says
+  // it in its own words. Re-read first: the ask closed, or a later search of it went through, means nothing goes.
+  search_failed: {
+    async draft(c, person) {
+      const N = await import("../services/searchFailedNotice.js");
+      const p = (c.payload ?? {}) as { askCheckinId?: string; askText?: string };
+      if (!p.askCheckinId || !p.askText) return skip("no ask on the notice");
+      const still = await N.readStillFailed(c.userId, String(p.askCheckinId)).catch(() => ({ ok: false as const, why: "couldn't re-read the ask" }));
+      if (!still.ok) return skip(still.why);
+      const text = await draftProactive({ functionId: "searchFailed.draft", firstName: person.firstName, facts: N.searchFailedFacts({ askText: String(p.askText) }), task: N.SEARCH_FAILED_TASK });
+      return text ? { messages: [text], text, rules: { ...N.SEARCH_FAILED_RULES } } : skip("model chose SKIP");
+    },
+    async onSent(c, _p, messages) {
+      await writeMemory(c.userId, "check_in", `Told them a search they asked for didn't go through: ${messages.join(" ")}`);
+    },
+  },
+
   // Pages and decks are gone (2026-11-04): an expiry notice queued before that is dropped, never sent. The type stays so the queue still reads it.
   artifact_expiry: {
     async draft() {

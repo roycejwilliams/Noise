@@ -39,6 +39,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   voice_read_ask: "ops",
   // The one neutral close for an intro they asked for by name (services/introRequestClose.ts): logistics of their own request.
   intro_close: "ops",
+  // A search they asked for didn't go through (services/searchFailedNotice.ts): the status of their own ask.
+  search_failed: "ops",
   // Member-state nudges (services/memberStateNudges.ts): about their own life and what they said, except a deadline on a find.
   intro_nudge: "companion",
   goal_nudge: "companion",

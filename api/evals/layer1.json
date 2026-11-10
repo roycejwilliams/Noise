@@ -264,6 +264,7 @@
     "evals/sweepFind/queries.ts",
     "evals/sweepFind/wellFormed.ts",
     "evals/sweepFind/failedNotEmpty.ts",
+    "evals/sweepFind/searchFailedNotice.ts",
     "evals/coldstart/rules.ts",
     "evals/proactive/memberState.ts",
     "evals/proactive/goalNudgeParked.ts",

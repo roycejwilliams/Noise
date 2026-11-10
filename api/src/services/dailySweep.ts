@@ -61,7 +61,9 @@ export function failingStreaks(today: string, failedKeys: string[], earlier: { d
   return out;
 }
 // After the day's last failed retry: the items that have failed SWEEP_FAILING_DAYS days in a row or more, recorded once for the day.
-async function flagFailingAgain(userId: string, day: string, items: ItemResult[]): Promise<void> {
+// A search they explicitly asked for (their own ask, never a goal) that failed this often: Cue tells them once per streak
+// (services/searchFailedNotice.ts), through the proactive path and the send-time read. Nothing found is never a failure here.
+async function flagFailingAgain(userId: string, day: string, items: ItemResult[], zone: string | null = null, now: Date = new Date()): Promise<void> {
   const failedToday = items.filter((i) => i.status === "error");
   if (!failedToday.length) return;
   const { rows } = await pool.query(
@@ -74,6 +76,14 @@ async function flagFailingAgain(userId: string, day: string, items: ItemResult[]
   const repeated = failedToday.map((i) => ({ kind: i.kind, id: i.id, text: itemText(i.text), why: i.why ?? null, days: streaks.get(`${i.kind}:${i.id}`) ?? 1 })).filter((i) => i.days >= SWEEP_FAILING_DAYS);
   if (!repeated.length) return;
   await recordDecision({ layer: 5, decision: "sweep.failing_again", userId, outcome: "skip", action: "error", reason: clip(repeated.map((i) => `${i.kind} "${clip(i.text, 60)}" failed ${i.days} days in a row: ${clip(String(i.why ?? ""), 200)}`).join(" | "), 800), proposal: { day, items: repeated } });
+  const N = await import("./searchFailedNotice.js");
+  const notices = N.searchFailedNotices({ userId, day, zone, items: repeated, failedMin: SWEEP_FAILING_DAYS, now });
+  if (!notices.length) return;
+  const { enqueueCandidate } = await import("../harness/proactive.js");
+  for (const n of notices) {
+    const q = await enqueueCandidate(n).catch(() => ({ queued: false }));
+    await recordDecision({ layer: 5, decision: "sweep.search_failed_notice", userId, outcome: q.queued ? "act" : "skip", action: q.queued ? "queued" : "already_this_streak", proposal: { askId: n.payload.askCheckinId, streakStart: n.payload.streakStart, days: n.payload.days } }).catch(() => {});
+  }
 }
 
 // Members a sweep is working on right now (this process: co-test runs one). The hourly ask sweep and this one both claim a member
@@ -658,7 +668,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     const last = errorsToday + 1 >= DAILY_SWEEP_ERRORS_PER_DAY;
     await writeDaily(userId, "skip", "error", `${clip(failed.join(" | "), 800)}${last ? " (the day's last retry: no more runs today)" : " (run again next hour)"}`, proposal);
     // The day is lost for what failed: one that failed on the days before it too is flagged (SWEEP_FAILING_DAYS).
-    if (last && base.trigger !== "manual") await flagFailingAgain(userId, base.day, items).catch((err: any) => console.error(`Daily sweep: the repeated-failure read failed for ${userId} (non-fatal):`, err?.message ?? err));
+    if (last && base.trigger !== "manual") await flagFailingAgain(userId, base.day, items, base.zone, now).catch((err: any) => console.error(`Daily sweep: the repeated-failure read failed for ${userId} (non-fatal):`, err?.message ?? err));
     // What did get searched is in the pool: the picker still runs for it.
     if (searchedAny && !o.quiet) await sendMorningFinds(userId, base.day);
     return;
