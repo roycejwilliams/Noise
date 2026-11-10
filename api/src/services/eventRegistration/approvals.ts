@@ -8,7 +8,8 @@ export const LUMA_LIVE_SUBMIT_APPROVED = false as boolean;
 // REGISTRATION_COPY_APPROVED: every word a member reads about a registration (services/eventRegistration/copy.ts) needs Royce's yes
 // first. Until both are true, the registration tools and their capability lines don't exist for anyone: Cue neither offers nor
 // mentions registering (its sheet still says it can't register them), so no prompt changes.
-export const REGISTRATION_COPY_APPROVED = false as boolean;
+// Approved by Royce, 2026-11-09 (COPY_REVIEW.md, including the eligibility line). Live submission is still off, so nothing reaches members.
+export const REGISTRATION_COPY_APPROVED = true as boolean;
 
 // Tests only (never read from the environment): a layer 1 test drives the live paths with this, the way setYesJudgeForTests stands in
 // for the yes read. Nothing in src sets it.
