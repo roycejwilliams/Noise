@@ -93,7 +93,7 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 import { isShuttingDown, track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
-import { refusedBySendLayer, wentDespiteError } from "../services/sendblue.js";
+import { REPLY_RECORD_LOOKBACK_MS, REPLY_SEND_OPTIONS, refusedBySendLayer, wentDespiteError } from "../services/sendblue.js";
 import { asHoldSend, trackTurnReplies, type TurnReplies } from "../services/turnReplies.js";
 import { setScopeMember, withMember } from "../services/llmUsage.js";
 import { createInboundHold, dbDownFor, holdFilePath } from "../services/inboundHold.js";
@@ -318,11 +318,12 @@ export async function sendCoReply(params: {
   };
   // An inline reply Sendblue refuses (not a V2 line, SMS, an old message) is
   // never sent at all, so it goes again as a plain text.
-  // When this send began: a send that throws is checked against Sendblue's record from here (wentDespiteError).
-  const since = new Date(Date.now() - 1000);
+  // When this send began, with room for clock skew between us and Sendblue (review of #442: 1s was too tight): a send that throws is
+  // checked against Sendblue's record from here (wentDespiteError).
+  const since = new Date(Date.now() - REPLY_RECORD_LOOKBACK_MS);
   if (params.replyTo && !audioUrl && !inlineRefused.has(phone)) {
     try {
-      await sendblue.messages.send({ ...body, reply_to: { message_handle: params.replyTo } } as typeof body);
+      await sendblue.messages.send({ ...body, reply_to: { message_handle: params.replyTo } } as typeof body, REPLY_SEND_OPTIONS);
       return true;
     } catch (err: any) {
       // Refused by the send layer itself (the breaker, the meta-commentary guard, a placeholder body): a plain retry would be refused
@@ -343,7 +344,7 @@ export async function sendCoReply(params: {
     }
   }
   try {
-    await sendblue.messages.send(body);
+    await sendblue.messages.send(body, REPLY_SEND_OPTIONS);
   } catch (err: any) {
     // It may have gone anyway (a timeout, a 5xx): reported as sent when Sendblue's record has this exact text, so the reply loop never
     // writes it again as a "retry" (Royce, 2026-11-10: accidental duplicate sends). A voice note has no text to match.
