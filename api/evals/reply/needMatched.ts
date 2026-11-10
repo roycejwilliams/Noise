@@ -79,5 +79,14 @@ check("CHECKIN_RULE is scoped to check-ins with no ask (a direct progress questi
 check("an honest 'nothing fit yet, and why' passes the narration rule", narratesInternalState("Nothing that fits the engineer search yet: the two I saw were founder programs, not ways to meet engineers.") === null);
 check("machinery talk still doesn't", narratesInternalState("Nothing new on my end yet.") !== null);
 
+// 2026-11-10 free diagnosis of the paid run: the walkthrough never numbers (the golden no-list rule), no step or sentence counts; no verified
+// link is said plainly; restating never upgrades what they said (grounding); the quality fixtures seed what the real path gives.
+check("the walkthrough is in order, plainly, all in one text: no numbering, no step or sentence counts", /Give the steps in order, plainly, all in one text, with no numbers or bullets\./.test(reply) && !/numbered|up to 6 steps|one to three sentences/.test(reply.slice(reply.indexOf("The exception is a request for help"), reply.indexOf("The exception is a request for help") + 1200)));
+check("no verified link: said plainly", /if you don't, say so plainly/.test(REPAIR_ON_PUSHBACK));
+const grounding = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
+check("grounding: a hope or guess of theirs said back as how it turned out is a claim", /Restating never upgrades what they said: a hope, guess, plan or worry of theirs said back as done, true or as how it turned out/.test(grounding));
+const need = readFileSync(new URL("./needQuality.ts", import.meta.url), "utf8");
+check("needQuality seeds the real path's facts (running work, sent records)", /runningWorkLine\(\[\], \[\], \{ asks: c\.seed\.running/.test(need) && /sentFindFacts\(/.test(need) && (need.match(/seed: \{/g) ?? []).length === 4);
+
 console.log(`\nneed-matched replies: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

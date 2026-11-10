@@ -8,7 +8,11 @@
 // One reply draft (Sonnet, the agent's own steps) and one grade (Sonnet) per case.
 import { estimateQuality, RUBRIC_CALL_USD } from "../golden/estimate.js";
 
-type Case = { id: string; check: string; message: string; recent: string; context?: string; isTeam?: boolean; bar: string; never?: string };
+// seed: the facts the real reply path would give this turn (F5, 2026-11-10: the first run's anything_yet, requested_resurface, quick_wine
+// and wrong_link were cut by the fact check for facts the real path has and the fixture didn't): the running-work line and the daily
+// search's own fact (replyGrounding.ts runningWorkLine, ongoingFactsFor), and what Cue sent them (turnContext.ts sentFindFacts).
+type Seed = { running?: string[]; sent?: { name: string; url: string | null; at: string }[] };
+type Case = { id: string; check: string; message: string; recent: string; context?: string; seed?: Seed; isTeam?: boolean; bar: string; never?: string };
 
 const T = (d: string) => `[${d}]`;
 export const CASES: Case[] = [
@@ -42,6 +46,7 @@ export const CASES: Case[] = [
     check: "a quick wine-spot question",
     message: "what was the wine bar you sent?",
     recent: `${T("Sun 6:10pm")} User said: somewhere low key for wine near Hayes?\n${T("Sun 6:11pm")} Cue replied: https://example.test/the-cellar-on-fell\n${T("Sun 6:11pm")} Cue replied: The Cellar on Fell: a small natural-wine bar, quiet on weeknights.`,
+    seed: { sent: [{ name: "The Cellar on Fell", url: "https://example.test/the-cellar-on-fell", at: "2026-11-08T02:11:00Z" }] },
     bar: "Names it and gives the link first, with only what's needed to use it. One or two texts.",
     never: "restates the description twice, or adds an unrelated pitch",
   },
@@ -82,6 +87,7 @@ export const CASES: Case[] = [
     check: "requested resurfacing",
     message: "what was that residency you sent me back in September? send the link again",
     recent: `${T("Sep 22")} Cue replied: https://example.test/harbor-point-residency\n${T("Sep 22")} Cue replied: Harbor Point Collective Member Residency: six months for builders.`,
+    seed: { sent: [{ name: "Harbor Point Collective Member Residency", url: "https://example.test/harbor-point-residency", at: "2026-09-22T17:00:00Z" }] },
     bar: "Names it and sends the link again, plainly.",
     never: "refuses because it was already sent, or says it can't find it",
   },
@@ -90,7 +96,8 @@ export const CASES: Case[] = [
     check: "\"anything yet?\" about a promised search",
     message: "anything yet on the engineer search?",
     recent: `${T("Nov 3")} User said: can you keep an eye out for ways to meet backend engineers in SF?\n${T("Nov 3")} Cue replied: I'll keep looking.`,
-    context: "Running for them: a daily search for ways to meet backend engineers in SF. Nothing that fit has come back yet; what came back was founder programs.",
+    context: "What the daily search has brought back for it so far: founder programs, nothing about meeting backend engineers.",
+    seed: { running: ["ways to meet backend engineers in SF"] },
     bar: "Answers the question honestly: where the search stands and what's missing (nothing that fit, and why), and that it keeps going.",
     never: "dodges the question, invents a find, or is a bare \"still looking\" with nothing real",
   },
@@ -99,6 +106,7 @@ export const CASES: Case[] = [
     check: "a member points out a wrong link",
     message: "that link was a roundup post of five programs, not the residency",
     recent: `${T("Nov 10")} Cue replied: https://example.test/x-post-roundup\n${T("Nov 10")} Cue replied: The HPC Member Residency, six months for builders.`,
+    seed: { sent: [{ name: "HPC Member Residency", url: "https://example.test/x-post-roundup", at: "2026-11-10T16:00:00Z" }] },
     bar: "Owns the specific mistake in a line, and either gives the residency's own link if it's known or says plainly it doesn't have a verified one.",
     never: "repeats the wrong description as fact, invents a link, or over-apologizes",
   },
@@ -137,7 +145,9 @@ if (process.argv.includes("--estimate")) {
 
 await import("../lib/requireMeter.js");
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");
-const { baseReplyFacts, addFact } = await import("../../src/harness/replyGrounding.js");
+const { baseReplyFacts, addFact, runningWorkLine, ongoingFactsFor } = await import("../../src/harness/replyGrounding.js");
+const { sentFindFacts } = await import("../../src/services/turnContext.js");
+const NOW = new Date("2026-11-10T18:00:00Z");
 const { generateText } = await import("ai");
 const { anthropic } = await import("@ai-sdk/anthropic");
 const { GRADER_MODEL } = await import("../../src/models.js");
@@ -147,6 +157,11 @@ let bad = 0;
 for (const c of CASES) {
   const facts = baseReplyFacts();
   if (c.context) addFact(facts, "known", c.context);
+  if (c.seed?.running?.length) {
+    addFact(facts, "known", runningWorkLine([], [], { asks: c.seed.running, goals: [], held: [] }));
+    for (const f of ongoingFactsFor(c.seed.running.map((text) => ({ text, kind: "find" as const })))) addFact(facts, f.kind, f.text);
+  }
+  for (const x of c.seed?.sent ?? []) for (const f of sentFindFacts({ name: x.name, url: x.url, sentAt: new Date(x.at), key: `name:${x.name.toLowerCase()}` } as any, NOW)) addFact(facts, "known", f);
   const r = await runConversationReplyAgent(
     { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan", resolvedContent: c.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: c.recent, recentMemories: "", contextSummary: "", personaPrompt: null, isTeam: !!c.isTeam, sendCoReply: async () => true } as any,
     { dryRun: true, record: false, stubSearch: true, stubEvents: [] },
