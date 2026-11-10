@@ -422,9 +422,11 @@ export const proactiveRegistry: ProactiveRegistry = {
       if ("defer" in found) return found;
       if (!(await B.gapStillHolds(c.userId, p.gap, p.times, p.zone).catch(() => false))) return skip("the gap no longer holds");
       const { facts, task } = B.proposalBrief({ want: p.want, match: p.match, gap: p.gap, times: p.times, zone: p.zone });
-      const text = await draftProactive({ functionId: "bounce.proposal.draft", firstName: person.firstName, facts, task, maxSentences: 2 });
+      // A roundup shared as a roundup (services/sendCheck.ts roundupShare): framed as a list, never checked terms (round-5 review of #441).
+      const R = p.match?.sendAsRoundup ? await import("../agent/eventDiscoverySurfacing.js") : null;
+      const text = await draftProactive({ functionId: "bounce.proposal.draft", firstName: person.firstName, facts, task: R ? `This link is${R.ROUNDUP_NOTE.replace(/^ \(|\)$/g, " ")}. ${task}` : task, maxSentences: 2 });
       if (!text) return skip("model chose SKIP");
-      return { messages: [text], text, rules: { maxSentences: 2, maxChars: 300, mustIncludeAny: nameTokens(String(p.match?.name ?? "")) } };
+      return { messages: [text], text, rules: { maxSentences: 2, maxChars: 300, mustIncludeAny: nameTokens(String(p.match?.name ?? "")), ...(R ? { forbidden: [R.UNCHECKED_CLAIM] } : {}) } };
     },
     async onSent(c, _person, messages) {
       await pool.query(`UPDATE bounce_proposals SET status = 'proposed', sent_at = NOW(), message = $2 WHERE id = $1 AND status = 'queued'`, [c.payload.proposalId, messages.join(" ").slice(0, 600)]);

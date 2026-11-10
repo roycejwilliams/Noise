@@ -65,6 +65,11 @@ export const IMPLIES_IDENTITY = { pattern: /\b(?:women|girls|ladies|men|guys|mom
 // What it is comes from its own page (Royce, 2026-11-10): the page read at send (services/sendCheck.ts) when there is one. A post that
 // listed it among other things (a roundup) only proves it was mentioned: it's labelled as that, never described as the thing itself.
 // A roundup shared as a roundup (Royce, 2026-11-10): what it is, from the post's own words; nothing about the listed programs checked.
+// A roundup shared as a roundup: the note every drafting path adds (the bundle, the single reveal, a bounce proposal), and the claim it
+// may never make. Round-5 review: "open now", "taking applications", "still accepting", "closing", "spots", "open for/to/until" too.
+export const ROUNDUP_NOTE = " (a post listing several places, not one program: say it's a list and what it covers, from the post's own words; never say any listed program's terms, availability or deadlines are checked or current; skip it if the list as a whole doesn't help what they're after)";
+export const VERIFIED_CLAIM = /\b(?:verified|confirmed|checked|still open|open now|(?:applications?|apps) (?:are )?(?:still )?open|taking applications|(?:still )?accepting|closing|deadline is|due (?:on|by)|spots?|open (?:for|to|until))\b/i;
+export const UNCHECKED_CLAIM = { pattern: VERIFIED_CLAIM, reason: "says something about a listed program's terms, availability or deadline that nobody checked" };
 export const ROUNDUP_SHARED_FACT = "this link is a post listing several places, not one program's page: share it as that list, described from the post's own words (source_post); none of the listed programs' terms, availability or deadlines were checked";
 function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): Facts {
   const roundup = !!match.foundInRoundup;
@@ -138,7 +143,7 @@ export function revealItem(askText: string, fromProfile: boolean, match: TierMat
       maxSentences: 2,
       maxChars: REVEAL_MAX_CHARS,
       mustIncludeAny: tokens.length ? tokens : [match.name],
-      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY, ...(fromProfile ? [CLAIMS_THEY_ASKED] : [])],
+      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY, ...(fromProfile ? [CLAIMS_THEY_ASKED] : []), ...(match.sendAsRoundup ? [UNCHECKED_CLAIM] : [])],
       // Prices and counts a caption states must be on its record (Phase B4, services/sendCheck.ts captionNumbersBacked).
       backedBy: captionRecord(askText, match, [...dots, why]),
       ...whoItIsFor(match),
@@ -169,7 +174,7 @@ export async function draftEventReveal(
     facts: item.facts,
     // Every event offer goes out with its details now (2026-09-18), so "short
     // notice" is only said when it's true.
-    task: `${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY} Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
+    task: `${match.sendAsRoundup ? `This link is${ROUNDUP_NOTE.replace(/^ \(|\)$/g, " ")}. ` : ""}${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY} Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
       ? match.kind === "opportunity"
         ? `They were interested in this one when you mentioned it. This is a short heads-up that the deadline is coming up: name it and the deadline, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
         : `They already heard about this one from you. This is a short heads-up that it's coming up: name it and when it is, in one or two sentences. Don't present it as new or re-explain it.${url ? " The link goes out as its own message right before yours; don't mention a link." : ""} If it doesn't fit anymore, return SKIP.`
