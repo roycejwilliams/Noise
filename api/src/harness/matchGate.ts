@@ -459,10 +459,13 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
       .catch(() => false);
   }
   // Talked about since it was first shown, in texts or calls, by them or by Cue (services/conversationRecall.ts mentionsSince): only
-  // looked up when it could matter (shown, no recorded outcome). Unreadable: null, never "not discussed".
+  // looked up when it could change the answer (review of #441): shown once, no recorded outcome or answer, and past the resurface gap.
+  // Unreadable: null, never "not discussed".
   if (o.discussion === false) return { shownAt, outcome, answered, shownDates };
   let discussed: boolean | null = false;
-  if (shownAt.length && !outcome && !answered) {
+  const showings = countShowings(shownAt);
+  const pastGap = showings.length === 1 && Date.now() - showings[0].getTime() >= RESURFACE_AFTER_DAYS * 86_400_000;
+  if (pastGap && !outcome && !answered) {
     const { mentionsSince } = await import("../services/conversationRecall.js");
     const first = new Date(Math.min(...shownAt.map((d) => d.getTime())));
     const names = [...new Set([match.name, ...twins.map((t) => t.name), ...programTwins.map((t) => t.name)].filter(Boolean))];
