@@ -681,7 +681,8 @@ export async function realRecallDeps(): Promise<RecallDeps> {
 // conversation.
 export const SEND_ECHO_HOURS = 6;
 export type Mentions = { member: Date[]; cue: Date[] };
-export async function mentionsSince(db: RecallDb, userId: string, name: string, since: Date, o: { sends?: Date[] } = {}): Promise<Mentions> {
+// o.url: the thing's own link; its organization alone counts as a mention only when that link carries it (knowledge/sent.ts mentionsThing).
+export async function mentionsSince(db: RecallDb, userId: string, name: string, since: Date, o: { sends?: Date[]; url?: string | null } = {}): Promise<Mentions> {
   const { mentionsThing, thingSearchTerms } = await import("./knowledge/sent.js");
   const terms = thingSearchTerms(name);
   const out: Mentions = { member: [], cue: [] };
@@ -696,7 +697,7 @@ export async function mentionsSince(db: RecallDb, userId: string, name: string, 
     const at = new Date(r.created_at);
     const lines = r.memory_type === "call_transcript" ? labelCallTranscript(r.content, at, "UTC") : [labelTextRow(r.content, at, "UTC")].filter((l): l is RecallLine => !!l);
     for (const l of lines) {
-      if (!mentionsThing(l.text, name)) continue;
+      if (!mentionsThing(l.text, name, o.url ?? null)) continue;
       if (l.speaker === "member") out.member.push(at);
       else if (l.speaker === "cue" || l.speaker === "summary") {
         if ((o.sends ?? []).some((s) => at.getTime() >= s.getTime() - 60_000 && at.getTime() <= s.getTime() + SEND_ECHO_HOURS * 3_600_000)) continue;

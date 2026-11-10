@@ -305,13 +305,18 @@ function acronymRuns(name: string): Map<string, string[]> {
 
 // Pure: a name's words, lower-cased, with an all-caps acronym the OTHER side spells out replaced by its words (so "SPC Residency" and
 // "South Park Commons Residency" read alike). A possessive 's is dropped.
+// Ordinary words an acronym can spell ("The Hacker Exchange" is "the"): never read as one (re-review of #441).
+const COMMON = new Set([...WEAK, "the", "and", "for", "new", "art", "app", "are", "but", "not", "you", "our", "all", "can", "get", "has", "her", "his", "how", "its", "may", "now", "one", "out", "see", "two", "who", "why", "yes", "big", "day", "far", "fun", "job", "let", "man", "net", "old", "own", "run", "say", "set", "top", "use", "way", "win", "with", "this", "that", "from", "your", "have", "more", "will", "about", "after", "again"]);
 function wordsWithAcronyms(name: string, other: string): string[] {
   const runs = acronymRuns(other);
+  // A lower-case token is read as an acronym only when it is the other side's organization's acronym ("spc residency" for South Park
+  // Commons); an all-caps token, when any capitalized run on the other side spells it. Never a common word either way.
+  const orgAcronym = orgOf(other).acronym;
   const out: string[] = [];
   for (const raw of String(name ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/['’]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
     const w = raw.toLowerCase();
-    // Any case ("spc residency" as well as "SPC"), three to five letters.
-    const full = w.length >= 3 && w.length <= 5 ? runs.get(w) : undefined;
+    const allCaps = /^\p{Lu}{3,5}$/u.test(raw);
+    const full = w.length >= 3 && w.length <= 5 && !COMMON.has(w) && (allCaps || w === orgAcronym) ? runs.get(w) : undefined;
     out.push(...(full ?? [w]));
   }
   return out;
@@ -370,9 +375,15 @@ function orgOf(name: string): { words: string[]; acronym: string | null } {
 // Pure: is this thing talked about in a line, for "discussed" only (review of #441)? Its name (namesThing), or its organization alone:
 // all of the organization's words, or its acronym in any case ("I'm thinking about SPC", "I applied to South Park Commons last week").
 // Looser than namesThing on purpose: talked about only stops a month-later resend; it never marks anything handled or the same.
-export function mentionsThing(text: string, name: string): boolean {
+// The organization counts only when the thing's own link carries it (re-review of #441: "AI Builders Residency" on an unrelated host made
+// "any ai builders events this week?" a mention, and the program never came back): its words joined, or its acronym, in the host.
+// No link known: only the name itself counts.
+export function mentionsThing(text: string, name: string, url: string | null = null): boolean {
   if (namesThing(text, name)) return true;
   const org = orgOf(name);
+  const host = (hostOf(url) ?? "").replace(/[^a-z0-9]/g, "");
+  const verified = !!host && ((org.words.length >= 2 && host.includes(org.words.join(""))) || (!!org.acronym && host.includes(org.acronym)));
+  if (!verified) return false;
   const toks = String(text ?? "").toLowerCase().replace(/['\u2019]s\b/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const have = new Set(toks);
   if (org.words.length && org.words.every((w) => have.has(w))) return true;

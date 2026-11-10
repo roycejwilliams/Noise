@@ -469,7 +469,7 @@ export async function offerHistory(userId: string, match: TierMatch, extraShownA
     const { mentionsSince } = await import("../services/conversationRecall.js");
     const first = new Date(Math.min(...shownAt.map((d) => d.getTime())));
     const names = [...new Set([match.name, ...twins.map((t) => t.name), ...programTwins.map((t) => t.name)].filter(Boolean))];
-    discussed = await Promise.all(names.map((n) => mentionsSince({ query: (sql, args) => pool.query(sql, args as any[]) as any }, userId, n, first, { sends: shownAt })))
+    discussed = await Promise.all(names.map((n) => mentionsSince({ query: (sql, args) => pool.query(sql, args as any[]) as any }, userId, n, first, { sends: shownAt, url: (match as any).url ?? null })))
       .then((all) => all.some((m) => m.member.length > 0 || m.cue.length > 0))
       .catch((err: any) => {
         console.error("offerHistory: their conversation since couldn't be read (treated as unknown):", err?.message ?? err);
