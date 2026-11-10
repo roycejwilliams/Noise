@@ -306,10 +306,9 @@ check("5. the reply tool is removed wherever the read can't run, with or without
     check("6. and never twice in a turn: a third text with nothing new is held, and the question went exactly once", held?.note === ONE_REPLY_NOTE && state.sentMessages.length === 2 && asked === 1, { held, sent: state.sentMessages });
     // When a later text may go (another tool ran since), the question still isn't said again: the carry is spent.
     state.workSinceSend = true;
-    await tools.sendReply.execute({ message: `Also: ${C.VOICE_READ_ASK}` }, {});
-    // Since the second-send fix (2026-11-10): a later text that only repeats what already went is held as a duplicate; either way the
-    // question reached them once.
-    check("6. …and a later text that may go never repeats it", state.sentMessages.length <= 3 && !(state.sentMessages[2] ?? "").includes("Hume") && state.sentMessages.join("\n").split(C.VOICE_READ_ASK).length - 1 === 1, state.sentMessages[2]);
+    // New content with the question riding again: the text goes (it's new), the question in it doesn't (the carry is spent).
+    await tools.sendReply.execute({ message: `Also, nothing changes for texts either way. ${C.VOICE_READ_ASK}` }, {});
+    check("6. …and a later text that may go never repeats it", state.sentMessages.length === 3 && !state.sentMessages[2].includes("Hume") && state.sentMessages.join("\n").split(C.VOICE_READ_ASK).length - 1 === 1, state.sentMessages[2]);
   }
   check("6. the tool tells Cue its own part asks nothing beside the question", /yours asks nothing/.test(tools.slice(tools.indexOf("    voiceRead: tool({"), tools.indexOf("    answerShareAsks: tool({"))));
   // The yes and stop lines already end their sentence: carried as written, never "anytime..".
