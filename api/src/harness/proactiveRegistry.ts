@@ -100,7 +100,7 @@ export async function peopleCoPointedTo(userId: string, eventApiId: string | nul
 export type SentRecord = { date: string; caption: string | null };
 async function whatCoSent(userId: string, followupIds: string[]): Promise<SentRecord | null> {
   if (!followupIds.length) return null;
-  const { rows: f } = await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [followupIds]);
+  const { rows: f } = await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[]) AND user_id = $2`, [followupIds, userId]);
   for (const r of f) {
     if (!r.url) continue;
     const { rows } = await pool.query(
@@ -179,7 +179,7 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   // reads disagreed, and a row queued on either was dropped here).
   const RO = await import("../services/recommendationOutcome.js");
   const links = p.outcomeFollowupIds?.length
-    ? await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]).then((r) => r.rows.map((x: any) => x.url as string | null)).catch(() => [] as (string | null)[])
+    ? await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[]) AND user_id = $2`, [p.outcomeFollowupIds, c.userId]).then((r) => r.rows.map((x: any) => x.url as string | null)).catch(() => [] as (string | null)[])
     : [];
   const viaCue = await RO.registeredFor(c.userId, keys, links).catch(() => false);
   const evidence = RO.evidenceOf({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 || viaCue });
