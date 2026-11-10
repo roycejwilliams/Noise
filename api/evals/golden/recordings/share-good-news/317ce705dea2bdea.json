@@ -1,0 +1,102 @@
+{
+  "hash": "317ce705dea2bdea",
+  "case": "share-good-news",
+  "recorded_at": "2026-11-10T03:47:59.536Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"Two years. That's not a yes, that's a vindication.\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Opens with 'Two years.' directly echoing their own words instead of adding something new or warm.\"}",
+      "usage": {
+        "input_tokens": 302,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 342,
+        "output_tokens_details": {
+          "thinking_tokens": 295
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgtZcqF8gVThUBAYHXCs2",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqoKCsQCCBMYAipAtt19XggO/g/5Hy/0leBLZwLEh/E+duhNp5tgF0PaE5pdVK2Zo/uaDGRXpGiwz9L206ww9nj8E12a1DE28MC6nDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB7qfK1wbCAToIBBAAGgwC2ooDTzcFpd8EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiB7uE6bZRC+JXhyDIO0IvcDVrIQW/0E6tH6oO4KC2LXXSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyx8ISH3zFpiWiKHCMaDCsy0rjtirKZxddF1SIw6s4ntOLDttfhE+Hy+oKEJPKlX1NpytHSfrdXBVcs/847cBy/5QEBJRoEp7xyVrUBKpIHk/GEhcWndGuyqBnt+DwNSPv3elJTsfI2UJ8f9pJwuiih492STIPsmeL3y9YID/1BeSxKzLrPz5kKmRErthYfpXWXjiBgT/d022t02viDEJIhyr1orUr5vuAh43ma7Kuvg0QMii+TLRgG7Ez6tvyIOzQBUcOp8oQSAMdVn5MiRZn5aU5bKCA6iWmEsgj+1J7IjUIhWXVomP9JNNAWs60IEVWaLm7GdhuTnzecLlWCUqUaeJM443qC4eNUCjqkBTLWFVh2LNPzzY4yoZ84CaEA0SaVliVwnrNAQ82OQFLOu4BtVaaiip11kmStg0EaKF5g/9pGMQo3qL2nojc1LVTb6Sl7gZf1JOnNCHQGLCIwuRpq+qbcE/mjX9kOVD8c2cgVjwRjYZ3NF7CCbc/D2AV3MFnvjzD3mJtcm11dLgyDPjN1pt8tRWR/EWFF/tnLEpbAGkUg8e0CH0zHoutT2fa1S+WrAv7naweZyL9IuC9hp0BPMQigjpTQWyBCGpcHhPRLDozYyy7S7taQ5JVZIPw/jngTJ3GgsbfeB5uyZUJPLrUxVIFLV8RAqyxbzFI+/SLua5fYV/Cvm+I4/VuEDgX5ISNizxF1okWfcsd9zJG9FJaN34wc9wDemlLDipDgNuBGcGsBgvBzbdvaFq+Hsu6ilk49JFZPgZUPUS2kCZwk7FIltlHk6ZqmnxfLvZZv6j3sm40JrAjSTnQRqlRQoHYpaE5Tx9xel0n0iyDKs+EdlKG2qJGv0by3eR5YXwp7fWxrPMUndA+hxXtNlfpMZUQGlGc9RjMK3WdI2ehVopIIvde7Xy20WUnp5An+w5oLbRKuh0R4xyx7EgurmRS3BRFe+CsjOu8SlWYXTKL6OnzDL1TqDiyuDK1TtJ8I2GXp0UiqzjuaNQqUCdsiYG5swGFdmfoZpiAwzyHlIqBx/KqiLbs+QDn+OMP5vKLBc3KPeHCMu8BvphoDkAguhMGIMn446DaXnEi3xrrR6TpM/Ft8exjyQ2RmiFV9+Mw897GeQaxxYvC8QtdCFU/MQPgdxsq8OULipGBsXe0Gq4os8F7apnqlURrBhW6aXmr3axUk2LBIL3E3oKScFq2Ai/237BE30EiWWZLkmCcqDb8yAWhUsts2Eh3Z3pu5iv+xcC9tRQB2mjD0vh5dT4+hKyw5OYbHt6GZjrEEuWiRHCISoXaX2KWvDYqp++BZ7yB+ibrLwGEsVLkYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Opens with 'Two years.' directly echoing their own words instead of adding something new or warm.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 302,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 342,
+          "output_tokens_details": {
+            "thinking_tokens": 295
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "317ce705dea2bdea",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

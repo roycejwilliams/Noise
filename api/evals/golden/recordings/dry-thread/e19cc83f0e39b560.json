@@ -1,7 +1,7 @@
 {
   "hash": "e19cc83f0e39b560",
   "case": "dry-thread",
-  "recorded_at": "2026-11-09T20:41:56.710Z",
+  "recorded_at": "2026-11-10T03:48:52.196Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They're sharing news about taking a two-week break from work, not answering anything or asking for anything\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off work after burnout\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They just named burnout as the reason for the time off, which fits with the recharged, hopeful feeling they described this morning.\", \"why\": \"birthday/recharge thread\"}], \"emotion\": {\"emotion\": \"relief\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"finally taking a break after burning out\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": null}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🤝\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"goals_challenges\"], \"missing\": [\"major_transition\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "{\"reason\": \"They're sharing news about taking two weeks off work to recover from burnout, not asking for anything or answering a waiting item.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off for burnout recovery\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"Their birthday recharge walk and now taking two weeks off both point to them stepping back to recover from burnout.\", \"why\": \"current wellbeing and need for rest\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"mixed\", \"about\": \"burning out and finally taking a break from work\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": \"concern\"}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🤝\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"goals_challenges\"], \"missing\": [\"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\", \"major_transition\"]}",
       "usage": {
         "input_tokens": 5601,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 443,
+        "output_tokens": 462,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgt18WgBCVtrUhVj5VsVH",
+        "id": "msg_011CgtZgjEr1uMYTBoxas29w",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\": \"They're sharing news about taking a two-week break from work, not answering anything or asking for anything\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off work after burnout\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They just named burnout as the reason for the time off, which fits with the recharged, hopeful feeling they described this morning.\", \"why\": \"birthday/recharge thread\"}], \"emotion\": {\"emotion\": \"relief\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"finally taking a break after burning out\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": null}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🤝\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"goals_challenges\"], \"missing\": [\"major_transition\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "{\"reason\": \"They're sharing news about taking two weeks off work to recover from burnout, not asking for anything or answering a waiting item.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"taking time off for burnout recovery\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"mention\", \"link\": \"Their birthday recharge walk and now taking two weeks off both point to them stepping back to recover from burnout.\", \"why\": \"current wellbeing and need for rest\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"mixed\", \"about\": \"burning out and finally taking a break from work\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": \"concern\"}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🤝\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\", \"goals_challenges\"], \"missing\": [\"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\", \"major_transition\"]}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 443,
+          "output_tokens": 462,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

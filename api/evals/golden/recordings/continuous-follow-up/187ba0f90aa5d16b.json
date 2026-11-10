@@ -1,0 +1,102 @@
+{
+  "hash": "187ba0f90aa5d16b",
+  "case": "continuous-follow-up",
+  "recorded_at": "2026-11-10T03:49:38.459Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other c...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other companies efficient and I want it to matter for people like him.\"\n\nCue's text:\n\"\"\"That's a real reason to build something, not just an itch to leave. Ten years of making other people's margins better, and the thing that's nagging at you is the one that never got any of that.\"\"\"\n\nDoes the text build on his answer with something of Cue's own (a real observation, a position, or a question that follows from what he just said and moves it forward), WITHOUT paraphrasing his answer back to him, and without filling in what he didn't say (his childhood, what his grandfather felt, which part of the chain)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"'Ten years of making other people's margins better' and 'never got any of that' just restate his own words back to him.\"}",
+      "usage": {
+        "input_tokens": 333,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 487,
+        "output_tokens_details": {
+          "thinking_tokens": 437
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgtZk2BtnGP85cTnUSFzL",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"'Ten years of making other people's margins better' and 'never got any of that' just restate his own words back to him.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 333,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 487,
+          "output_tokens_details": {
+            "thinking_tokens": 437
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "187ba0f90aa5d16b",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
