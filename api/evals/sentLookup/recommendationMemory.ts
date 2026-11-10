@@ -289,7 +289,7 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   const now = at("2026-11-10T17:00:00Z");
   const X = "https://x.com/i/status/42";
   const noPage = async () => ({ text: null, gone: false });
-  const deps = (sent: string[] | null): RecheckDeps => ({ luma: async () => null, page: noPage, sentNames: async () => sent });
+  const deps = (sent: string[] | null): RecheckDeps => ({ luma: async () => null, page: noPage, sentNames: async () => sent, discussedAmong: async () => new Set<string>() });
   const goodPost = `Where to meet backend engineers in SF this month:\n1. Harbor Point Collective Member Residency\n2. Backend Builders supper club\n3. Systems Reading Group at the Mission library\n4. Open Infra hack night`;
   const m = (post: string): any => ({ tier: 3, kind: "opportunity", name: "Harbor Point Collective Member Residency", url: X, reason: "", source: "x", opportunity: { postText: post } });
   const shared: any = await S.recheckFind(m(goodPost), { now, zone: null, deps: deps(["Harbor Point Collective Member Residency"]) });
@@ -313,6 +313,48 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   const unknown: any = await S.recheckFind(m(goodPost), { now, zone: null, deps: deps(null) });
   check("what they already have unreadable → held (fails closed)", !unknown.ok && /couldn't be read/.test(unknown.why), unknown);
   check("weak fit → not sent: the composer's skip at the same bar (model-judged; the note says so)", /skip it if the list as a whole doesn't help what they're after/.test(B.ROUNDUP_NOTE));
+}
+
+// ---------------------------------------------------------------- round-5 review of #441
+{
+  const S = await import("../../src/services/sendCheck.js");
+  const B = await import("../../src/harness/bundleComposer.js");
+  const E = await import("../../src/agent/eventDiscoverySurfacing.js");
+  const list = (head: string) => `${head}\n1. Harbor Point Collective Member Residency\n2. Backend Builders supper club\n3. Systems Reading Group\n4. Open Infra hack night`;
+  for (const h of ["Places to meet engineers, apps close Friday:", "Places to meet engineers, open until Dec 1:", "Places to meet engineers, closing soon:", "Places to meet engineers, only 10 seats:", "Places to meet engineers, due 12/1:", "Places to meet engineers, rolling, first come first served:"]) {
+    const r = S.roundupShare(list(h), [], new Set());
+    check(`unchecked value held: "${h}"`, !r.ok && /nobody checked/.test((r as any).why), r);
+  }
+  check("a plain list with no time words stays sendable", S.roundupShare(list("Places to meet backend engineers in SF:"), [], new Set()).ok === true);
+  for (const c of ["They're all open now.", "Each is taking applications now.", "All still accepting founders.", "Two are closing soon.", "A list of residencies, each with spots."]) check(`a caption claim gets a rewrite: "${c}"`, E.VERIFIED_CLAIM.test(c));
+  check("'a list of five residencies for technical founders' passes", !E.VERIFIED_CLAIM.test("a list of five residencies for technical founders"));
+
+  // Sent OR talked about is not new (Royce's ruling): 3 of 4 discussed, never sent → held.
+  const discussed = new Set(["Harbor Point Collective Member Residency", "Backend Builders supper club", "Systems Reading Group"]);
+  const r = S.roundupShare(list("Places to meet backend engineers in SF:"), [], discussed);
+  check("3 of 4 places talked about, never sent → held", !r.ok && /already sent or talked about/.test((r as any).why), r);
+  check("talked-about unreadable → held", S.roundupShare(list("Places to meet backend engineers in SF:"), [], null).ok === false);
+  check("the places read for talked-about are the list lines, markers and links off", S.roundupPlaces("Five places:\n1. Lattice Fund https://x.example\n- Northgate Accelerator:").join("|") === "Lattice Fund|Northgate Accelerator");
+  const { talkedAboutAmong } = await import("../../src/services/conversationRecall.js");
+  let queries = 0;
+  const seen = await talkedAboutAmong({ query: async (_sql: string, args: unknown[]) => { queries++; return { rows: args[0] === "u1" ? [{ memory_type: "text_exchange", content: "User said: went to the Backend Builders supper club last week", created_at: at("2026-10-01T00:00:00Z") }] : [] }; } }, "u1", ["Backend Builders supper club", "Systems Reading Group"]);
+  check("talked-about: one owner-bound query per roundup, names read per line", queries === 1 && seen.has("Backend Builders supper club") && !seen.has("Systems Reading Group"), [...seen]);
+
+  // A roundup is never a tier pick, and one post link goes once per text.
+  const item = (url: string): any => ({ facts: {}, rules: {}, url, grounding: "", name: "x", fromProfile: false, shortNotice: false, roundup: true });
+  const rb = B.roundupBundle([{ candidate: { id: "a" } as any, item: item("https://x.com/i/status/9"), pick: null, again: false, tierPick: true }, { candidate: { id: "b" } as any, item: item("https://x.com/i/status/9"), pick: null, again: false }]);
+  check("a roundup loses tier-pick wording (it may be skipped for fit like any find)", rb.items.length === 1 && rb.items[0].tierPick === false && !B.composePrompt({ firstName: "J", items: rb.items, set: null, leadWhy: null, memberBlock: null, feeling: null, thread: "", recent: "", threadLive: false } as any).includes("never skip it for fit"));
+  check("the same post link twice in one bundle: the second is dropped as covered", rb.dropped.length === 1 && /same post's link/.test(rb.dropped[0].why));
+  const src = readFileSync(new URL("../../src/harness/bundleComposer.ts", import.meta.url), "utf8");
+  check("composeBundle applies it before anything else", /const rb = roundupBundle\(input\.items\);/.test(src));
+
+  // The single reveal and a bounce proposal frame it the same way.
+  const m: any = { tier: 3, kind: "opportunity", name: "Places list", url: "https://x.com/i/status/9", reason: "", sendAsRoundup: true, opportunity: { postText: list("Places:") } };
+  const ri = E.revealItem("meet engineers", false, m);
+  check("the reveal's rules refuse unchecked claims for a roundup", (ri.rules.forbidden ?? []).some((f: any) => f.pattern === E.VERIFIED_CLAIM));
+  const evs = readFileSync(new URL("../../src/agent/eventDiscoverySurfacing.ts", import.meta.url), "utf8");
+  const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
+  check("draftEventReveal and bounce_proposal add the roundup note", /match\.sendAsRoundup \? `This link is\$\{ROUNDUP_NOTE/.test(evs) && /p\.match\?\.sendAsRoundup/.test(reg) && /forbidden: \[R\.UNCHECKED_CLAIM\]/.test(reg));
 }
 
 console.log(`\nrecommendation memory: ${total - failed}/${total} passed`);
