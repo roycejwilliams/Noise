@@ -111,7 +111,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   check("Cue threads when they did, or when they've texted since", I.threadReason({ theyRepliedInline: true, newerTextSince: false }) === "mirror" && I.threadReason({ theyRepliedInline: false, newerTextSince: true }) === "newer_text");
   check("…and not otherwise, and never in a group", I.threadReason({ theyRepliedInline: false, newerTextSince: false }) === null && I.threadReason({ theyRepliedInline: true, newerTextSince: true, isGroup: true }) === null);
   const sb = src("routes/sendblue.ts");
-  check("a refused inline reply goes again as a plain text", /reply_to: \{ message_handle: params\.replyTo \}/.test(sb) && /inline reply refused, sending it plain/.test(sb) && /await sendblue\.messages\.send\(body\);/.test(sb));
+  check("a refused inline reply goes again as a plain text", /reply_to: \{ message_handle: params\.replyTo \}/.test(sb) && /inline reply refused, sending it plain/.test(sb) && /await sendblue\.messages\.send\(body, REPLY_SEND_OPTIONS\);/.test(sb));
   check("the replied-to text reaches Cue's facts and the record lookup", /addFact\(replyFacts, "known", repliedToFact\(inlineTarget\)\)/.test(sb) && /\$\{inlineTarget \? `\$\{inlineTarget\.text\}\\n` : ""\}/.test(sb));
   check("Cue's reply sends through the threading check", /sendCoReply: threadedSend,/.test(sb));
   check("a bare link is recognized, a sentence with a link isn't", I.bareLink("https://lu.ma/grokbotproduct-sf") === "https://lu.ma/grokbotproduct-sf" && I.bareLink("see https://lu.ma/x for more") === null);
