@@ -550,9 +550,10 @@ export function reconcile(pageNow: { state: Outcome["state"] | "unknown" }): Rec
 export function readResultText(text: string): Outcome["state"] | "unknown" {
   const t = String(text ?? "").replace(/[’]/g, "'").replace(/\s+/g, " ");
   if (/already registered|already (?:on the )?guest list|you('| a)re already (?:going|in)/i.test(t)) return "already_registered";
-  if (/you('| a)re on the waitlist|added to the waitlist|joined the waitlist|you('| a)re waitlisted|on the wait ?list/i.test(t)) return "waitlisted";
+  // Only the guest's own status, never an offer ("Get on the waitlist", "If you're in SF…", "…before we see you there?").
+  if (/you('| a)re on the wait ?list|added to the wait ?list|joined the wait ?list|you('| a)re waitlisted/i.test(t)) return "waitlisted";
   if (/pending approval|request (?:has been |was )?(?:sent|submitted|received)|waiting (?:for|on) (?:the )?host|awaiting approval|approval pending|registration pending/i.test(t)) return "pending_approval";
-  if (/you('| a)re in\b|you('| a)re registered|you('| a)re going|registration (?:is )?confirmed|you('| a)re confirmed|see you there|added to (?:the )?guest list/i.test(t)) return "registered";
+  if (/you('| a)re in(?:\s*[.!]|\s*$|\s+(?:add to calendar|invite a friend|no longer able|starting|my ticket|a confirmation))|you('| a)re registered\b|you('| a)re going\b|registration (?:is )?confirmed(?!\s+(?:by|after|once|when|upon))|you('| a)re confirmed\b|added to (?:the )?guest list/i.test(t)) return "registered";
   if (/something went wrong|couldn'?t (?:register|complete)|registration failed|please try again|an error occurred|invalid (?:email|input)/i.test(t)) return "failed";
   return "unknown";
 }
