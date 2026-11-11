@@ -846,7 +846,11 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   const { items: rawFound, trace } = where.city && where.point ? await withPinnedPlace(where.city, where.point, () => findFreshPending(candidate, zone, where)) : await findFreshPending(candidate, zone, where);
   // What each new find IS, read at capture (services/findForm.ts): a dated event or an opening. An event whose date its page doesn't
   // state, or one already past, exits with its fact; an exited find found again stays out (services/workingSet.ts).
-  const found = await settleNewFinds(candidate.userId, rawFound, localDay(new Date(), zone), candidate.askText, zone);
+  const settled = await settleNewFinds(candidate.userId, rawFound, localDay(new Date(), zone), candidate.askText, zone);
+  // The one read of what each kept find is (services/opportunityRead.ts), so the pick chooses from it: after the gate, bounded per run,
+  // never blocking (a find whose read fails goes on as before). Logged with counts only.
+  const discoveryReads = await import("./opportunityRead.js").then((R) => R.readKeptFinds(settled, { ...R.realReadDeps, page: async (u: string) => (await import("./webOpportunitySearch.js")).readPageChecked(u) })).catch(() => ({ items: settled, read: 0, failed: 0 }));
+  const found = discoveryReads.items;
   // Empty runs in a row (the backoff, services/workingSet.ts askSearchDue): a real ask only.
   // Only a search that really ran counts (review of #133: a throw or a used-up web budget counted as "nothing found").
   // The 9am daily sweep doesn't count (services/dailySweep.ts): it leaves the ask lifecycle as the hourly sweep runs it (Royce, 2026-10-13).
@@ -895,6 +899,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
         cooldownCleared: candidate.cooldownCleared,
         ...trace,
         backlog: pending.map((i) => ({ name: i.match.name, tier: i.match.tier, date: relevantDate(i.match), source: i.source })),
+        discoveryReads: { read: discoveryReads.read, failed: discoveryReads.failed },
         // Where on the map it looked (placeResolve.ts): the resolved place, its distance from home, and how the place was set.
         ...(where.place ? { place: where.place } : {}),
         ...extra,

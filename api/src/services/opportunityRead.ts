@@ -8,9 +8,11 @@
 // page's own words; what the page doesn't say is an unknown; and a benefit is listed only when a fact supports it, by kind (meeting
 // people to work with is not learning from people doing the work, and neither is a fundraising room).
 //
-// Built once, at the send-time read (services/sendCheck.ts checkBeforeSend: the page was just read), and kept on the find
-// (payload.match.read). The composer (harness/bundleComposer.ts via agent/eventDiscoverySurfacing.ts revealFacts), the picker
+// Built once per page: at discovery for a kept find (services/eventSurfacingSweep.ts, readKeptFinds: after the gate, bounded per run),
+// so the pick chooses from it; at the send-time read (services/sendCheck.ts checkBeforeSend) only when it's missing or stale (the page
+// changed, or it's older than READ_MAX_AGE_MS). Kept on the find (payload.match.read). The composer (harness/bundleComposer.ts via agent/eventDiscoverySurfacing.ts revealFacts), the picker
 // (services/sweepShadow.ts pool details) and the reply's find facts reuse it rather than summarizing the page again. No new store.
+import { createHash } from "node:crypto";
 import { onPage } from "./sendCheck.js";
 import type { EventDetails } from "./eventDetails.js";
 
@@ -23,7 +25,16 @@ export const BENEFIT_KINDS = ["meet_collaborators", "learn_from_practitioners", 
 export type BenefitKind = (typeof BENEFIT_KINDS)[number];
 // because: the text of the fact it rests on (never a model's free line).
 export type ReadBenefit = { kind: BenefitKind; because: string };
-export type OpportunityRead = { v: 1; url: string | null; source: ReadSource; readAt: string; facts: ReadFact[]; unknowns: string[]; benefits: ReadBenefit[] };
+// pageHash: the page text it was read from, hashed, so a later read of the same page reuses it.
+export type OpportunityRead = { v: 1; url: string | null; source: ReadSource; readAt: string; facts: ReadFact[]; unknowns: string[]; benefits: ReadBenefit[]; pageHash?: string };
+
+// A read older than this is read again even when the page looks the same.
+export const READ_MAX_AGE_MS = 7 * 24 * 3_600_000;
+// The page text a read is made from, as the send-time read keeps it (sendCheck.ts pageNow: its first 3000 characters).
+export const READ_TEXT_CHARS = 3000;
+export function pageHash(text: string): string {
+  return createHash("sha1").update(String(text ?? "").slice(0, READ_TEXT_CHARS)).digest("hex").slice(0, 16);
+}
 
 export const BENEFIT_LABEL: Record<BenefitKind, string> = {
   meet_collaborators: "meeting people who might build or work with them",
@@ -103,28 +114,68 @@ export const ROUNDUP_UNKNOWN = "this is a list of several things; nothing about 
 export type ReadDeps = { model?: (prompt: string) => Promise<string> };
 type Readable = { name: string; url?: string | null; details?: EventDetails; pageNow?: string; pageIsAbout?: boolean; sendAsRoundup?: boolean; checkedAt?: string; read?: OpportunityRead };
 
-// Pure: is the read on file still the read of this page (same link, same send-time read)? Then it's reused, never read again.
-export function readIsCurrent(m: Readable): boolean {
-  return !!m.read && m.read.v === 1 && (m.read.url ?? null) === (m.url ?? null) && !!m.checkedAt && m.read.readAt === m.checkedAt;
+const textOf = (m: Readable): string => String(m.details?.description ?? m.pageNow ?? "");
+// Pure: is the read on file still the read of this page? Same link, and either the same send-time read, or the same page text (by
+// hash) read within READ_MAX_AGE_MS. Then it's reused, never read again.
+export function readIsCurrent(m: Readable, now: Date = new Date()): boolean {
+  const r = m.read;
+  if (!r || r.v !== 1 || (r.url ?? null) !== (m.url ?? null)) return false;
+  if (!!m.checkedAt && r.readAt === m.checkedAt) return true;
+  const age = now.getTime() - Date.parse(r.readAt);
+  if (!r.pageHash || !Number.isFinite(age) || age >= READ_MAX_AGE_MS || m.sendAsRoundup) return false;
+  // No page text on the find yet (a backlog find read at discovery): the read stands until its page is read again.
+  return !textOf(m).trim() || r.pageHash === pageHash(textOf(m));
 }
 
 // The read, from what was just read at send. Never throws: a model read that fails or can't be held to the page leaves the structured
 // facts and an unknown, never an invented line.
-export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = new Date()): Promise<OpportunityRead> {
-  if (readIsCurrent(m)) return m.read!;
-  const readAt = m.checkedAt ?? now.toISOString();
+// o.text: the page text read now at discovery (the find has no send-time read yet); otherwise its event record or send-time page.
+export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = new Date(), o: { text?: string } = {}): Promise<OpportunityRead> {
+  if (!o.text && readIsCurrent(m, now)) return m.read!;
+  const readAt = o.text ? now.toISOString() : (m.checkedAt ?? now.toISOString());
   const url = m.url ?? null;
   if (m.sendAsRoundup) return { v: 1, url, source: "roundup", readAt, facts: [], unknowns: [ROUNDUP_UNKNOWN], benefits: [] };
   const source: ReadSource = m.details ? "event_record" : m.pageIsAbout ? "page_about_it" : "own_page";
   const base = recordFacts(m.details);
-  const page = String(m.details?.description ?? m.pageNow ?? "");
+  const page = String(m.details?.description ?? o.text ?? m.pageNow ?? "").slice(0, READ_TEXT_CHARS * 2);
+  const hash = page.trim() ? { pageHash: pageHash(page) } : {};
   if (page.trim().length < 80 || !deps.model) return { v: 1, url, source, readAt, facts: base, unknowns: page.trim() ? [] : ["what happens there and who it's for: its page has no description"], benefits: [] };
   const parsed = await deps.model(readPrompt(m.name, page)).then((raw) => parseRead(raw, page)).catch(() => null);
+  // A failed read keeps no hash, so the next read tries again.
   if (!parsed) return { v: 1, url, source, readAt, facts: base, unknowns: ["what happens there and who it's for: its page couldn't be read for that just now"], benefits: [] };
   // Structured fields win over a paraphrase of the same field.
   const have = new Set(base.map((f) => f.field));
   const facts = [...base, ...parsed.facts.filter((f) => !have.has(f.field) || !["when", "area", "cost", "registration"].includes(f.field))].slice(0, MAX_FACTS);
-  return { v: 1, url, source, readAt, facts, unknowns: parsed.unknowns, benefits: parsed.benefits };
+  return { v: 1, url, source, readAt, facts, unknowns: parsed.unknowns, benefits: parsed.benefits, ...hash };
+}
+
+// At discovery: a read for each kept find (after the gate: never an unread or exited one) that has none current, at most
+// DISCOVERY_READS_PER_RUN a run. Its page text: its event record's description, else its page fetched now (free; the same reader the
+// send-time read uses), cut as the send-time read keeps it so a later read of the same page reuses this one. Never throws and never
+// drops a find: a find whose page can't be read, or whose read fails, goes on as it came (today's behavior).
+export const DISCOVERY_READS_PER_RUN = 6;
+export type DiscoveryReadDeps = ReadDeps & { page?: (url: string) => Promise<{ text: string | null; gone: boolean }> };
+export async function readKeptFinds<T extends { match: any; unread?: unknown }>(items: T[], deps: DiscoveryReadDeps, o: { now?: Date; cap?: number } = {}): Promise<{ items: T[]; read: number; failed: number }> {
+  const now = o.now ?? new Date();
+  const cap = o.cap ?? DISCOVERY_READS_PER_RUN;
+  let read = 0, failed = 0;
+  const out: T[] = [];
+  for (const it of items) {
+    const m = it.match;
+    if (it.unread || !m || m.sendAsRoundup || read + failed >= cap || readIsCurrent(m, now) || !deps.model) { out.push(it); continue; }
+    try {
+      let text = String(m.details?.description ?? "");
+      if (!text.trim() && typeof m.url === "string" && /^https:/.test(m.url) && deps.page) text = String((await deps.page(m.url))?.text ?? "").slice(0, READ_TEXT_CHARS);
+      if (text.trim().length < 80) { out.push(it); continue; }
+      const r = await readOpportunity(m, deps, now, { text });
+      if (r.pageHash) { read++; out.push({ ...it, match: { ...m, read: r } }); }
+      else { failed++; out.push(it); }
+    } catch {
+      failed++;
+      out.push(it);
+    }
+  }
+  return { items: out, read, failed };
 }
 
 // Pure: the read as prompt lines, with the page's facts, what's unknown and what the facts support kept apart. Every reader uses this.

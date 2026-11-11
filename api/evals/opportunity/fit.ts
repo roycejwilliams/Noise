@@ -16,6 +16,7 @@ const R = await import("../../src/services/opportunityRead.js");
 const S = await import("../../src/services/sendCheck.js");
 const SH = await import("../../src/services/sweepShadow.js");
 const SEL = await import("../../src/services/sweepSelect.js");
+const SRC_SWEEP = (await import("node:fs")).readFileSync(new URL("../../src/services/eventSurfacingSweep.ts", import.meta.url), "utf8");
 
 let total = 0, failed = 0;
 const PRINT = process.argv.includes("--print");
@@ -192,6 +193,46 @@ const detailed: any = {
   check("7. 'since you're going' when they only requested a spot goes back (registration is not attendance)", /presumes they're going/.test(stub.prompts[1] ?? ""), (stub.prompts[1] ?? "").slice(-600));
   check("7. what goes ties prep to the format and keeps 'if you go'", "messages" in r && r.messages[1] === PLAIN, r);
   show("7. unconfirmed attendance", r.messages);
+}
+
+// ---------------------------------------------------------------- the read at discovery, reused at send (Royce, 2026-11-11)
+{
+  const URL_ = "https://builders.example/table";
+  const keptMatch = (): any => ({ tier: 3, kind: "opportunity", name: "Builders' Table", url: URL_, source: "web", reason: "", statedDates: { start: "2026-11-19" } });
+  let fetches = 0;
+  const pageDeps = (text: string) => ({ page: async () => (fetches++, { text, gone: false }) });
+  const stub = stubModel([detailedRead]);
+  const items = [{ match: keptMatch() }, { match: { ...keptMatch(), name: "Undated Thing", url: "https://x.example/u" }, unread: { days: [], why: "unknown" } }];
+  const d1 = await R.readKeptFinds(items, { model: stub.model, ...pageDeps(DETAILED_PAGE) }, { now: NOW });
+  check("discovery: a kept find gets a read, from its page fetched now", d1.read === 1 && !!d1.items[0].match.read?.pageHash && d1.items[0].match.read.benefits.length === 2 && stub.prompts.length === 1, d1);
+  check("discovery: a find that failed the gate (unread) gets no read and no fetch", !d1.items[1].match.read && fetches === 1);
+  const d2 = await R.readKeptFinds(d1.items, { model: stub.model, ...pageDeps(DETAILED_PAGE) }, { now: new Date(NOW.getTime() + 3_600_000) });
+  check("discovery: once read, a later run doesn't read it again", d2.read === 0 && stub.prompts.length === 1 && fetches === 1);
+  check("discovery: the picker sees its summary", SH.describeMatch(d1.items[0].match)!.startsWith("small-group dinner"));
+  const capped = await R.readKeptFinds(Array.from({ length: 9 }, (_, k) => ({ match: { ...keptMatch(), url: `${URL_}/${k}` } })), { model: stubModel([detailedRead]).model, ...pageDeps(DETAILED_PAGE) }, { now: NOW });
+  check("discovery: bounded per run", capped.read === R.DISCOVERY_READS_PER_RUN && capped.items.length === 9 && capped.items.slice(R.DISCOVERY_READS_PER_RUN).every((i) => !i.match.read));
+
+  // At send: the page read again is the same page, so the discovery read is reused; changed or old, it's read again.
+  const sendDeps = (text: string, model: (p: string) => Promise<string>, saved: any[] = []): any => ({ luma: async () => null, page: async () => ({ text, gone: false }), now: () => new Date(NOW.getTime() + 2 * 3_600_000), saveMatch: async (_: string, m: any) => void saved.push(m), saveDefers: async () => {}, writeFact: async () => true, readModel: model, sentNames: async () => [], discussedAmong: async () => new Set() });
+  const sendStub = stubModel([detailedRead]);
+  const reused: any = await S.checkBeforeSend({ id: "k1", userId: "u", payload: { match: d1.items[0].match } }, ZONE, sendDeps(DETAILED_PAGE, sendStub.model));
+  check("send: a fresh discovery read of the same page is reused, no second model read", reused.ok && sendStub.prompts.length === 0 && reused.match.read === d1.items[0].match.read, reused);
+  const changedStub = stubModel([detailedRead]);
+  const changed: any = await S.checkBeforeSend({ id: "k2", userId: "u", payload: { match: d1.items[0].match } }, ZONE, sendDeps(`${DETAILED_PAGE} Update: now two tables.`, changedStub.model));
+  check("send: the page changed since, so it's read again", changed.ok && changedStub.prompts.length === 1 && changed.match.read !== d1.items[0].match.read, changed);
+  const oldStub = stubModel([detailedRead]);
+  const old = { ...d1.items[0].match, read: { ...d1.items[0].match.read, readAt: "2026-11-01T00:00:00.000Z" } };
+  const stale: any = await S.checkBeforeSend({ id: "k3", userId: "u", payload: { match: old } }, ZONE, sendDeps(DETAILED_PAGE, oldStub.model));
+  check("send: a read older than a week is read again, even when the page looks the same", stale.ok && oldStub.prompts.length === 1, stale);
+
+  // A failed read never blocks discovery: the find goes on as it came.
+  const broken = await R.readKeptFinds([{ match: keptMatch() }], { model: async () => { throw new Error("down"); }, ...pageDeps(DETAILED_PAGE) }, { now: NOW });
+  check("discovery: a read that fails leaves the find as it was (today's behavior)", broken.items.length === 1 && !broken.items[0].match.read && broken.failed === 1, broken);
+  const noPage = await R.readKeptFinds([{ match: keptMatch() }], { model: stubModel([detailedRead]).model, page: async () => { throw new Error("fetch failed"); } }, { now: NOW });
+  check("discovery: a page that can't be fetched leaves the find as it was", noPage.items.length === 1 && !noPage.items[0].match.read, noPage);
+  const noModel = await R.readKeptFinds([{ match: keptMatch() }], { ...pageDeps(DETAILED_PAGE) }, { now: NOW });
+  check("discovery: with no model, nothing is read (and nothing fetched)", noModel.read === 0 && !noModel.items[0].match.read);
+  check("discovery is wired after the gate (settleNewFinds), never before it", /const settled = await settleNewFinds\([\s\S]{0,600}readKeptFinds\(settled/.test(SRC_SWEEP));
 }
 
 console.log(`\nopportunity fit: ${total - failed}/${total} passed`);

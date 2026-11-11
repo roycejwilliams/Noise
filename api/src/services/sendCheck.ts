@@ -479,7 +479,7 @@ export async function checkBeforeSend(c: SendCandidate, zone: string | null, dep
   // composer, the reply and a later pick reuse it. Never holds the send: a read that fails leaves the structured facts and an unknown.
   const withRead = async (m: TierMatch): Promise<{ match: TierMatch; changed: boolean }> => {
     const R = await import("./opportunityRead.js");
-    if (R.readIsCurrent(m as any)) return { match: m, changed: false };
+    if (R.readIsCurrent(m as any, now)) return { match: m, changed: false };
     const read = await R.readOpportunity(m as any, { model: deps.readModel }, now).catch(() => null);
     return read ? { match: { ...m, read } as TierMatch, changed: true } : { match: m, changed: false };
   };
