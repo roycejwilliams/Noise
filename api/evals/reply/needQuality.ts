@@ -11,7 +11,8 @@ import { estimateQuality, RUBRIC_CALL_USD } from "../golden/estimate.js";
 // seed: the facts the real reply path would give this turn (F5, 2026-11-10: the first run's anything_yet, requested_resurface, quick_wine
 // and wrong_link were cut by the fact check for facts the real path has and the fixture didn't): the running-work line and the daily
 // search's own fact (replyGrounding.ts runningWorkLine, ongoingFactsFor), and what Cue sent them (turnContext.ts sentFindFacts).
-type Seed = { running?: string[]; sent?: { name: string; url: string | null; at: string }[] };
+// refers: their message refers to these sends (the real path's turn.referents), so the past-find link guard sees them.
+type Seed = { running?: string[]; sent?: { name: string; url: string | null; at: string }[]; refers?: boolean };
 type Case = { id: string; check: string; message: string; recent: string; context?: string; seed?: Seed; isTeam?: boolean; bar: string; never?: string };
 
 const T = (d: string) => `[${d}]`;
@@ -46,7 +47,7 @@ export const CASES: Case[] = [
     check: "a quick wine-spot question",
     message: "what was the wine bar you sent?",
     recent: `${T("Sun 6:10pm")} User said: somewhere low key for wine near Hayes?\n${T("Sun 6:11pm")} Cue replied: https://example.test/the-cellar-on-fell\n${T("Sun 6:11pm")} Cue replied: The Cellar on Fell: a small natural-wine bar, quiet on weeknights.`,
-    seed: { sent: [{ name: "The Cellar on Fell", url: "https://example.test/the-cellar-on-fell", at: "2026-11-08T02:11:00Z" }] },
+    seed: { sent: [{ name: "The Cellar on Fell", url: "https://example.test/the-cellar-on-fell", at: "2026-11-08T02:11:00Z" }], refers: true },
     bar: "Names it and gives the link first, with only what's needed to use it. One or two texts.",
     never: "restates the description twice, or adds an unrelated pitch",
   },
@@ -87,7 +88,7 @@ export const CASES: Case[] = [
     check: "requested resurfacing",
     message: "what was that residency you sent me back in September? send the link again",
     recent: `${T("Sep 22")} Cue replied: https://example.test/harbor-point-residency\n${T("Sep 22")} Cue replied: Harbor Point Collective Member Residency: six months for builders.`,
-    seed: { sent: [{ name: "Harbor Point Collective Member Residency", url: "https://example.test/harbor-point-residency", at: "2026-09-22T17:00:00Z" }] },
+    seed: { sent: [{ name: "Harbor Point Collective Member Residency", url: "https://example.test/harbor-point-residency", at: "2026-09-22T17:00:00Z" }], refers: true },
     bar: "Names it and sends the link again, plainly.",
     never: "refuses because it was already sent, or says it can't find it",
   },
@@ -190,7 +191,7 @@ for (const c of RUN) {
   const r = await runConversationReplyAgent(
     { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan", resolvedContent: c.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: c.recent, recentMemories: "", contextSummary: "", personaPrompt: null, isTeam: !!c.isTeam, sendCoReply: async () => true } as any,
     // Fix 2: the fixture's running search is what a dry run's listOpenAsks reports open.
-    { dryRun: true, record: false, stubSearch: true, stubEvents: [], ...(c.seed?.running?.length ? { dryRunOpenAsks: c.seed.running.map((text) => ({ text, type: "seeking" as const })) } : {}) },
+    { dryRun: true, record: false, stubSearch: true, stubEvents: [], ...(c.seed?.running?.length ? { dryRunOpenAsks: c.seed.running.map((text) => ({ text, type: "seeking" as const })) } : {}), ...(c.seed?.refers && c.seed.sent ? { dryRunReferents: c.seed.sent.map((x) => ({ name: x.name, url: x.url })) } : {}) },
   ).catch((err: any) => ({ replyText: `(failed: ${err?.message ?? err})` }) as any);
   captureSends(false);
   const sent = sentLines.length ? sentLines.join(" || ") : String(r.replyText ?? "");
