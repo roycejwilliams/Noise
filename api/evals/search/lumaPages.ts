@@ -258,7 +258,7 @@ const page = (o: Ev = {}) => ({ html: html(o), status: 200, error: null });
 {
   const { readFileSync } = await import("fs");
   const ed = readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8");
-  check("pace: every real Luma page read waits its turn", /if \(fetchImpl === fetch\) await lumaPace\(\);/.test(ed));
+  check("pace: every real Luma page read waits its turn", /if \(fetchImpl === fetch && !\(await lumaPace\(o\.lane \?\? "reply"\)\)\)/.test(ed));
   const t0 = Date.parse("2026-11-11T17:06:00Z");
   let clock = t0;
   let exa = 0;
