@@ -220,7 +220,9 @@ export function loopTools(
   const OUT_OF_TIME = { ok: false, error: "Out of time for this turn: share what you have and answer them; say what you'd check next." };
   const say = async (text: string, record: string) => {
     if (ctx.dryRun) {
-      console.log(`[conversationReply dryRun] would send to ${ctx.userId}: ${text.slice(0, 160)}`);
+      // The whole text: the golden harness reads its sends from this line (evals/golden/replies.ts captureSends), and a cut caption read
+      // as a reply that stops mid-sentence (2026-11-11, std-roundup-page).
+      console.log(`[conversationReply dryRun] would send to ${ctx.userId}: ${text}`);
       state.sentMessages.push(text);
       return true;
     }
@@ -414,6 +416,19 @@ export function loopTools(
         }
         const saved = Object.fromEntries(Object.entries(theirs ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== ""));
         if (Object.keys(saved).length && !ctx.stubSearch) await remember(saved as Partial<SearchIntent>);
+        // A stubbed search returns the case's stub events as its results, the same as searchEvents' stub (2026-11-11, std-quick-wine-spot:
+        // a wine bar is a place, so the model searched the web, and the stub said nothing was found).
+        if (ctx.stubSearch && ctx.stubEvents?.length) {
+          const results = ctx.stubEvents.map((e) => {
+            const facts = e.lines.join("; ");
+            const match = { tier: 3, kind: "opportunity", source: "web", name: e.name, url: e.url, reason: facts || e.name, evidence: `${e.name}. ${facts}` } as unknown as TierMatch;
+            loop.found.set(e.url, { name: e.name, url: e.url, facts, match, blocked: null });
+            ctx.facts?.add("known", `Found just now on the web: "${e.name}", link ${e.url}. ${facts}`);
+            return { name: e.name, link: e.url, facts: e.lines, ownSite: true };
+          });
+          receipt(`Searched the web just now (${queries.map((q) => `"${q}"`).join(", ")}): ${results.length} held up on their own pages.`);
+          return { ok: true, results, dropped: [] };
+        }
         if (ctx.stubSearch) {
           receipt(`Searched the web just now (${queries.map((q) => `"${q}"`).join(", ")}): nothing held up on its own page.`);
           return { ...STUB, results: [] };

@@ -120,7 +120,7 @@ export const CASES: GoldenCase[] = [
       if (/\bI(?:'ll| will) (?:keep an eye|keep looking|look out|let you know|circle back|follow up|check back|send (?:you )?more|dig)/i.test(t)) misses.push("a follow-up promise in place of the answer");
       if (GOAL_ECHO.test(t)) misses.push(`pastes their goal back ("${t.match(GOAL_ECHO)![0]}")`);
       if (!/6:30|tonight|Mission|brewery|talks?|120/i.test(t)) misses.push("no details from what's on file");
-      const j = await judge(t, `Thread:\n${transcript(exchange, [{ message, r }])}\nOn file: ${THREE_FACTS[2][1]} The member is a founder hiring a founding engineer.`, `Is it one coherent answer that gives the details on file, NAMES the kind of benefit (for example: meeting a potential hire or collaborator, versus learning from practitioners) rather than a vague "good fit", and says its limits (what isn't known, like who attends, or what the format makes hard), without inventing anything, promising unrelated follow-up, or restating their goal back to them? ${WHOLE} Answer yes only if all of that holds.`);
+      const j = await judge(t, `Thread:\n${transcript(exchange, [{ message, r }])}\nOn file: ${THREE_FACTS[2][1]} ${JORDAN_FACTS[0][1]}`, `Is it one coherent answer that gives the details on file, NAMES the kind of benefit (for example: meeting a potential hire or collaborator, versus learning from practitioners) rather than a vague "good fit", and says its limits (what isn't known, like who attends, or what the format makes hard), without inventing anything, promising unrelated follow-up, or restating their goal back to them? ${WHOLE} Answer yes only if all of that holds.`);
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return done(misses, [r]);
     },
@@ -323,7 +323,9 @@ export const CASES: GoldenCase[] = [
         { at: later(sentAt, 600), from: "member", text: "Looked at it. Not for me right now, I can't do 10 weeks in person. Maybe spring" },
         { at: later(sentAt, 630), from: "co", text: "Makes sense. It runs again in spring." },
       ];
-      const message = "Anything new worth my time this week?";
+      // An explicit search ask (diagnosis 2026-11-11): "Anything new worth my time this week?" was read as a status question and no
+      // search ran, so the case never reached the old rec coming back. The case is about what the search returns, so the member asks for one.
+      const message = "Can you look for anything new worth my time this week?";
       const r = await reply({ firstName: "Jordan", now: DAY, exchange, searching: NONE, facts: [...JORDAN_FACTS, ["did_before", `Cue sent them "${RESIDENCY.name}" (${RESIDENCY.url}) on Fri Oct 9; they said "Not for me right now, I can't do 10 weeks in person. Maybe spring".`]], message, stubEvents: [RESIDENCY, BUILDERS], withExchange: { sent: [{ name: RESIDENCY.name, url: RESIDENCY.url }] } });
       const misses = slips(r);
       const t = delivered(r);

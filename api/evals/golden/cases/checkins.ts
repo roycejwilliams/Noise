@@ -106,7 +106,9 @@ export async function reply(s: Scene): Promise<Reply> {
   }
   const { value: r, sends } = await captureSends<any>(() => runConversationReplyAgent(
     { ackSent: null, ...member(s.firstName), resolvedContent: s.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: recent, snapshot, personaPrompt: null, sendCoReply: async () => true },
-    { dryRun: true, record: false, stubSearch: true, ...(s.stubEvents ? { stubEvents: s.stubEvents } : {}) },
+    // What Cue sent before stands as the turn's referents (diagnosis 2026-11-11: with none, the past-find link guards, findGuards.ts
+    // unlinkedPastFinds and the plain-text link-first send, could never fire in a golden case).
+    { dryRun: true, record: false, stubSearch: true, ...(s.stubEvents ? { stubEvents: s.stubEvents } : {}), ...(s.withExchange?.sent?.length ? { dryRunReferents: s.withExchange.sent } : {}) },
   ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] })));
   const thread = linesOf(recent);
   noteReply({ text: String(r.replyText ?? ""), sends, tools: r.toolsCalled ?? [], kind: s.kind ?? turnKind(s.message, s.withMoment ? read?.moment?.mode : null), facts: s.stubEvents ? `${G.renderReplyFacts(facts)}\n${s.stubEvents.map((e) => `${e.name} ${e.url} ${e.lines.join(" ")}`).join("\n")}` : G.renderReplyFacts(facts), theirLines: [s.message, ...thread.theirs], coLines: thread.cue, firstName: s.firstName, message: s.message, recent, ...(s.stubEvents ? { findUrls: s.stubEvents.map((e) => e.url) } : {}) });
