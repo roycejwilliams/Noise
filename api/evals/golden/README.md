@@ -139,6 +139,14 @@ The cases waiting on their first recording (2026-10-29, `cases/moments.ts`): `sh
 railway run -s co-test -e 5cac359e-1dc3-411f-b4b1-9949610041d2 -- sh -c 'exec env -i PATH="$PATH" HOME="$HOME" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" OPENAI_API_KEY="$OPENAI_API_KEY" GOOGLE_PLACES_API_KEY=ci ELEVENLABS_API_KEY=ci EVAL_COST_CAP_USD=2 npm run -s evals:golden:record -- --missing'
 ```
 
+The standard set (2026-11-11, `cases/standardExchanges.ts`, ids `std-*`, cases 73-83): eleven whole exchanges rebuilt from the 11-09 to
+11-11 thread, each waiting on its first recording. Record them once, after the recommendation-depth and reply-coherence PRs land, so the
+recording is of the fixed behavior (about $0.69 from the median reply case, 12 reply turns; cap $2):
+
+```
+railway run -s co-test -e 5cac359e-1dc3-411f-b4b1-9949610041d2 -- sh -c 'exec env -i PATH="$PATH" HOME="$HOME" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" OPENAI_API_KEY="$OPENAI_API_KEY" GOOGLE_PLACES_API_KEY=ci ELEVENLABS_API_KEY=ci EVAL_COST_CAP_USD=2 npm run -s evals:golden:record -- --only std-'
+```
+
 ## When to re-record
 
 Re-record a case when its replay says `FAIL(no recording)`: its behavior changed (a fact, a tool, a model, a parameter, an instruction

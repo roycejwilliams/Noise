@@ -11,7 +11,7 @@ import type { GoldenCase, GoldenResult } from "../types.js";
 import { result } from "../types.js";
 import { goldenSnapshot } from "../snapshot.js";
 import { captureSends, linesOf, noteReply } from "../replies.js";
-import { turnKind, type TurnKind } from "../../lib/hardRules.js";
+import { turnKind, type Send, type TurnKind } from "../../lib/hardRules.js";
 
 const ZONE = "America/Los_Angeles";
 export const DAY = new Date("2026-10-13T21:00:00Z"); // Tue Oct 13, 2:00pm Pacific (the replay harness's pinned clock)
@@ -37,9 +37,12 @@ export type Scene = {
   // The whole exchange wired the way the text route wires it (routes/sendblue.ts: the record into the read, its lines into this turn's
   // instructions, the record to the draft check). Off for the cases recorded before it (their recorded read carries no record).
   withExchange?: { sent?: { name: string; url: string | null }[]; asks?: string[]; closed?: { label: string; how: "solved" | "dropped" }[] };
+  // What the stubbed event search returns this turn (agent/loopTools.ts StubEvent), and their links as the turn's finds for the
+  // link-then-caption hard rule. Without it the search comes back empty, as before.
+  stubEvents?: import("../../../src/agent/loopTools.js").StubEvent[];
 };
 // reacted: Co answered with a reaction move (a tapback, or leaving it at one) instead of a text: Co's choice (tapbacks are quiet).
-export type Reply = { text: string; tools: string[]; checked: string[]; world: string; reacted: boolean };
+export type Reply = { text: string; tools: string[]; checked: string[]; world: string; reacted: boolean; sends: Send[] };
 const REACTION_TOOLS = ["reactInsteadOfReplying", "leaveItAtReaction"];
 
 export const NONE = { asks: [] as string[], goals: [] as string[], held: [] as string[] };
@@ -103,13 +106,13 @@ export async function reply(s: Scene): Promise<Reply> {
   }
   const { value: r, sends } = await captureSends<any>(() => runConversationReplyAgent(
     { ackSent: null, ...member(s.firstName), resolvedContent: s.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: recent, snapshot, personaPrompt: null, sendCoReply: async () => true },
-    { dryRun: true, record: false, stubSearch: true },
+    { dryRun: true, record: false, stubSearch: true, ...(s.stubEvents ? { stubEvents: s.stubEvents } : {}) },
   ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] })));
   const thread = linesOf(recent);
-  noteReply({ text: String(r.replyText ?? ""), sends, tools: r.toolsCalled ?? [], kind: s.kind ?? turnKind(s.message, s.withMoment ? read?.moment?.mode : null), facts: G.renderReplyFacts(facts), theirLines: [s.message, ...thread.theirs], coLines: thread.cue, firstName: s.firstName, message: s.message, recent });
+  noteReply({ text: String(r.replyText ?? ""), sends, tools: r.toolsCalled ?? [], kind: s.kind ?? turnKind(s.message, s.withMoment ? read?.moment?.mode : null), facts: s.stubEvents ? `${G.renderReplyFacts(facts)}\n${s.stubEvents.map((e) => `${e.name} ${e.url} ${e.lines.join(" ")}`).join("\n")}` : G.renderReplyFacts(facts), theirLines: [s.message, ...thread.theirs], coLines: thread.cue, firstName: s.firstName, message: s.message, recent, ...(s.stubEvents ? { findUrls: s.stubEvents.map((e) => e.url) } : {}) });
   const checked = (r.grounding ?? []).filter((g: any) => g.outcome && g.outcome !== "as_drafted" && g.outcome !== "unchecked").map((g: any) => `${g.outcome}: ${(g.checks ?? []).filter((x: any) => !x.pass || x.name === "world_line").map((x: any) => x.reason ?? x.name).join(" | ").slice(0, 200)}`);
   const tools: string[] = r.toolsCalled ?? [];
-  return { text: String(r.replyText ?? ""), tools, checked, world: M.memberWorldFact(world), reacted: tools.some((t) => REACTION_TOOLS.includes(t)) };
+  return { text: String(r.replyText ?? ""), tools, checked, world: M.memberWorldFact(world), reacted: tools.some((t) => REACTION_TOOLS.includes(t)), sends };
 }
 
 // One yes/no question about the reply, quoted. A failed or unparsed judge is a miss, never a pass.
