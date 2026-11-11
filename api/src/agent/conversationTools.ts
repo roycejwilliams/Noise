@@ -102,6 +102,9 @@ export type ConversationToolContext = {
   callKey?: string | null;
   // Whether the reply loop has a step and the seconds left for a redraft (agent/conversationReply.ts); unset means it has.
   redraftLeft?: () => boolean;
+  // The fact check's last result (agent/conversationReply.ts: the last groundReply): a cut that took the substance gets one whole
+  // redraft (agent/cutRedraft.ts). Unset: never.
+  lastGrounding?: () => import("./cutRedraft.js").CutRead | null;
   // The whole exchange and this turn's move (services/exchangeRecord.ts): a draft that misses the move, or re-sends, re-asks, points
   // "that" at the wrong thing or reopens something closed, gets one rewrite toward the move (harness/moveCheck.ts).
   exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null;
@@ -455,7 +458,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, pastLinkedFirst: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, pastLinkedFirst: false, moveNudged: false, cutNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
@@ -648,6 +651,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const findsWaiting = !!turnLoop && !state.findsNudged && finds.some((f) => !turnLoop!.shared.includes(f.url));
         const findsWaitingNow = () => findsWaiting && (ctx.redraftLeft?.() ?? true);
         let message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent(), findsWaitingNow) : draft, ctx.resolvedContent);
+        // The check cut the substance (agent/cutRedraft.ts, Royce 2026-11-11): what's left doesn't go; the whole reply is written again
+        // once, with the check's reasons. Once a turn, only while a redraft can still follow (read again now: the check takes time), never
+        // on a turn that touches their safety. Past that, what the check left goes out as before.
+        if (message.trim() && canRedraft && !state.cutNudged && !ctx.safetyConcern && !state.safetyFlagged && (ctx.redraftLeft?.() ?? true)) {
+          const { cutLostSubstance, cutRedraftNote } = await import("./cutRedraft.js");
+          const g = ctx.lastGrounding?.() ?? null;
+          if (g && cutLostSubstance(g)) {
+            state.cutNudged = true;
+            if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.cut_redraft", userId: ctx.userId, outcome: "skip", action: g.outcome, proposal: { draft: draft.slice(0, 300), left: message.slice(0, 300), reasons: g.checks.filter((c) => !c.pass).map((c) => c.reason ?? c.name).slice(0, 4) } }).catch(() => {});
+            return stillOwed(), { ok: false, error: cutRedraftNote(g) };
+          }
+        }
         // An owed answer the check emptied never went: not "already answered", it's said again plainly.
         if (!message.trim() && owed) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         // The fact check left nothing to add after what already went out this turn.

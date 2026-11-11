@@ -11,7 +11,7 @@ import { CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { CO_CORE, CO_LISTENING } from "../services/coCore.js";
 import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
-import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
+import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, addInstruction, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { dropStockSentences } from "../harness/stockLines.js";
 import { lastCoLine } from "../services/conversationClose.js";
@@ -37,6 +37,20 @@ export function replyLengthLine(message: string): string | null {
   if (words >= 15 || DEPTH_ASK.test(message)) return null;
   return "Their message is short and doesn't ask for detail: answer it directly, as briefly as it needs, and don't turn it into advice, a task or a pitch.";
 }
+// A decision question and a "why it fits" question each get their line in "For this reply" (Royce, 2026-11-11, approved: "go with your
+// suggestions"; from that morning's turn: "best option for me this week?" got a bare pick, and "why it fits?" got the member's own goal
+// said back instead of what the event offers). Code only spots the ask; the model decides the pick and the reasons, from the facts.
+// Only on these asks, so every other turn's prompt is unchanged.
+export const DECISION_ASK = /\b(?:best (?:option|one|bet|pick|choice)|which (?:one|of (?:these|those|them|the)\b|(?:is|would be|sounds) better)|(?:should|do) i (?:go(?: to)?|pick|choose|do|hit) [^?.!]{1,80}\bor\b|pick (?:one )?for me|choose for me|what would you (?:pick|choose|go (?:with|to))|if you were me)\b/i;
+export const FIT_ASK = /\bwhy (?:it|this|that)(?: one)? (?:fits|works|makes sense|is (?:a )?(?:good )?(?:fit|pick))\b|\bwhy (?:is )?(?:it|this|that)(?: one)? (?:for|right for) me\b|\bhow (?:does )?(?:it|this|that) fit\b|\bwhy (?:should|would) i go\b|\bwhy (?:this|that) one\b/i;
+export const DECISION_LINE = "They're asking you to choose. Pick one and own it, in one reply: why it beats the other options you already sent them, naming each in a short clause from its own facts; the details that decide it (when, where, cost, how to get in); what you don't know about it; and its link.";
+export const FIT_LINE = "Say which kind of good it is for them, from the event's own facts (who it's for, its format, its hosts): a room to meet someone they could build or work with, a room to learn from people doing the work, or both, said as which. Then its limit: who actually comes isn't known, so say what the page says the night is for, never who will be there. Their own goal comes in only in their words, as why that kind of good matters to them.";
+// Pure on its inputs: adds the lines this message asks for to the turn's instructions.
+export function addAnswerShapeLines(rf: ReplyFacts, message: string): void {
+  if (DECISION_ASK.test(message)) addInstruction(rf, DECISION_LINE);
+  if (DECISION_ASK.test(message) || FIT_ASK.test(message)) addInstruction(rf, FIT_LINE);
+}
+
 // Scoped to shares and feedback (Royce 2026-10-29): those moments carry their own depth (connectDots SHARING_GUIDE, FEEDBACK_GUIDE),
 // so the length line never caps them; every other turn keeps it.
 export const UNCAPPED_MOMENTS = new Set(["sharing", "feedback"]);
@@ -307,8 +321,11 @@ export async function runConversationReplyAgent(
   let cutFirstDone = false;
   // Steps finished, so a guard knows whether a redraft can still follow (conversationTools.ts sendReply redraftLeft).
   let stepsDone = 0;
+  let lastCut: import("./cutRedraft.js").CutRead | null = null;
   const { tools, state, flushLinks } = createConversationTools(tapToolContext({
     redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
+    // The fact check's last result, for the send step's one whole redraft after a cut that took the substance (agent/cutRedraft.ts).
+    lastGrounding: () => lastCut,
     exchange: input.facts.exchange ?? null,
     turnScope: input.facts.turnScope ?? null,
     turnShare: input.facts.turnShare ?? null,
@@ -372,6 +389,7 @@ export async function runConversationReplyAgent(
         { userId: input.userId, record: opts.record !== false && !opts.dryRun },
       );
       grounding.push(result);
+      lastCut = { draft, final: result.final, outcome: result.outcome, notSure: result.notSure, checks: result.checks, keptPromise: result.keptPromise };
       // Always sentence case, however they text (2026-09-16). Never the
       // same question as one of Co's last two texts (2026-09-23).
       // Never a sentence that is only a stock phrase ("I hear you.", "Makes sense."), the same rule a call has (harness/stockLines.ts).
@@ -410,6 +428,9 @@ export async function runConversationReplyAgent(
   if (noSteer) withdrawColdStartSteer(input.facts, noSteer.why);
   const noFirstRead = ruledOut(decision, "first_read");
   if (noFirstRead) withdrawDoorMoment(input.facts, noFirstRead.why);
+
+  // A decision or a why-it-fits ask gets its answer-shape line (addAnswerShapeLines). Texts only: a photo turn answers the photo.
+  if (!input.imageForVision) addAnswerShapeLines(input.facts, input.resolvedContent);
 
   const lastCoMessage = lastCoLine(input.recentConversation);
   // Real context on them: anything in their snapshot's first four sections (what they said, what they're in the middle of, how they

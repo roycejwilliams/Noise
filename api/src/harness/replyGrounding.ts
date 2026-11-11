@@ -2067,6 +2067,9 @@ export type GroundingResult = {
   latencyMs: number;
   // Just the first check: the added latency on a reply that passes as drafted.
   firstCheckMs: number;
+  // A promise task the check kept rides in final (services/promises.ts, promiseBinding.ts): the send step never swaps that text for a
+  // redraft (agent/cutRedraft.ts), or the task would stand on words never sent.
+  keptPromise?: boolean;
   // Each later stage, when it ran (2026-09-26, to see where rewrites spend time).
   stages?: { redraftMs?: number; secondCheckMs?: number; retryMs?: number };
 };
@@ -2090,6 +2093,12 @@ export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTur
 // What's ahead from Co (services/whatsAhead.ts aheadLine): the honest line never says nothing is planned while it lists something
 // (2026-10-13: "Nothing confirmed on my end for this week" with a Friday check-in on the ledger).
 const AHEAD_LINE = /^What's ahead for them from (?:Co|Cue), as scheduled now:/;
+// Pure: their message asks about what's ahead from Cue (what's coming up, planned or scheduled; whether Cue will follow up or check in).
+// Only then does the honest line carry the ahead line (2026-11-11: "What's the details and why it fits?" was stripped to "Don't have the
+// details confirmed... I'll follow up with you Wed morning on how both... went", a check-in nobody asked about in place of the answer).
+export function asksWhatsAhead(message: string): boolean {
+  return /\b(?:what(?:'s|’s| is| do you have| have you got)?|anything|something)\b[^?.!]{0,40}\b(?:ahead|coming up|planned|scheduled|lined up|on (?:the|my|your) (?:calendar|schedule|radar)|next (?:from you|on your end))\b|\b(?:will|when will|are|when are|did) you (?:follow(?:ing)? up|check(?:ing)? in|text(?:ing)? me|reach(?:ing)? out|get(?:ting)? back)\b|\bwhat(?:'s|’s| is) next\b/i.test(message);
+}
 async function honestNoAnswer(message: string, ahead: string | null = null): Promise<string | null> {
   const { lineInVoice } = await import("../services/voiceLine.js");
   const r = await lineInVoice({
@@ -2694,7 +2703,7 @@ export async function groundReply(
         // cut pass in the same turn falls to the honest line below, so it never loops.
         const shareRetry = !!share && after === "honest" && !shareEnd && !rf.shareRetried;
         if (shareRetry) rf.shareRetried = true;
-        const honestRaw = after === "honest" && !shareEnd && !shareRetry ? await honestNoAnswer(src.message, rf.facts.find((f) => f.kind === "scheduled" && AHEAD_LINE.test(f.text))?.text ?? null).catch(() => null) : null;
+        const honestRaw = after === "honest" && !shareEnd && !shareRetry ? await honestNoAnswer(src.message, asksWhatsAhead(src.message) ? rf.facts.find((f) => f.kind === "scheduled" && AHEAD_LINE.test(f.text))?.text ?? null : null).catch(() => null) : null;
         const honest = honestRaw && (!share || !textStockSentence(honestRaw)) ? honestRaw : null;
         const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" || shareRetry ? "" : shareEnd ?? honest ?? MINIMAL_FALLBACK;
         // A cut "still working on it" ends on the honest line instead (item 3), never on a bare "not sure".
@@ -2757,6 +2766,10 @@ export async function groundReply(
       recordDecision({ layer: 3, decision: "promise.dropped", userId: opts.userId, outcome: "skip", action: `task:${o.id}`, reason: "the bound promise was not in the final text" }).catch(() => {});
     }
   }
+
+  // A promise task this check kept (opened, bound or pulled) rides in what goes out: the send step never trades that text for a redraft.
+  const inFinal = (sentence: string) => norm(result.final).includes(norm(sentence).replace(/[.!?]+$/, ""));
+  result.keptPromise = (promiseTaskId !== null && promiseStays(result.final)) || binding.opened.some((o) => inFinal(o.sentence)) || binding.pulled.some((p) => inFinal(p.sentence));
 
   // Promises and "I can"s held back, as their own typed row (services/guardDrops.ts): counted, no text.
   const overpromised = result.outcome !== "as_drafted" ? result.checks.filter((c) => !c.pass && /^claim_(future_promise|capability)$/.test(c.name)) : [];
