@@ -37,7 +37,7 @@ const NOT_CONFIRMED = /\b(?:don'?t have|not) (?:the )?details? confirmed\b|\bwon
 
 export const CASES: GoldenCase[] = [
   {
-    n: 73,
+    n: 84,
     id: "best-option-pick",
     title: "\"Best option for me this week?\" after three finds: one pick, why it beats the other two, details, what's unknown, its link",
     status: NEW,
@@ -59,7 +59,7 @@ export const CASES: GoldenCase[] = [
     },
   },
   {
-    n: 74,
+    n: 85,
     id: "best-option-why-it-fits",
     title: "\"What's the details and why it fits?\": details, benefit type with its limit and the link together; no 'not confirmed', no unrelated promise",
     status: NEW,

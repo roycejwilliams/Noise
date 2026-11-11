@@ -21,7 +21,7 @@ const CUT_A_READ_FACT = /other_person:[^|]*(?:engineers|inference|NVIDIA|SGLang|
 
 export const CASES: GoldenCase[] = [
   {
-    n: 75,
+    n: 86,
     id: "best-option-from-reads",
     title: "\"Best option this week?\" with reads on the three sent finds: the comparison and details come from the reads and survive the fact check",
     status: NEW,
