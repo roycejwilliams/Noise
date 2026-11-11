@@ -414,6 +414,9 @@ export type SendCheckDeps = RecheckDeps &
     saveMatch: (candidateId: string, match: TierMatch) => Promise<void>;
     // How many times the re-read held this waiting text back (RECHECK_MAX_DEFERS).
     saveDefers: (candidateId: string, defers: number) => Promise<void>;
+    // The one read of what it is and what its facts support (services/opportunityRead.ts), made from the page just read. Absent: the
+    // structured facts only, no model read.
+    readModel?: (prompt: string) => Promise<string>;
   };
 export const realSendCheckDeps: SendCheckDeps = {
   // An event's own page record now: Luma's, or (Royce, 2026-10-28: tiers by kind of page) any event page it was filed from (eventPage.ts).
@@ -428,6 +431,7 @@ export const realSendCheckDeps: SendCheckDeps = {
     const pool = (await import("../db/db.js")).default;
     await pool.query(`UPDATE proactive_candidates SET payload = jsonb_set(payload, '{match}', $2::jsonb), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [id, JSON.stringify(match)]);
   },
+  readModel: (prompt) => import("./opportunityRead.js").then((R) => R.realReadDeps.model!(prompt)),
   saveDefers: async (id, defers) => {
     const pool = (await import("../db/db.js")).default;
     await pool.query(`UPDATE proactive_candidates SET payload = payload || jsonb_build_object('recheckDefers', $2::int), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [id, defers]);
@@ -471,12 +475,26 @@ export async function checkBeforeSend(c: SendCandidate, zone: string | null, dep
   // Its start still decides: read 20 minutes ago, it may have started since (or come inside the hour).
   const fresh = !Number.isNaN(at) && now.getTime() - at < RECHECK_FRESH_MS;
   const late = fresh ? matchStartProblem(match, now, START_LEAD_MINUTES, zone) : null;
-  if (fresh && !late) return { ok: true, match };
+  // The one read of what it is (services/opportunityRead.ts), from the page just read: made once per read and kept on the find, so the
+  // composer, the reply and a later pick reuse it. Never holds the send: a read that fails leaves the structured facts and an unknown.
+  const withRead = async (m: TierMatch): Promise<{ match: TierMatch; changed: boolean }> => {
+    const R = await import("./opportunityRead.js");
+    if (R.readIsCurrent(m as any)) return { match: m, changed: false };
+    const read = await R.readOpportunity(m as any, { model: deps.readModel }, now).catch(() => null);
+    return read ? { match: { ...m, read } as TierMatch, changed: true } : { match: m, changed: false };
+  };
+  if (fresh && !late) {
+    const r = await withRead(match);
+    p.match = r.match;
+    if (r.changed && !dry) await deps.saveMatch(c.id, r.match).catch((err: any) => console.error("sendCheck: read not saved (non-fatal):", err?.message ?? err));
+    return { ok: true, match: r.match };
+  }
   const r: Recheck = late ? { ok: false, exit: true, state: "expired", why: late } : await recheckFind(match, { now, zone, deps });
   if (r.ok) {
-    p.match = r.match;
-    if (r.verified && !dry) await deps.saveMatch(c.id, r.match).catch((err: any) => console.error("sendCheck: refreshed record not saved (non-fatal):", err?.message ?? err));
-    return { ok: true, match: r.match };
+    const read = await withRead(r.match);
+    p.match = read.match;
+    if ((r.verified || read.changed) && !dry) await deps.saveMatch(c.id, read.match).catch((err: any) => console.error("sendCheck: refreshed record not saved (non-fatal):", err?.message ?? err));
+    return { ok: true, match: read.match };
   }
   if (!r.exit) {
     const defers = Number(p.recheckDefers ?? 0) + 1;

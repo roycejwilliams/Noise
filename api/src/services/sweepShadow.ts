@@ -10,6 +10,7 @@
 // Royce's account only (SWEEP_SHADOW_USER_IDS, else the morning-report
 // recipient), and only on co-test with the dev review on (reviewEnabled), so
 // it can never run in production.
+import { readSummary } from "./opportunityRead.js";
 import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import { recordDecision } from "../harness/core.js";
@@ -141,6 +142,9 @@ const dateOf = (m: any): string | null => (m?.event_date ? String(m.event_date).
 export function describeMatch(m: any): string | null {
   const d = m?.details && typeof m.details === "object" ? m.details : null;
   const parts: string[] = [];
+  // The one read of what it is and what its facts support (services/opportunityRead.ts), first, so the pool's clip keeps it.
+  const read = readSummary(m?.read);
+  if (read) parts.push(read);
 
   if (d) {
     if (d.soldOut) parts.push("SOLD OUT");
