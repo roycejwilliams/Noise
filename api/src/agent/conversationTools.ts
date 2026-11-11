@@ -273,7 +273,9 @@ export const SILENT_TOOLS = new Set([
 export const ONE_REPLY_NOTE = "Your reply already went out this turn and nothing new has come in since, so this one didn't send. That reply stands; stop here.";
 // newsCount: every result that may open a second text counts up; a send that goes marks what came before it as said, never what arrived
 // while it was going out (a guard refusal landing during the send stays owed, review of #310).
-type SendState = { sent: boolean; sentMessages: string[]; partialUnsent: string | null; laneNotes: string[]; workSinceSend: boolean; sendsInFlight: number; extraSendsRefused: number; newsCount?: number };
+// replyCount: the texts sendReply itself recorded as sent (the real tool set always has it). A link sendReply sends first (a past find's,
+// #448) is in sentMessages but isn't the text, so a send is judged gone by this count when it's there.
+type SendState = { sent: boolean; sentMessages: string[]; partialUnsent: string | null; laneNotes: string[]; workSinceSend: boolean; sendsInFlight: number; extraSendsRefused: number; newsCount?: number; replyCount?: number };
 // Pure on its inputs: whether another sendReply may go this turn.
 // o.continues: this send carries new content and they asked for something (2026-11-10, needQuality: "Tell me more about your matching
 // system" and "What should I do differently in first meetings?" each went out as a first line, and the second sendReply with the
@@ -425,14 +427,17 @@ export function wrapSendsForOneReply(tools: Record<string, any>, state: SendStat
     const counted = replied && !owedOtherwise;
     if (counted) continuing += 1;
     going.push(message);
-    const before = state.sentMessages.length;
+    // The text itself went, not just a link sent ahead of it in the same call (#448): a failed text after its link is still unsaid, and
+    // its retry isn't a duplicate.
+    const before = state.replyCount ?? state.sentMessages.length;
+    const textWent = () => (state.replyCount ?? state.sentMessages.length) > before;
     const newsBefore = state.newsCount ?? 0;
     state.sendsInFlight += 1;
     try {
       return await send(...args);
     } finally {
       state.sendsInFlight -= 1;
-      if (state.sentMessages.length > before) state.workSinceSend = (state.newsCount ?? 0) > newsBefore;
+      if (textWent()) state.workSinceSend = (state.newsCount ?? 0) > newsBefore;
       // Didn't go (failed, or emptied by the check): it isn't something said, and a continuing slot it took is given back.
       else {
         const i = going.lastIndexOf(message);
