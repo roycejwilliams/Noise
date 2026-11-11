@@ -59,6 +59,9 @@ async function memberDate(userId: string): Promise<(iso: string | Date | null | 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
 
 export type ConversationToolContext = {
+  // Tests only (evals/reply/needQuality.ts): what a dry run's listOpenAsks reports open, so a fixture's running search is visible the
+  // way the real read would show it. Never set outside a dry run.
+  dryRunOpenAsks?: { text: string; type: "seeking" | "offering" }[];
   // Set by loopTools for this turn: a delivered text (what anythingForMe sent) is the turn's whole answer.
   onLinkDelivered?: () => void;
   // An answer that was meant to ride with a link but didn't go (none are made now): owed, so the one reply tha
@@ -2023,7 +2026,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
       description: toolUse("listOpenAsks"),
       inputSchema: z.object({}),
       execute: async () => {
-        if (ctx.dryRun) return { ok: true, asks: [] };
+        if (ctx.dryRun) {
+          const asks = (ctx.dryRunOpenAsks ?? []).map((a) => ({ text: a.text, type: a.type, openSince: null as string | null }));
+          if (asks.length) ctx.facts?.add("known", `What Cue currently has on file for them, the real complete list. Looking out for them: ${asks.filter((a) => a.type === "seeking").map((a) => `"${a.text}"`).join("; ")}. Never add, drop, or invent anything beyond this.`);
+          return { ok: true, asks };
+        }
         const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
         const entries = askEntries(rows[0]?.intent ?? null);
         // What they ruled out, from the record's one reader (services/memberKnowledge.ts limits; Phase A6).

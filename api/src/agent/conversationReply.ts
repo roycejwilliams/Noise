@@ -284,7 +284,7 @@ export function callOfferEligibleFor(input: Pick<ConversationReplyInput, "hasPen
 // on explicit classifier output) — only the secondary gesture + reply.
 export async function runConversationReplyAgent(
   input: ConversationReplyInput,
-  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number; stubEvents?: StubEvent[]; cutFirstReply?: boolean } = {},
+  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number; stubEvents?: StubEvent[]; cutFirstReply?: boolean; dryRunOpenAsks?: { text: string; type: "seeking" | "offering" }[] } = {},
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move; holdLines?: string[] }> {
   const grounding: GroundingResult[] = [];
   let decision: Decision = input.decision ?? judgeText({ userId: input.userId, read: null, owed: !!input.replyOwed, safetyConcern: !!input.safetyConcern, clarify: null, turn: null });
@@ -327,6 +327,7 @@ export async function runConversationReplyAgent(
     hasPendingOffer: input.hasPendingOffer,
     recentOfferBurstActive: input.recentOfferBurstActive,
     dryRun: opts.dryRun ?? false,
+    ...(opts.dryRun && opts.dryRunOpenAsks ? { dryRunOpenAsks: opts.dryRunOpenAsks } : {}),
     stubSearch: opts.stubSearch ?? false,
     // Tests only (golden cases): a stubbed search returns these instead of nothing (agent/loopTools.ts searchEvents).
     stubEvents: opts.stubSearch ? opts.stubEvents : undefined,
