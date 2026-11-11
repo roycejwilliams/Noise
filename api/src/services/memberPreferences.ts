@@ -81,6 +81,9 @@ export type Preference = {
   // A where-to-search rule: the exact place their search area was set to for it (searchArea.ts), once it was ("Springfield,
   // Missouri" for "Springfield" after they said which). What it's held against and what its withdrawal clears.
   areaPlace?: string | null;
+  // A where-to-search rule whose area couldn't be set (a place lookup down): its retries (retryAreaRules) and, after the last, that it
+  // was given up and when they were told.
+  areaRetry?: { tries: number; lastAt: string | null; gaveUp: boolean; toldAt: string | null } | null;
 };
 
 export const PREF_AREAS: readonly PrefArea[] = ["contact", "checkins", "search_area", "reply_style", "avoid_topic", "other"];
@@ -325,6 +328,7 @@ function rowToPref(r: any): Preference | null {
     setAt: new Date(r.happened_at).toISOString(),
     askedAt: m.askedAt ?? null,
     areaPlace: typeof m.areaPlace === "string" ? m.areaPlace : null,
+    areaRetry: m.areaRetry && typeof m.areaRetry === "object" ? { tries: Number(m.areaRetry.tries) || 0, lastAt: m.areaRetry.lastAt ?? null, gaveUp: m.areaRetry.gaveUp === true, toldAt: m.areaRetry.toldAt ?? null } : null,
   };
 }
 // The rule as stored: the model's field names, so ruleFrom reads it back through the same validation.
@@ -422,11 +426,41 @@ export function noteLessAsk(userId: string, ids: string[]): void {
   if (ids.length) pendingLessAsk.set(userId, ids);
   else pendingLessAsk.delete(userId);
 }
-export async function confirmLessAsked(userId: string, db: Db = pool): Promise<void> {
+export async function confirmLessAsked(userId: string, db: Db = pool, sent: string | null = null): Promise<void> {
+  // A search area given up on (retryAreaRules) counts as told only once a reply that actually says it went (review of #461: never just
+  // any reply). The told mark is kept on the rule itself (co_facts meta.areaRetry.toldAt), so a restart never repeats it; the pending
+  // list only spans the seconds between building the reply and sending it, and a restart there means it's said once more.
+  const told = pendingAreaNotice.get(userId);
+  if (told?.length && sent) {
+    const said = told.filter((n) => saysAreaNotice(sent, n.place));
+    if (said.length) {
+      pendingAreaNotice.set(userId, told.filter((n) => !said.includes(n)));
+      await markAreaTold(userId, said.map((n) => n.id), new Date(), db);
+    }
+  }
   const ids = pendingLessAsk.get(userId);
   if (!ids?.length) return;
   pendingLessAsk.delete(userId);
   await markLessAsked(userId, ids, new Date(), db);
+}
+const pendingAreaNotice = new Map<string, { id: string; place: string }[]>();
+export function noteAreaNotice(userId: string, notices: { id: string; place: string }[]): void {
+  if (notices.length) pendingAreaNotice.set(userId, notices);
+  else pendingAreaNotice.delete(userId);
+}
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Pure: a sent text says their searches didn't switch to this place: it names the place (its full name, its first part, or its initials,
+// "SF") and says it didn't happen.
+export function saysAreaNotice(sent: string, place: string): boolean {
+  const t = sent.toLowerCase().replace(/\u2019/g, "'");
+  const first = place.split(",")[0].trim();
+  const names = [place, first, first.split(/\s+/).length > 1 ? first.split(/\s+/).map((w) => w[0]).join("") : ""].map((n) => n.toLowerCase()).filter((n) => n.length >= 2);
+  const named = names.some((n) => new RegExp(`(^|[^a-z])${escapeRe(n)}([^a-z]|$)`).test(t));
+  return named && /\b(?:didn't|did not|not|couldn't|could not|still|wasn't|isn't|no luck)\b/.test(t);
+}
+export async function markAreaTold(userId: string, ids: string[], now: Date = new Date(), db: Db = pool): Promise<void> {
+  if (!ids.length) return;
+  await db.query(`UPDATE co_facts SET meta = jsonb_set(meta, '{areaRetry,toldAt}', to_jsonb($3::text), true) WHERE owner_user_id = $1 AND id = ANY($2::bigint[]) AND relation = '${PREF_RELATION}' AND meta ? 'areaRetry'`, [userId, ids.map(Number), now.toISOString()]);
 }
 export async function markLessAsked(userId: string, ids: string[], now: Date = new Date(), db: Db = pool): Promise<void> {
   if (!ids.length) return;
@@ -562,6 +596,66 @@ export async function expireAreaRules(o: { now?: Date; userId?: string; clear?: 
   }
   if (expired) await recordDecision({ layer: 4, decision: "member.preference.expired", userId: o.userId ?? null, outcome: "act", action: "area", proposal: { expired, cleared } }).catch(() => {});
   return { expired, cleared };
+}
+
+// A where-to-search rule whose area couldn't be set because a place lookup (or the save) was down is tried again, bounded (2026-11-11:
+// Royce's "switch the search to San Francisco" on 11-04 hit a geocoder outage, was never retried, and his searches stayed in
+// Sacramento). jobs/index.ts runs it every 10 minutes with expireAreaRules. Only a standing, said-outright rule with no area linked, set
+// in the last AREA_RETRY.withinDays, while no other area is set; at most AREA_RETRY.tries tries, AREA_RETRY.spacingMin apart. A place
+// that doesn't exist or could be more than one is never retried (the reply already said so or asked). After the last try it's given up
+// and the next reply tells them once (replyPreferenceFacts). Nothing is sent from here.
+// Model-facing (Royce approves the wording): the one line after the retries gave up.
+export const AREA_GAVE_UP_LINE = (place: string) => `Their searches did not switch to ${place}: where ${place} is couldn't be checked, even after trying again over a few hours, so Cue still searches where it did before. Tell them that once, plainly, in a line inside this reply, and that saying it again will set it. Don't apologize at length or explain the lookup.`;
+export const AREA_RETRY = { tries: 4, spacingMin: 60, withinDays: 7, settleMin: 5 };
+// Pure: a lookup or save that was down, worth another try (searchArea.ts setSearchArea's errors).
+export const areaErrorTransient = (error: string): boolean => /couldn't be checked just now|couldn't be saved just now/.test(error);
+// Pure: whether this rule is due another try now.
+export function areaRetryDue(p: Preference, now: Date, areaSet: boolean): boolean {
+  if (areaSet || p.state !== "active" || !areaRuleAppliable(p) || p.areaPlace || p.basis !== "explicit") return false;
+  const r = p.areaRetry ?? { tries: 0, lastAt: null, gaveUp: false, toldAt: null };
+  if (r.gaveUp || r.tries >= AREA_RETRY.tries) return false;
+  const age = now.getTime() - Date.parse(p.setAt);
+  if (age < AREA_RETRY.settleMin * 60_000 || age > AREA_RETRY.withinDays * 86_400_000) return false;
+  return !r.lastAt || now.getTime() - Date.parse(r.lastAt) >= AREA_RETRY.spacingMin * 60_000;
+}
+// Pure: their newest search_area rule of any state (active, superseded, withdrawn, expired), or null.
+export function newestAreaRule(prefs: Preference[]): Preference | null {
+  return prefs.filter((x) => x.area === "search_area").sort((a, b) => Date.parse(b.setAt) - Date.parse(a.setAt) || Number(b.id) - Number(a.id))[0] ?? null;
+}
+export async function retryAreaRules(o: { now?: Date; userId?: string } = {}, db: Db = pool): Promise<{ tried: number; set: number; gaveUp: number }> {
+  const at = o.now ?? new Date();
+  const fx: RuleEffects = { ...realEffects, ...(effectsForTests ?? {}) };
+  const { rows } = await db.query(
+    `SELECT DISTINCT owner_user_id FROM co_facts WHERE relation = '${PREF_RELATION}' AND subject = 'member' AND retired_at IS NULL AND meta->>'area' = 'search_area'
+       AND meta->>'areaPlace' IS NULL AND COALESCE((meta->'areaRetry'->>'gaveUp')::boolean, false) = false AND happened_at > $1 AND ($2::uuid IS NULL OR owner_user_id = $2::uuid) LIMIT 100`,
+    [new Date(at.getTime() - AREA_RETRY.withinDays * 86_400_000), o.userId ?? null],
+  );
+  const out = { tried: 0, set: 0, gaveUp: 0 };
+  for (const row of rows) {
+    const userId = String(row.owner_user_id);
+    const areaSet = !!(await (await import("./searchArea.js")).searchAreaOf(userId, db).catch(() => ({ place: "unknown" })));
+    // Only their newest where-to-search rule, whatever its state (review of #461: "SF" then "actually Oakland" must never bring SF back
+    // once Oakland gives up). Due or not, nothing older is ever tried.
+    const p = newestAreaRule(await loadPreferences(userId, db, { withRetired: true }));
+    if (!p || !areaRetryDue(p, at, areaSet)) continue;
+    const words = p.words[p.words.length - 1] ?? "";
+    const r = await fx.setArea(userId, { place: p.rule.place!, theirWords: words, message: words }).catch((err: any): { ok: false; error: string } => ({ ok: false, error: `it couldn't be saved just now (${String(err?.message ?? err).slice(0, 80)})` }));
+    out.tried++;
+    const tries = (p.areaRetry?.tries ?? 0) + 1;
+    if (r.ok) {
+      if (r.changed === "set") await linkAreaPlace(db, userId, p.id, r.place);
+      await db.query(`UPDATE co_facts SET meta = meta - 'areaRetry' WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}'`, [p.id, userId]);
+      out.set++;
+      await recordDecision({ layer: 4, decision: "member.preference.area_retry", userId, outcome: "act", action: "set", proposal: { id: p.id, tries } }).catch(() => {});
+      continue;
+    }
+    // Never retried: a place that could be more than one, or one that doesn't exist. Given up at once, said once.
+    const gaveUp = !("error" in r) || !areaErrorTransient(r.error) || tries >= AREA_RETRY.tries;
+    await db.query(`UPDATE co_facts SET meta = meta || jsonb_build_object('areaRetry', $3::jsonb) WHERE id = $1 AND owner_user_id = $2 AND relation = '${PREF_RELATION}'`, [p.id, userId, JSON.stringify({ tries, lastAt: at.toISOString(), gaveUp, toldAt: "ask" in r ? at.toISOString() : null })]);
+    if (gaveUp) out.gaveUp++;
+    await recordDecision({ layer: 4, decision: "member.preference.area_retry", userId, outcome: "skip", action: gaveUp ? "gave_up" : "later", reason: "error" in r ? r.error.slice(0, 120) : "ambiguous", proposal: { id: p.id, tries } }).catch(() => {});
+  }
+  return out;
 }
 
 // What-Cue-knows changed their search area itself (corrected or removed there): the where-to-search rules that set it are retired with
@@ -715,15 +809,21 @@ export type ReplyRules = { style: { id?: string; style: string; topic: string | 
 // applied to, so a reply never says a rule is applied when its path ignores it, and the one ask for a vague "less". Internal prompt
 // lines, not member copy. ids: the vague rules this reply is told to ask about (marked asked once the reply goes).
 // ctx: their search area, when the caller read it (left out, a search area rule is never said to be applied).
-export function replyPreferenceFacts(prefs: Preference[], now: Date, ctx: ApplyCtx = {}): { known: string[]; instructions: string[]; askIds: string[]; rules: ReplyRules; appliedNow: Preference[] } {
+export function replyPreferenceFacts(prefs: Preference[], now: Date, ctx: ApplyCtx = {}): { known: string[]; instructions: string[]; askIds: string[]; rules: ReplyRules; appliedNow: Preference[]; areaNotices: { id: string; place: string }[] } {
   const live = prefs.filter((p) => inForce(p, now));
   const known: string[] = [];
   const instructions: string[] = [];
   const askIds: string[] = [];
   const rules: ReplyRules = { style: [], avoid: [] };
   const appliedNow: Preference[] = [];
+  const areaNotices: { id: string; place: string }[] = [];
   for (const p of live) {
     const applied = ruleApplied(p, ctx);
+    // A search area given up on after its retries (retryAreaRules): said once, plainly, in the next reply that goes (confirmLessAsked).
+    if (!applied && p.area === "search_area" && p.areaRetry?.gaveUp && !p.areaRetry.toldAt && p.rule.place) {
+      instructions.push(AREA_GAVE_UP_LINE(p.rule.place));
+      areaNotices.push({ id: p.id, place: p.rule.place });
+    }
     const justNow = now.getTime() - Date.parse(p.setAt) < 5 * 60_000;
     // A decision rule set in this message and applied: the change it made is this turn's (the reply check's change claims stand on it).
     if (applied && justNow && DECISION_AREAS.has(p.area)) appliedNow.push(p);
@@ -748,5 +848,5 @@ export function replyPreferenceFacts(prefs: Preference[], now: Date, ctx: ApplyC
   if (rules.style.some((r) => r.topic) && rules.style.some((r) => !r.topic)) instructions.push("When a reply is about a subject that has its own reply rule, that rule wins over the general one.");
   if (askIds.length) instructions.push("They asked Cue to reach out less without saying how often. Ask once, in a few words, how often works for them. Never suggest a number yourself.");
   if (live.length) instructions.push("A preference never lets Cue spend money, share anyone's details, give access or act as them. If they ask for that through a preference, say plainly Cue can't take it that way.");
-  return { known, instructions, askIds, rules, appliedNow };
+  return { known, instructions, askIds, rules, appliedNow, areaNotices };
 }

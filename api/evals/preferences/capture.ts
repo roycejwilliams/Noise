@@ -111,8 +111,10 @@ const walk = (d: string) => {
   }
 };
 walk(new URL("../../src", import.meta.url).pathname);
-const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts", "services/prefTopics.ts", "services/searchArea.ts", "jobs/index.ts", "harness/ruleCompliance.ts", "services/callPreferences.ts", "harness/attention.ts"];
+const ALLOWED_READERS = ["routes/sendblue.ts", "services/turnLearning.ts", "services/callLearning.ts", "services/whatCoKnows.ts", "harness/replyGrounding.ts", "services/memberKnowledge.ts", "services/memberLimits.ts", "services/callContext.ts", "harness/notifyGate.ts", "harness/proactive.ts", "harness/callGate.ts", "services/eventScoring.ts", "services/prefTopics.ts", "services/searchArea.ts", "jobs/index.ts", "harness/ruleCompliance.ts", "services/callPreferences.ts", "harness/attention.ts", "agent/conversationTools.ts"];
 // harness/attention.ts (PR B of notification grouping): a member's own rule about how often replaces the defaults, never anything else.
+// agent/conversationTools.ts (2026-11-11): setSearchArea reads whether their where-to-search rule from this message is on file, to say a
+// failed save is being retried (retryAreaRules) rather than that nothing changed. It reads, never restricts.
 check(`the rules are read only where they restrict or are shown (${readers.join(", ")})`, readers.every((r) => ALLOWED_READERS.includes(r)));
 
 // ---------------------------------------------------------------- precedence and changes
@@ -215,7 +217,7 @@ check("the read sees their words only (the photo note is stripped before the mod
 const fresh = P.replyPreferenceFacts(await active(A, new Date()), new Date());
 P.setRuleEffectsForTests(null);
 check("a rule set in this message reaches this turn's reply, honestly: noted, not applied yet (its search area couldn't be set)", got.added.length === 1 && fresh.known.some((k) => /set in this message/.test(k) && /not applied yet/.test(k) && /Never say it changed/.test(k)));
-check("the turn waits for that read before the reply's facts (bounded), and the send confirms a vague ask", /const prefStored = prefCaptureP \? await Promise\.race\(\[prefCaptureP/.test(src("routes/sendblue.ts")) && src("routes/sendblue.ts").indexOf("const prefStored") < src("routes/sendblue.ts").indexOf("const replyFacts = await gatherReplyFacts") && /if \(ok\) import\("\.\.\/services\/memberPreferences\.js"\)\.then\(\(P\) => P\.confirmLessAsked\(user\.id\)\)/.test(src("routes/sendblue.ts")));
+check("the turn waits for that read before the reply's facts (bounded), and the send confirms a vague ask", /const prefStored = prefCaptureP \? await Promise\.race\(\[prefCaptureP/.test(src("routes/sendblue.ts")) && src("routes/sendblue.ts").indexOf("const prefStored") < src("routes/sendblue.ts").indexOf("const replyFacts = await gatherReplyFacts") && /if \(ok\) import\("\.\.\/services\/memberPreferences\.js"\)\.then\(\(P\) => P\.confirmLessAsked\(user\.id, undefined, p\.message\)\)/.test(src("routes/sendblue.ts")));
 
 // ---------------------------------------------------------------- the read before the reply failed: the learning read takes the rules
 {

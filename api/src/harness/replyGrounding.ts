@@ -377,6 +377,8 @@ export async function gatherReplyFacts(
     for (const p of pf.appliedNow) (rf.changedBy ??= []).push(p.area === "search_area" ? "setSearchArea" : "memberPreference");
     // Marked asked only once this reply is actually sent (routes/sendblue.ts confirmLessAsked).
     P.noteLessAsk(userId, pf.askIds);
+    // The search-area notice (retryAreaRules gave up) counts as told only once this reply is actually sent (confirmLessAsked).
+    P.noteAreaNotice(userId, pf.areaNotices);
   }
   if (callFailure) {
     addFact(rf, "did_before", callFailure);

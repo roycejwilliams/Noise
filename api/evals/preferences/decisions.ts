@@ -58,6 +58,26 @@ const handle = async (raw: string, a: any[] = []): Promise<{ rows: any[]; rowCou
   const sql = raw.replace(/\s+/g, " ").trim();
   if (/^(INSERT|UPDATE)/.test(sql)) writes.push({ sql, args: a });
   if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 };
+  // The search-area retry (retryAreaRules): members with an unlinked area rule, and its retry state.
+  if (/^SELECT DISTINCT owner_user_id FROM co_facts/.test(sql)) {
+    const users = [...new Set(facts.filter((r) => !r.retired_at && r.meta.area === "search_area" && !r.meta.areaPlace && !r.meta.areaRetry?.gaveUp && Date.parse(r.happened_at) > a[0].getTime() && (!a[1] || r.owner_user_id === a[1])).map((r) => r.owner_user_id))];
+    return { rows: users.map((owner_user_id) => ({ owner_user_id })), rowCount: users.length };
+  }
+  if (/^UPDATE co_facts SET meta = meta \|\| jsonb_build_object\('areaRetry'/.test(sql)) {
+    const r = facts.find((x) => String(x.id) === String(a[0]) && x.owner_user_id === a[1]);
+    if (r) r.meta.areaRetry = JSON.parse(a[2]);
+    return { rows: [], rowCount: r ? 1 : 0 };
+  }
+  if (/^UPDATE co_facts SET meta = meta - 'areaRetry'/.test(sql)) {
+    const r = facts.find((x) => String(x.id) === String(a[0]) && x.owner_user_id === a[1]);
+    if (r) delete r.meta.areaRetry;
+    return { rows: [], rowCount: r ? 1 : 0 };
+  }
+  if (/^UPDATE co_facts SET meta = jsonb_set\(meta, '\{areaRetry,toldAt\}'/.test(sql)) {
+    const hit = facts.filter((x) => x.owner_user_id === a[0] && (a[1] as number[]).includes(Number(x.id)) && x.meta.areaRetry);
+    for (const r of hit) r.meta.areaRetry.toldAt = a[2];
+    return { rows: [], rowCount: hit.length };
+  }
   // co_facts: their rules
   if (/^SELECT id, object_label, happened_at, retired_at, meta FROM co_facts/.test(sql)) {
     const rows = facts.filter((r) => r.owner_user_id === a[0] && (/retired_at IS NULL/.test(sql) ? !r.retired_at : true));
@@ -147,10 +167,13 @@ const PLACES: Record<string, C> = {
   davis: om("Davis", "California", 38.54491, -121.74052, 65622),
   oakland: om("Oakland", "California", 37.80437, -122.2708, 419267),
 };
+let lookupDown = false;
 const resolve: import("../../src/services/placeResolve.js").ResolveDeps = {
   home: async (city) => { const c = PLACES[R.normName(R.parseQualified(city).name)]; return c ? { lat: c.lat, lng: c.lng } : null; },
   homeCountry: async () => "US",
   lookup: async (place) => {
+    // A geocoder outage, switched on by a test (the 11-04 search-area failure).
+    if (lookupDown) throw new Error("geocoders down");
     const n = R.normName(R.parseQualified(place).name);
     if (n === "springfield") return { google: [], local: [om("Springfield", "Missouri", 37.21533, -93.29824, 170188), om("Springfield", "Illinois", 39.80172, -89.64371, 114394)] };
     const c = PLACES[n];
@@ -525,6 +548,84 @@ const X = "00000000-0000-4000-8000-0000000000f6";
   check("the tool setting SF for good retires the time-bound rule instead of linking it", synced.linked === 0 && synced.retired === 1 && !(await active(K2)).length);
   await P.expireAreaRules({ now: new Date(Date.parse(wk.expiresAt!) + 60_000), clear }, db as any);
   check("'only SF this week', then SF going forward: after the week, the area stays SF", areas[K2]?.place === "SF");
+}
+
+// ---------------------------------------------------------------- 12. a search area that failed on a lookup outage is retried (11-04)
+const r_place = (f: any) => f.meta?.ruleRaw?.place ?? null;
+{
+  const minutes = (n: number) => new Date(Date.now() + n * 60_000);
+  // Recovers: down when they say it, back up for the retry.
+  const U = "00000000-0000-4000-8000-0000000000d1";
+  homes[U] = "Sacramento";
+  lookupDown = true;
+  await learn(U, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "San Francisco" }, quote: "switch the search to San Francisco please going forward" }, "Let's switch the search to San Francisco please going forward");
+  check("11-04: with the geocoders down, nothing changes and the rule stays unlinked", !areas[U] && !(await active(U))[0].areaPlace);
+  const early = await P.retryAreaRules({ now: minutes(1), userId: U }, db as any);
+  check("no retry inside the first few minutes (the turn's own try may still be settling)", early.tried === 0);
+  lookupDown = false;
+  const back = await P.retryAreaRules({ now: minutes(10), userId: U }, db as any);
+  check("the next run, with the lookup back: their area is set and the rule linked to it", back.set === 1 && areas[U]?.place === "San Francisco" && (await active(U))[0].areaPlace === "San Francisco", { back, area: areas[U] });
+  check("... and it isn't tried again", (await P.retryAreaRules({ now: minutes(200), userId: U }, db as any)).tried === 0);
+
+  // Stays down: bounded tries, spaced, then given up and told once.
+  const V = "00000000-0000-4000-8000-0000000000d2";
+  homes[V] = "Sacramento";
+  lookupDown = true;
+  await learn(V, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "San Francisco" }, quote: "switch the search to San Francisco please going forward" }, "Let's switch the search to San Francisco please going forward");
+  const t1 = await P.retryAreaRules({ now: minutes(10), userId: V }, db as any);
+  const soon = await P.retryAreaRules({ now: minutes(20), userId: V }, db as any);
+  check("still down: one try, then nothing until the spacing has passed", t1.tried === 1 && t1.gaveUp === 0 && soon.tried === 0);
+  const pending = (await active(V))[0];
+  check("... while it's still being tried, the reply carries no 'didn't go through' line", !P.replyPreferenceFacts([pending], minutes(20), { area: null, home: "Sacramento" }).instructions.some((l) => /did not switch/.test(l)));
+  let tries = 1;
+  for (let m = 80; tries < P.AREA_RETRY.tries && m < 2000; m += 70) tries += (await P.retryAreaRules({ now: minutes(m), userId: V }, db as any)).tried;
+  const gaveUpRule = (await active(V))[0];
+  check(`at most ${P.AREA_RETRY.tries} tries, then given up; the area never set`, tries === P.AREA_RETRY.tries && gaveUpRule.areaRetry?.gaveUp === true && !areas[V], gaveUpRule.areaRetry);
+  check("... and never tried again", (await P.retryAreaRules({ now: minutes(3000), userId: V }, db as any)).tried === 0);
+  const facts1 = P.replyPreferenceFacts([gaveUpRule], minutes(3000), { area: null, home: "Sacramento" });
+  check("the next reply tells them once that it didn't switch (and that saying it again sets it)", facts1.areaNotices.some((n) => n.id === gaveUpRule.id) && facts1.instructions.includes(P.AREA_GAVE_UP_LINE("San Francisco")), facts1.instructions);
+  P.noteAreaNotice(V, facts1.areaNotices);
+  // Review of #461: a reply that went without the line doesn't count as telling them.
+  await P.confirmLessAsked(V, db as any, "Here are two for Saturday: the run club and the dinner.");
+  check("a reply that didn't carry the line leaves it untold", !(await active(V))[0].areaRetry?.toldAt);
+  await P.confirmLessAsked(V, db as any, "Heads up, your searches didn't switch to SF, I couldn't place it. Say it again and I'll set it.");
+  const told = (await active(V))[0];
+  check("... counted as told once that reply went, then never again", !!told.areaRetry?.toldAt && P.replyPreferenceFacts([told], minutes(3001), { area: null, home: "Sacramento" }).areaNotices.length === 0);
+  // The mark is on the rule itself: a restart (the pending list gone) never brings the notice back.
+  P.noteAreaNotice(V, []);
+  const afterRestart = (await active(V))[0];
+  check("the told mark is kept on the rule (co_facts), so a restart never repeats the notice", P.replyPreferenceFacts([afterRestart], minutes(4000), { area: null, home: "Sacramento" }).areaNotices.length === 0 && !!afterRestart.areaRetry?.toldAt);
+  check("what counts as saying it: the place (or SF for San Francisco) and that it didn't happen", P.saysAreaNotice("your searches didn't switch to SF", "San Francisco") && P.saysAreaNotice("Still searching Sacramento, San Francisco wasn't set", "San Francisco") && !P.saysAreaNotice("SF has a great run club Saturday", "San Francisco") && !P.saysAreaNotice("I didn't find much this week", "San Francisco"));
+  check("the send hook passes the text that went", /P\.confirmLessAsked\(user\.id, undefined, p\.message\)/.test(src("routes/sendblue.ts")));
+
+  // A place that could be more than one: never retried into a second "didn't go through" (the reply already asked which).
+  const W = "00000000-0000-4000-8000-0000000000d3";
+  homes[W] = "Sacramento";
+  lookupDown = false;
+  await learn(W, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "Springfield" }, quote: "search Springfield from now on" }, "search Springfield from now on");
+  await P.retryAreaRules({ now: minutes(10), userId: W }, db as any);
+  const amb = (await active(W))[0];
+  check("an ambiguous place is given up at once and not announced again (the reply asked which)", amb.areaRetry?.gaveUp === true && !!amb.areaRetry?.toldAt && !areas[W]);
+  check("only a lookup or save that was down counts as worth another try", P.areaErrorTransient("where San Francisco is couldn't be checked just now") && P.areaErrorTransient("it couldn't be saved just now") && !P.areaErrorTransient("no place called Atlantis came back near what they'd mean"));
+  // Review of #461: "SF", then "actually Oakland". Even if the SF rule were still active, it's never retried once Oakland is newer.
+  const X = "00000000-0000-4000-8000-0000000000d4";
+  homes[X] = "Sacramento";
+  lookupDown = true;
+  await learn(X, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "San Francisco" }, quote: "switch the search to San Francisco going forward" }, "switch the search to San Francisco going forward");
+  await new Promise((r) => setTimeout(r, 5));
+  await learn(X, { type: "standing", area: "search_area", covers: "unsolicited", channel: "all", basis: "explicit", rule: { place: "Oakland" }, quote: "actually Oakland going forward" }, "actually Oakland going forward");
+  // The worst case the review named: the older SF rule left active, and Oakland given up.
+  for (const f of facts.filter((r) => r.owner_user_id === X && r.meta.area === "search_area")) {
+    if (r_place(f) === "San Francisco") { f.retired_at = null; f.meta.state = undefined; }
+    if (r_place(f) === "Oakland") f.meta.areaRetry = { tries: 4, lastAt: minutes(-60).toISOString(), gaveUp: true, toldAt: null };
+  }
+  lookupDown = false;
+  const sup = await P.retryAreaRules({ now: minutes(500), userId: X }, db as any);
+  check("an older place never comes back: with Oakland newer (and given up), the SF rule isn't retried or set", sup.tried === 0 && !areas[X], { sup, area: areas[X] });
+  check("the newest rule is picked whatever its state", P.newestAreaRule([{ id: "1", area: "search_area", setAt: "2026-11-01T00:00:00Z", state: "active" } as any, { id: "2", area: "search_area", setAt: "2026-11-02T00:00:00Z", state: "superseded" } as any])?.id === "2");
+  check("the retry runs on the 10-minute schedule and sends nothing", /P\.retryAreaRules\(\)/.test(readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8")) && !/send|enqueue/i.test(src("services/memberPreferences.ts").slice(src("services/memberPreferences.ts").indexOf("export async function retryAreaRules"), src("services/memberPreferences.ts").indexOf("// What-Cue-knows changed their search area itself"))));
+  check("the tool's own failure: with the lookup down and their rule from this message on file, it says 'not changed yet, Cue keeps at it', never 'changed'", /if \(retrying\) \{[\s\S]{0,400}Not changed yet: \$\{r\.error\}\. Cue tries again on its own over the next few hours and tells them only if it can't\. Say it isn't switched yet and that you'll keep at it; never say it changed\./.test(src("agent/conversationTools.ts")) && /Nothing changed: \$\{r\.error\}\. Say plainly it didn't change\./.test(src("agent/conversationTools.ts")));
+  check("the reply facts hand the notice to the send hook, like the 'less' ask", /P\.noteAreaNotice\(userId, pf\.areaNotices\)/.test(src("harness/replyGrounding.ts")));
 }
 
 P.setRuleEffectsForTests(null);
