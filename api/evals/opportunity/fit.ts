@@ -16,6 +16,8 @@ const R = await import("../../src/services/opportunityRead.js");
 const S = await import("../../src/services/sendCheck.js");
 const SH = await import("../../src/services/sweepShadow.js");
 const SEL = await import("../../src/services/sweepSelect.js");
+const require_ = (f: string) => (globalThis as any).__fs.readFileSync(new URL(`../../src/${f}`, import.meta.url), "utf8");
+(globalThis as any).__fs = await import("node:fs");
 const SRC_SWEEP = (await import("node:fs")).readFileSync(new URL("../../src/services/eventSurfacingSweep.ts", import.meta.url), "utf8");
 
 let total = 0, failed = 0;
@@ -298,6 +300,20 @@ const detailed: any = {
   check("A: a read the pace turns away is no refusal and overwrites nothing cached", /return \{ html: null, details: null, status: null, error: LUMA_PACED \}/.test(src) && /r\.error === LUMA_PACED \? \(cached\?\.details \?\? null\)/.test(src));
   const rk = (await import("node:fs")).readFileSync(new URL("../../src/services/eventRanking.ts", import.meta.url), "utf8");
   check("A: a ranking reads at most RANK_PAGE_READS pages, the best fits first", /needs\.length > RANK_PAGE_READS && askText \? await prefilterByFit\(needs, askText, RANK_PAGE_READS\)/.test(rk));
+}
+
+// ---------------------------------------------------------------- final review: a shared read is about one named thing
+{
+  R.clearSharedReads();
+  const st = stubModel([detailedRead, { facts: [], unknowns: ["nothing about this one"], benefits: [] }]);
+  const page = async () => ({ text: DETAILED_PAGE, gone: false });
+  const a = await R.readKeptFinds([{ match: { tier: 3, kind: "opportunity", name: "Builders' Table", url: "https://org.example/programs", reason: "" } }], { model: st.model, page }, { now: NOW });
+  const b = await R.readKeptFinds([{ match: { tier: 3, kind: "opportunity", name: "Founder Fellowship", url: "https://org.example/programs", reason: "" } }], { model: st.model, page }, { now: NOW });
+  check("two finds on one page never share a read (the name is in the key)", st.prompts.length === 2 && a.items[0].match.read?.benefits.length === 2 && (b.items[0].match.read?.benefits.length ?? 0) === 0, st.prompts.length);
+  const c = await R.readKeptFinds([{ match: { tier: 3, kind: "opportunity", name: "builders table", url: "https://org.example/programs", reason: "" } }], { model: st.model, page }, { now: NOW });
+  check("... the same thing by another spelling of its name still shares it", st.prompts.length === 2 && c.items[0].match.read?.benefits.length === 2);
+  const srcs = ["services/eventPage.ts", "services/coEventAnnouncement.ts", "services/eventNoShow.ts", "services/tieredRecommendation.ts"].map((f) => (require_ as any)(f));
+  check("background readers use the sweep's lane", /lane: import\("\.\/eventDetails\.js"\)\.LumaLane = "sweep"/.test(srcs[0]) && (srcs[1].match(/lane: "sweep"/g) ?? []).length === 2 && /lane: "sweep"/.test(srcs[2]) && /fetchLumaEventDetails\(e\.url, \{ lane: "sweep" \}\)/.test(srcs[3]));
 }
 
 console.log(`\nopportunity fit: ${total - failed}/${total} passed`);

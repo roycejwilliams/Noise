@@ -165,7 +165,8 @@ export function readIsCurrent(m: Readable, now: Date = new Date()): boolean {
 // page text it came from, kept READ_MAX_AGE_MS. A read holds no member data (the page's facts, its unknowns, what they support).
 const sharedReads = new Map<string, OpportunityRead>();
 export const clearSharedReads = () => sharedReads.clear();
-const sharedKey = (url: string | null, hash: string) => `${url ?? ""}|${hash}`;
+// The read is about one named thing: two finds on one page (a program or org page listing several) never share a read (final review).
+const sharedKey = (url: string | null, hash: string, name: string) => `${url ?? ""}|${hash}|${name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`;
 
 // o.text: the page text read now at discovery (the find has no send-time read yet); otherwise its event record or send-time page.
 export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = new Date(), o: { text?: string } = {}): Promise<OpportunityRead> {
@@ -177,7 +178,7 @@ export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = n
   const base = recordFacts(m.details);
   const page = String(m.details?.description ?? o.text ?? m.pageNow ?? "").slice(0, READ_TEXT_CHARS * 2);
   const hash = page.trim() ? { pageHash: pageHash(page) } : {};
-  const shared = hash.pageHash ? sharedReads.get(sharedKey(url, hash.pageHash)) : undefined;
+  const shared = hash.pageHash ? sharedReads.get(sharedKey(url, hash.pageHash, m.name)) : undefined;
   if (shared && now.getTime() - Date.parse(shared.readAt) < READ_MAX_AGE_MS && shared.source === source) return shared;
   if (page.trim().length < 80 || !deps.model) return { v: 1, url, source, readAt, facts: base, unknowns: page.trim() ? [] : ["what happens there and who it's for: its page has no description"], benefits: [] };
   const parsed = await deps.model(readPrompt(m.name, page)).then((raw) => parseRead(raw, page)).catch(() => null);
@@ -189,7 +190,7 @@ export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = n
   const read: OpportunityRead = { v: 1, url, source, readAt, facts, unknowns: parsed.unknowns, benefits: parsed.benefits, ...hash };
   if (hash.pageHash) {
     if (sharedReads.size > 2000) sharedReads.clear();
-    sharedReads.set(sharedKey(url, hash.pageHash), read);
+    sharedReads.set(sharedKey(url, hash.pageHash, m.name), read);
   }
   return read;
 }
