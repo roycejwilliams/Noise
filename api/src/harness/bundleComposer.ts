@@ -214,18 +214,23 @@ export function sameReason(a: string, b: string, namesA: string, namesB: string)
 const STOCK = new Set([...OFFER_FOLLOWUP_MANY, ...OFFER_FOLLOWUP_ONE].map((s) => s.toLowerCase()));
 
 // A caption saying the thing is a list (a roundup shared as one).
-export const SAYS_LIST = /\b(?:list|lists|listing|roundup|round-up|rundown|write-?up|guide|post|several|a few|three|four|five|covers)\b/i;
+export const SAYS_LIST = /\b(?:a list|lists|listing|roundup|round-up|rundown|write-?up|rounds up|a post (?:listing|covering|that lists)|a guide to|covers (?:several|a few|\w+) (?:events|places|programs|things|options)|several (?:events|places|programs|options))\b/i;
 // A push to apply or sign up now.
 export const URGENT_APPLY = /\b(?:apply|register|sign(?:ing)? up|rsvp|request (?:a spot|to join)|grab (?:a|your) spot)\b[^.?!]{0,30}\b(?:now|today|asap|soon|early|while (?:it'?s|you can|there'?s))\b|\bworth (?:applying|registering|signing up)\b|\b(?:apply|register) (?:now|today|asap)\b/i;
 // Their goal given back as the reason ("you're hunting an engineer", "that's the fit:").
-export const GOAL_RESTATED = /\byou(?:'re| are) (?:hunting|looking|searching|on the hunt|trying to find)\b|\bthat'?s the fit\b/i;
+// People a member looks for (the goal-paste check tests these only, never places or anything else; investors and VCs are left out: a page
+// saying "VCs" for a caption's "investors" isn't worth a rewrite). Review of #456.
+const PEOPLE = "engineers?|engineering|developers?|devs?|designers?|co-?founders?|cofounders?|founders?|builders?|hackers?|researchers?|scientists?|operators?|marketers?|mentors?|advisors?|collaborators?|teammates?|partners?|ctos?|ceos?|product managers?|pms?|recruiters?|hires?|talent|technical (?:people|folks|founders?)";
+export const GOAL_RESTATED = new RegExp(`\\byou(?:'re| are) (?:hunting|looking|searching|on the hunt|trying to find)(?: for)? (?:(?:an?|another|more|the|some|your next)\\s+)?(?:[\\w-]+\\s+)?(?:${PEOPLE})\\b`, "i");
 // Going said as settled ("since you're going", "see you there"): a find offered is never a plan of theirs (#445: registered, planned and
 // went are different).
-export const PRESUMED_GOING = /\b(?:since|now that|as) you(?:'re| are) (?:going|attending|in|registered|signed up)\b|\bsee you there\b|\bwhen you go\b|\byou(?:'re| are) (?:already )?(?:going|registered|confirmed|on the list) (?:to|for)\b/i;
+export const PRESUMED_GOING = /\b(?:since|now that|as) you(?:'re| are) (?:going|attending|registered|signed up)\b|\bsee you there\b|\bwhen you go\b|\byou(?:'re| are) (?:already )?(?:going|registered|confirmed|on the list) (?:to|for)\b/i;
 // A closing that only checks interest.
 export const GENERIC_CLOSING = /^(?:so,?\s*)?(?:does|do|would|could|will)\s+(?:this|that|it|these|either|any(?: of (?:these|them|those))?|one of these)(?:\s+one)?\s+(?:interest|appeal to|sound (?:good|interesting|fun|like you)|work for|catch your eye|grab|speak to|land with)\b[^?]{0,20}\?$|^(?:interested|thoughts|any interest|worth a look|sound good)\?$/i;
 const BENEFIT_VERB = /\b(?:meet|find|connect with|run into|cross paths with|hire|recruit|land|bump into)\b([^.;!?]{0,70})/gi;
-const stem = (w: string) => w.replace(/(?:ies)$/, "y").replace(/(?:es|s)$/, "");
+const stem1 = (w: string) => { const x = w.replace(/(?:ings?|ers?|ies|es|s)$/, ""); return x.length >= 4 ? x : w; };
+const stem = (w: string) => stem1(stem1(w));
+const PEOPLE_WORD = new RegExp(`^(?:${PEOPLE})$`, "i");
 // Pure: the words a caption says they could meet or find there that come from their own record and not the thing's. "the kind of room
 // where you could meet an engineer" is caught when "engineer" is in what they told Cue and nowhere in the thing's own facts.
 export function goalPasted(caption: string, record: string, theirs: string): string[] {
@@ -240,7 +245,7 @@ export function goalPasted(caption: string, record: string, theirs: string): str
     const span = m[1].split(/,|\bnot\b|\bbut\b/i)[0];
     for (const w of span.toLowerCase().match(/[a-z]{4,}/g) ?? []) {
       const s = stem(w);
-      if (!STOP.has(w) && !LOGISTICS.has(w) && !GENERIC_PEOPLE.has(s) && them.has(s) && !own.has(s)) out.add(w);
+      if (PEOPLE_WORD.test(w) && !GENERIC_PEOPLE.has(s) && them.has(s) && !own.has(s)) out.add(w);
     }
   }
   return [...out];
@@ -261,7 +266,9 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if (!got || (!got.caption && !got.skip)) return problems.push({ at: n, why: `thing ${n} (${b.item.name}) has no caption` });
     if (got.skip) return;
     const c = tidy(got.caption!);
-    const fails = checkDraft(c, { ...b.item.rules, maxChars: BUNDLE_LIMITS.captionChars, maxSentences: Math.max(b.item.rules.maxSentences ?? 0, BUNDLE_LIMITS.captionSentences) }).filter((k) => !k.pass);
+    // A stricter limit on the item itself still holds (review of #456); the reveal's default gives way to the bundle's.
+    const itemMax = b.item.rules.maxChars;
+    const fails = checkDraft(c, { ...b.item.rules, maxChars: itemMax && itemMax < REVEAL_MAX_CHARS ? itemMax : BUNDLE_LIMITS.captionChars, maxSentences: Math.max(b.item.rules.maxSentences ?? 0, BUNDLE_LIMITS.captionSentences) }).filter((k) => !k.pass);
     for (const f of fails) problems.push({ at: n, why: `thing ${n}'s caption: ${f.name}${f.reason ? ` (${f.reason})` : ""}` });
     if (stripClosingQuestion(c) !== c) problems.push({ at: n, why: `thing ${n}'s caption ends with a question; the closing asks` });
     if (/https?:\/\//i.test(c)) problems.push({ at: n, why: `thing ${n}'s caption has a link in it; the link goes on its own` });

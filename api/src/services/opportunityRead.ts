@@ -20,6 +20,8 @@ export type ReadSource = "event_record" | "own_page" | "page_about_it" | "roundu
 export const READ_FIELDS = ["audience", "format", "happens", "selection", "requirements", "when", "area", "cost", "registration", "size", "host"] as const;
 export type ReadField = (typeof READ_FIELDS)[number];
 // quote: the page's own words, when the fact came from its text (checked to be on the page); null for a structured field (Luma's own).
+// text: what may be said for it: the quote itself, or a paraphrase only when every word of substance in it is in the quote (review of
+// #456: "for 15 to 20 founders" was kept as "technical founders and engineers looking for cofounders").
 export type ReadFact = { field: ReadField; text: string; quote: string | null };
 export const BENEFIT_KINDS = ["meet_collaborators", "learn_from_practitioners", "fundraising", "peer_founders", "community", "skills"] as const;
 export type BenefitKind = (typeof BENEFIT_KINDS)[number];
@@ -95,18 +97,38 @@ export function parseRead(raw: string, page: string): { facts: ReadFact[]; unkno
     const field = READ_FIELDS.includes(f?.field) ? (f.field as ReadField) : null;
     const text = str(f?.text, 200);
     const quote = str(f?.quote, 300);
-    if (field && text && quote && onPage(page, quote)) kept.push({ at, fact: { field, text, quote } });
+    if (field && text && quote && onPage(page, quote)) kept.push({ at, fact: { field, text: paraphraseHolds(text, quote) ? text : quote, quote } });
   });
   const facts = kept.slice(0, MAX_FACTS);
   const benefits: ReadBenefit[] = [];
   for (const b of Array.isArray(j.benefits) ? j.benefits : []) {
     const kind = BENEFIT_KINDS.includes(b?.kind) ? (b.kind as BenefitKind) : null;
     const on = facts.find((k) => k.at === Number(b?.fact));
-    if (kind && on && !benefits.some((x) => x.kind === kind)) benefits.push({ kind, because: on.fact.text });
+    // A benefit rests on the page's own words, and those words must say something of its kind ("founders" alone is no collaborator).
+    if (kind && on?.fact.quote && BENEFIT_CUE[kind].test(on.fact.quote) && !benefits.some((x) => x.kind === kind)) benefits.push({ kind, because: on.fact.quote });
   }
   const unknowns = (Array.isArray(j.unknowns) ? j.unknowns : []).map((u: unknown) => str(u, 160)).filter(Boolean).slice(0, MAX_UNKNOWNS) as string[];
   return { facts: facts.map((k) => k.fact), unknowns, benefits };
 }
+
+// Pure: a paraphrase holds only when every word of substance in it is in its quote (stems compared); otherwise the quote is what's said.
+const SOFT = new Set("that this with from their they there about into what which when where while have will would could should also just very more most some such than then them these those each other only your yours ours".split(" "));
+const stem1 = (w: string) => { const x = w.replace(/(?:ings?|ers?|ies|es|s)$/, ""); return x.length >= 4 ? x : w; };
+const stemOf = (w: string) => stem1(stem1(w));
+const substance = (t: string) => (t.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !SOFT.has(w)).map(stemOf);
+export function paraphraseHolds(text: string, quote: string): boolean {
+  const q = new Set(substance(quote));
+  return substance(text).every((w) => q.has(w));
+}
+// What the page's words must carry for each kind of benefit.
+export const BENEFIT_CUE: Record<BenefitKind, RegExp> = {
+  meet_collaborators: /\b(?:co-?founders?|collaborat\w*|team up|hiring|recruit\w*|join (?:a|an|our|the) (?:team|startup)|build (?:together|with)|looking for (?:a |an )?(?:co-?founder|engineer|partner|teammate)|match(?:ed|ing)? (?:with|you)|partners?)\b/i,
+  learn_from_practitioners: /\b(?:talks?|demos?|present\w*|speakers?|panels?|workshops?|fireside|lessons?|learn\w*|shares?|sharing|discussion|deep dives?|case stud\w*)\b/i,
+  fundraising: /\b(?:investors?|vcs?|venture|rais(?:e|ing)|fund(?:ing|raising)?|capital|pitch\w*|angels?)\b/i,
+  peer_founders: /\b(?:founders?|ceos?|builders?|operators?)\b/i,
+  community: /\b(?:community|members?|monthly|weekly|regular|club|group|recurring|chapter)\b/i,
+  skills: /\b(?:workshops?|class(?:es)?|course|training|hands-on|tutorial|bootcamp|session)\b/i,
+};
 
 // A roundup shared as a roundup: nothing about any listed thing is its record.
 export const ROUNDUP_UNKNOWN = "this is a list of several things; nothing about any listed one (its audience, format, terms or availability) was read from its own page";
@@ -120,6 +142,8 @@ const textOf = (m: Readable): string => String(m.details?.description ?? m.pageN
 export function readIsCurrent(m: Readable, now: Date = new Date()): boolean {
   const r = m.read;
   if (!r || r.v !== 1 || (r.url ?? null) !== (m.url ?? null)) return false;
+  // Turned into a roundup since (or back): the old read is about something else (review of #456).
+  if (!!m.sendAsRoundup !== (r.source === "roundup")) return false;
   if (!!m.checkedAt && r.readAt === m.checkedAt) return true;
   const age = now.getTime() - Date.parse(r.readAt);
   if (!r.pageHash || !Number.isFinite(age) || age >= READ_MAX_AGE_MS || m.sendAsRoundup) return false;
@@ -182,18 +206,21 @@ export async function readKeptFinds<T extends { match: any; unread?: unknown }>(
 export function renderRead(name: string, r: OpportunityRead): string[] {
   const from = r.source === "event_record" ? "its event page" : r.source === "own_page" ? "its own page" : r.source === "page_about_it" ? "a page about it (not its own)" : "a post listing several things";
   const lines: string[] = [];
-  if (r.facts.length) lines.push(`What ${from} says about "${name}" (source facts; who it's for is who the page says it's for, never who will be there): ${r.facts.map((f) => `${f.field}: ${f.text}`).join("; ")}`);
+  // The page's own words are the fact; a paraphrase rides beside them, labelled as Cue's read (review of #456).
+  if (r.facts.length) lines.push(`What ${from} says about "${name}" (its own words in quotes; who it's for is who the page says it's for, never who will be there): ${r.facts.map((f) => (f.quote ? `${f.field}: "${f.quote}"${f.text !== f.quote ? ` (Cue's read: ${f.text})` : ""}` : `${f.field}: ${f.text}`)).join("; ")}`);
   if (r.unknowns.length) lines.push(`Not stated, so unknown (never fill these in; narrow the claim instead): ${r.unknowns.join("; ")}`);
   lines.push(r.benefits.length ? `What its facts support, by kind (the only benefits you may name): ${r.benefits.map((b) => `${BENEFIT_LABEL[b.kind]} (because ${b.because})`).join("; ")}` : `What its facts support: nothing specific beyond what it is; don't name a benefit its facts don't support.`);
   return lines;
 }
 
+export const READ_SUMMARY_CHARS = 150;
 // Pure: one line for the picker's pool (it reads 40 at a time): the format, who it's for and the supported benefit kinds.
 export function readSummary(r: OpportunityRead | null | undefined): string | null {
   if (!r) return null;
   const pick = (f: ReadField) => r.facts.find((x) => x.field === f)?.text;
-  const parts = [pick("format") ?? pick("happens"), pick("audience") ? `for ${pick("audience")}` : null, pick("selection") ? `host picks: ${pick("selection")}` : null, r.benefits.length ? `supports: ${r.benefits.map((b) => b.kind).join(", ")}` : "supports: nothing specific", r.unknowns[0] ? `unknown: ${r.unknowns[0]}` : null].filter(Boolean);
-  return parts.length ? clip(parts.join("; "), 300) : null;
+  const parts = [r.benefits.length ? `supports: ${r.benefits.map((b) => b.kind).join(", ")}` : "supports: nothing specific", pick("format") ?? pick("happens"), pick("audience") ? `for ${pick("audience")}` : null].filter(Boolean);
+  // Short, so the picker's clip keeps the status flags that come before it (sweepShadow.ts describeMatch).
+  return parts.length ? clip(parts.join("; "), READ_SUMMARY_CHARS) : null;
 }
 
 export const realReadDeps: ReadDeps = {

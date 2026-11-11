@@ -142,9 +142,9 @@ const dateOf = (m: any): string | null => (m?.event_date ? String(m.event_date).
 export function describeMatch(m: any): string | null {
   const d = m?.details && typeof m.details === "object" ? m.details : null;
   const parts: string[] = [];
-  // The one read of what it is and what its facts support (services/opportunityRead.ts), first, so the pool's clip keeps it.
+  // The one read of what it is and what its facts support (services/opportunityRead.ts): after the status flags (sold out, waitlist, approval,
+  // start), which the pool's clip must keep (review of #456), and before the long description.
   const read = readSummary(m?.read);
-  if (read) parts.push(read);
 
   if (d) {
     if (d.soldOut) parts.push("SOLD OUT");
@@ -159,8 +159,12 @@ export function describeMatch(m: any): string | null {
     if (Array.isArray(d.hosts) && d.hosts.length) parts.push(`hosted by ${d.hosts.slice(0, 3).join(", ")}`);
     if (d.price) parts.push(String(d.price));
     if (typeof d.guestCount === "number") parts.push(`${d.guestCount} going`);
+    if (read) parts.push(read);
     if (d.description) parts.push(String(d.description));
-  } else if (typeof m?.details === "string") parts.push(m.details);
+  } else {
+    if (read) parts.push(read);
+    if (typeof m?.details === "string") parts.push(m.details);
+  }
   const post = typeof m?.opportunity?.postText === "string" ? m.opportunity.postText.trim() : "";
   if (post) parts.push(post);
   // evidence is often the same text the post was filled from; don't say it twice.

@@ -302,7 +302,8 @@ async function resolveFromRoundup(match: TierMatch, url: string, r: Roundup, o: 
   const discussed = o.deps.discussedAmong ? await o.deps.discussedAmong(roundupPlaces(post)).catch(() => null) : null;
   const share = roundupShare(post, sent, discussed);
   if (share.ok) {
-    const asList = { ...match, url, roundupUrl: url, foundInRoundup: label, sendAsRoundup: true, opportunity: { ...(match.opportunity ?? {}), postText: post.slice(0, 3000) } } as TierMatch;
+    // Its own read time, so no read made of it as one thing is reused for the list (review of #456).
+    const asList = { ...match, url, roundupUrl: url, foundInRoundup: label, sendAsRoundup: true, checkedAt: o.now.toISOString(), opportunity: { ...(match.opportunity ?? {}), postText: post.slice(0, 3000) } } as TierMatch;
     return { ok: true, match: asList, checkedAt: o.now.toISOString(), changed: [`shared as a roundup (${share.fresh} of ${share.items} not sent before): no page of its own could be read`], verified: false };
   }
   return { ok: false, exit: false, why: `its link is a post listing several things (${label.slice(0, 100)}), not its own page, and no page of its own could be read; not shared as a roundup: ${share.why}` };

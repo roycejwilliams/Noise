@@ -172,7 +172,7 @@ export function revealItem(askText: string, fromProfile: boolean, match: TierMat
     fromProfile,
     shortNotice: isShortNotice(match),
     ...(match.sendAsRoundup ? { roundup: true } : {}),
-    record: [match.name, ...(match.details ? renderEventDetails(match.name, match.details) : []), match.opportunity?.postText ?? "", match.pageNow ?? "", ...(match.read ? match.read.facts.map((f) => `${f.text} ${f.quote ?? ""}`) : [])].join("\n"),
+    record: [match.name, ...(match.details ? renderEventDetails(match.name, match.details) : []), match.opportunity?.postText ?? "", match.pageNow ?? "", ...(match.read ? match.read.facts.map((f) => f.quote ?? f.text) : [])].join("\n"),
     applyRoute: applyRouteOf(match),
     ...(match.read ? { supports: match.read.benefits.map((b) => b.kind) } : {}),
   };

@@ -41,19 +41,19 @@ const bundleItem = (id: string, match: any, pick: any = null) => ({ candidate: c
 const DETAILED_PAGE =
   "Builders' Table · Event Page. Thu, Nov 19, 6:30 PM PT, Mission District, San Francisco. Free. " +
   "A small-group dinner for technical founders and early engineers working on voice and real-time AI. " +
-  "Three tables of six; each table spends the first hour on short rounds where everyone shares what they're building and where they're stuck. " +
+  "Three tables of six; each table spends the first hour on short rounds where everyone shares what they're building and where they're stuck, so people can find collaborators. " +
   "The host reviews each registration and picks a mix of people building, not investors. Registration is open; apply here with a short note. Please come ready to talk about your own project.";
 const detailedRead = {
   facts: [
     { field: "audience", text: "technical founders and early engineers working on voice and real-time AI", quote: "for technical founders and early engineers working on voice and real-time AI" },
     { field: "format", text: "small-group dinner, three tables of six", quote: "Three tables of six" },
-    { field: "happens", text: "first hour of short rounds where everyone shares what they're building and where they're stuck", quote: "everyone shares what they're building and where they're stuck" },
+    { field: "happens", text: "first hour of short rounds where everyone shares what they're building and where they're stuck", quote: "everyone shares what they're building and where they're stuck, so people can find collaborators" },
     { field: "selection", text: "host picks a mix of people building, not investors", quote: "picks a mix of people building, not investors" },
     { field: "requirements", text: "come ready to talk about your own project", quote: "come ready to talk about your own project" },
     { field: "host", text: "the host is a famous investor", quote: "hosted by a famous investor" },
   ],
   unknowns: ["whether anyone there is looking to join a startup"],
-  benefits: [{ kind: "meet_collaborators", fact: 2 }, { kind: "learn_from_practitioners", fact: 0 }, { kind: "fundraising", fact: 5 }],
+  benefits: [{ kind: "meet_collaborators", fact: 2 }, { kind: "learn_from_practitioners", fact: 2 }, { kind: "fundraising", fact: 5 }],
 };
 {
   const parsed = R.parseRead(JSON.stringify(detailedRead), DETAILED_PAGE)!;
@@ -66,8 +66,8 @@ const detailedRead = {
   check("render: no benefit is a line that forbids naming one", /don't name a benefit its facts don't support/.test(R.renderRead("x", { v: 1, url: null, source: "own_page", readAt: "", facts: [], unknowns: [], benefits: [] }).join("\n")));
   check("prompt: the read asks for the intended audience, never attendees, and benefits only on a fact", /AS THE PAGE STATES IT \(an intended audience; never who will be there\)/.test(R.readPrompt("x", "y")) && /"founders" alone supports peer_founders, never meet_collaborators/.test(R.readPrompt("x", "y")));
   const sum = R.readSummary({ v: 1, url: null, source: "own_page", readAt: "", ...parsed });
-  check("picker: the pool line leads with the format, audience and supported kinds", !!sum && /small-group dinner/.test(sum) && /supports: meet_collaborators, learn_from_practitioners/.test(sum!), sum);
-  check("picker: the read rides first in a pool item's details (so the 320-char clip keeps it)", SH.describeMatch({ name: "x", read: { v: 1, url: null, source: "own_page", readAt: "", ...parsed }, opportunity: { postText: "long post" } })!.startsWith("small-group dinner"));
+  check("picker: the pool line is short and leads with the supported kinds, then the format in the page's words", !!sum && sum.length <= R.READ_SUMMARY_CHARS && /^supports: meet_collaborators, learn_from_practitioners; Three tables of six/.test(sum!), sum);
+  check("picker: status flags come first, then the read, then the long description (the 320-char clip keeps the flags)", (() => { const line = SH.describeMatch({ name: "x", read: { v: 1, url: null, source: "event_record", readAt: "", ...parsed }, details: { soldOut: false, waitlist: true, requiresApproval: true, startAt: "2026-11-20T02:30:00.000Z", description: "x".repeat(400) } })!; return /^waitlist only \(no open spots\); needs host approval; starts 2026-11-20 02:30; supports:/.test(line) && line.indexOf("supports:") < 320; })());
   check("picker: told to name the benefit kind, never put their goal on a thing ('15-20 founders' is no way to meet an engineer)", /Name which kind of benefit those details support/.test(SEL.SELECT_SYSTEM) && /"15-20 founders" says nothing about engineers/.test(SEL.SELECT_SYSTEM) && /whyNow never says to apply or register now unless its details show it's open and how/.test(SEL.SELECT_SYSTEM) && !/An adjacent lead can still be worth sending/.test(SEL.SELECT_SYSTEM));
 }
 
@@ -208,7 +208,7 @@ const detailed: any = {
   check("discovery: a find that failed the gate (unread) gets no read and no fetch", !d1.items[1].match.read && fetches === 1);
   const d2 = await R.readKeptFinds(d1.items, { model: stub.model, ...pageDeps(DETAILED_PAGE) }, { now: new Date(NOW.getTime() + 3_600_000) });
   check("discovery: once read, a later run doesn't read it again", d2.read === 0 && stub.prompts.length === 1 && fetches === 1);
-  check("discovery: the picker sees its summary", SH.describeMatch(d1.items[0].match)!.startsWith("small-group dinner"));
+  check("discovery: the picker sees its summary", SH.describeMatch(d1.items[0].match)!.startsWith("supports: meet_collaborators"));
   const capped = await R.readKeptFinds(Array.from({ length: 9 }, (_, k) => ({ match: { ...keptMatch(), url: `${URL_}/${k}` } })), { model: stubModel([detailedRead]).model, ...pageDeps(DETAILED_PAGE) }, { now: NOW });
   check("discovery: bounded per run", capped.read === R.DISCOVERY_READS_PER_RUN && capped.items.length === 9 && capped.items.slice(R.DISCOVERY_READS_PER_RUN).every((i) => !i.match.read));
 
@@ -233,6 +233,31 @@ const detailed: any = {
   const noModel = await R.readKeptFinds([{ match: keptMatch() }], { ...pageDeps(DETAILED_PAGE) }, { now: NOW });
   check("discovery: with no model, nothing is read (and nothing fetched)", noModel.read === 0 && !noModel.items[0].match.read);
   check("discovery is wired after the gate (settleNewFinds), never before it", /const settled = await settleNewFinds\([\s\S]{0,600}readKeptFinds\(settled/.test(SRC_SWEEP));
+}
+
+// ---------------------------------------------------------------- review of #456: the paraphrase is held to its quote; the checks' edges
+{
+  const page = "Founder Night. An intimate evening for 15 to 20 founders. No fee.";
+  const r = R.parseRead(JSON.stringify({ facts: [{ field: "audience", text: "technical founders and engineers looking for cofounders", quote: "for 15 to 20 founders" }], unknowns: [], benefits: [{ kind: "meet_collaborators", fact: 0 }, { kind: "peer_founders", fact: 0 }] }), page)!;
+  check("review: a paraphrase that adds words its quote doesn't have is dropped; the quote is what's said", r.facts[0].text === "for 15 to 20 founders", r.facts);
+  check("review: 'founders' alone never yields meet_collaborators (the page's words carry no collaborator cue); peer_founders stands", r.benefits.map((b) => b.kind).join(",") === "peer_founders", r.benefits);
+  const read = { v: 1 as const, url: "https://founders.example/night", source: "own_page" as const, readAt: READ_AT, ...r };
+  check("review: the quote is rendered as the fact", /audience: "for 15 to 20 founders"/.test(R.renderRead("Founder Night", read).join("\n")));
+  const withRead = bundleItem("q1", { tier: 3, kind: "opportunity", name: "Founder Night", url: read.url, source: "web", reason: "", checkedAt: READ_AT, read } as any);
+  check("review: the goal check's record is the page's words, so a pasted 'engineer' is still caught", B.goalPasted("a room where you could meet an engineer for Lantern", withRead.item.record ?? "", MEMBER).includes("engineer"), withRead.item.record);
+  const backed = R.parseRead(JSON.stringify({ facts: [{ field: "format", text: "three tables of six", quote: "Three tables of six" }], unknowns: [], benefits: [] }), "Three tables of six, seated.")!;
+  check("review: a paraphrase within its quote's words stands", backed.facts[0].text === "three tables of six");
+  // The check edges, both ways.
+  check("goalPasted: 'engineering' on the page backs 'engineers'", B.goalPasted("you could meet engineers there", "A night for the engineering community.", MEMBER).length === 0);
+  check("goalPasted: a place is never a pasted goal", B.goalPasted("you could meet people from Oakland", "Founder Night in SF.", `${MEMBER}\n- lives in Oakland`).length === 0);
+  check("goalPasted: investors vs VCs is left alone", B.goalPasted("you could meet investors", "VCs welcome.", `${MEMBER}\n- wants to meet investors`).length === 0);
+  check("PRESUMED_GOING: 'Since you're in Oakland' is a place, not attendance", !B.PRESUMED_GOING.test("Since you're in Oakland, it's a short ride.") && B.PRESUMED_GOING.test("Since you're going, bring a one-liner."));
+  check("GOAL_RESTATED: anchored to the people they look for", B.GOAL_RESTATED.test("you're looking for another engineer") && B.GOAL_RESTATED.test("You're hunting a technical cofounder") && !B.GOAL_RESTATED.test("you're looking for a quieter room") && !B.GOAL_RESTATED.test("That's the room the page describes."));
+  check("SAYS_LIST: says it's a list, never just 'post', 'a few' or 'three'", B.SAYS_LIST.test("A roundup of three events this week") && B.SAYS_LIST.test("A write-up covering several events") && !B.SAYS_LIST.test("Three founders host a small dinner.") && !B.SAYS_LIST.test("A few spots for founders, per the post.") && !B.SAYS_LIST.test("Post-dinner drinks after."));
+  check("review: a find turned into a roundup never reuses a read of it as one thing", !R.readIsCurrent({ name: "x", url: "https://a.example", sendAsRoundup: true, checkedAt: READ_AT, read: { v: 1, url: "https://a.example", source: "own_page", readAt: READ_AT, facts: [], unknowns: [], benefits: [] } } as any, NOW));
+  const strict = { ...bundleItem("m1", detailed), item: { ...E.revealItem(ASK, true, detailed), rules: { ...E.revealItem(ASK, true, detailed).rules, maxChars: 120 } } };
+  const long = B.checkComposed({ opening: null, items: [{ n: 1, caption: "Builders' Table, Thu Nov 19 in the Mission: the page describes small tables of technical founders and early engineers in voice AI." }], closing: null, connects: null }, input([strict]));
+  check("review: an item's stricter length limit still holds in the bundle", long.problems.some((p) => /max_chars|maxChars|characters|length/i.test(p.why)), long.problems);
 }
 
 console.log(`\nopportunity fit: ${total - failed}/${total} passed`);
