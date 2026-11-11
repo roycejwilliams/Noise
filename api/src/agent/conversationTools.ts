@@ -2158,6 +2158,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: true, askedBack: true, askThem: `Nothing changed yet. Ask which ${r.place} they mean (${r.ask.join(" / ")}) in one line inside your reply.` };
         }
         notDone(`Where Cue searches for them wasn't changed: ${r.error}.`);
+        // A lookup or save that was down, with their where-to-search rule from this message on file: retryAreaRules tries again on its
+        // own and tells them only if it can't (services/memberPreferences.ts, 2026-11-11). Otherwise, as before.
+        const P = await import("../services/memberPreferences.js");
+        const retrying = P.areaErrorTransient(r.error) && (await P.activePreferences(ctx.userId).catch(() => [] as import("../services/memberPreferences.js").Preference[])).some((p) => P.areaRuleAppliable(p) && !p.areaPlace && Date.now() - Date.parse(p.setAt) < 10 * 60_000);
+        if (retrying) {
+          ctx.facts?.add("ongoing", `Cue tries setting their search area to ${place} again on its own over the next few hours (the place lookup was down), and tells them only if it can't.`);
+          return { ok: false, error: `Not changed yet: ${r.error}. Cue tries again on its own over the next few hours and tells them only if it can't. Say it isn't switched yet and that you'll keep at it; never say it changed.` };
+        }
         return { ok: false, error: `Nothing changed: ${r.error}. Say plainly it didn't change.` };
       },
     }),
