@@ -53,7 +53,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const undated = await F.classifyFind({ tier: 3, kind: "opportunity", name: "Sound Bath", url: "https://sb", reason: "" } as any, TODAY, { page: async () => "A sound bath meditation in the park. Bring a mat.", model: async () => '{"form":"event","date":null}' });
   check("an event whose page gives no date is undated (it exits rather than lingering)", undated.result === "undated");
   check("a page that can't be read is unknown (retried later, never exited on a fetch failure)", (await F.classifyFind({ tier: 3, kind: "opportunity", name: "X", url: "https://x", reason: "" } as any, TODAY, { page: async () => null, model: async () => "" })).result === "unknown");
-  check("capture classifies new finds before they reach the backlog", /const found = await settleNewFinds\(candidate\.userId, rawFound,/.test(src("services/eventSurfacingSweep.ts")));
+  check("capture classifies new finds before they reach the backlog", /const settled = await settleNewFinds\(candidate\.userId, rawFound,[\s\S]{0,700}const found = discoveryReads\.items;/.test(src("services/eventSurfacingSweep.ts")));
 }
 
 // ---------------------------------------------------------------- tiers (b): a past event exits on its date
