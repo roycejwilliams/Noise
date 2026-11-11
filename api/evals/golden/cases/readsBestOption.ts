@@ -5,7 +5,10 @@
 //   npm run evals:golden:record -- --only best-option-from-reads
 import "../../lib/requireMeter.js";
 import { AWAITING_RECORDING, result, type GoldenCase, type GoldenStatus } from "../types.js";
-import { DAY, NONE, judge, observed, reply, type Line } from "./checkins.js";
+import { DAY, NONE, judge, observed, reply, type Line, type Reply } from "./checkins.js";
+// Everything the member received this turn, in order: a link sent on its own (shareLink) is in the sends, not in the reply text (audit
+// 2026-11-11: the pick's link went first, as DECISION_LINE asks, and these cases read only the reply text, so "no link" was the test's).
+const delivered = (r: Reply) => (r.sends.length ? r.sends.map((s) => s.text).join("\n") : r.text);
 
 const NEW: GoldenStatus = { live: false, until: AWAITING_RECORDING, why: "added with the read-backed reply facts and the claim-type fix; needs its first recording" };
 const at = (min: number) => new Date(DAY.getTime() - min * 60_000);
@@ -33,10 +36,11 @@ export const CASES: GoldenCase[] = [
       facts.push(["known", "They told Cue they're looking for a founding engineer for their voice startup."]);
       const r = await reply({ firstName: "Sam", now: DAY, exchange, searching: NONE, message: "What do you think is the best option for me this week?", facts, withExchange: { sent: SENT.map((s) => ({ name: s.name, url: s.url })) } });
       const misses: string[] = [];
+      const t = delivered(r);
       if (r.checked.some((c) => CUT_A_READ_FACT.test(c))) misses.push(`the fact check cut a read's page-stated fact as other_person: ${r.checked.join(" || ").slice(0, 300)}`);
-      if ([/paper/i, /SGLang|NVIDIA|inference/i, /dinner/i].filter((re) => re.test(r.text)).length < 2) misses.push("no comparison with the other options already sent");
-      if (!SENT.some((s) => r.text.includes(s.url))) misses.push("no link for the pick");
-      const j = await judge(r.text, "Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on inference and tooling; drinks and talks; venue unknown), and a seated dinner for early-stage founders. The member wants a founding engineer.", "Does the reply make one pick, compare it to the other two using those facts, name the benefit kind the facts support (learning from practitioners vs peer founders) with its limit, and avoid claiming who will be there?");
+      if ([/paper/i, /SGLang|NVIDIA|inference/i, /dinner/i].filter((re) => re.test(t)).length < 2) misses.push("no comparison with the other options already sent");
+      if (!SENT.some((s) => t.includes(s.url))) misses.push("no link for the pick");
+      const j = await judge(t, "Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on inference and tooling; drinks and talks; venue unknown), and a seated dinner for early-stage founders. The member wants a founding engineer.", "Does the reply make one pick, compare it to the other two using those facts, name the benefit kind the facts support (learning from practitioners vs peer founders) with its limit, and avoid claiming who will be there?");
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return result(misses, observed(r));
     },

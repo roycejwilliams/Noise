@@ -21,4 +21,5 @@ export function inventedClaim(text: string): string | null {
 export const ASSUMES_WENT = /\bhow(?:'d| was| did)\b[^?\n]{0,40}\b(?:makers|the event|the night|the showcase)\b|\bdid you (?:enjoy|like|love)\b[^?\n]{0,25}\b(?:makers|event|night|showcase)\b|\bglad you (?:went|made it)\b(?! through)|\bwhile you were (?:there|at (?:makers|the event))\b/i;
 
 // Case 82: the tips promised for later instead of given ("Before Thursday, a few tips:" gives them).
-export const TIPS_LATER = /\bI(?:'ll| will) (?:send|put together|pull together|write up|get you|follow up)\b|\b(?:later|tomorrow)\b[^.?\n]{0,30}\btips\b|\btips\b[^.?:\n]{0,20}\b(?:later|tomorrow)\b/i;
+// Narrow to tips (audit 2026-11-11): "I'll check in after Thursday" or "I'll follow up after your coffees" offers a check-in, not tips later.
+export const TIPS_LATER = /\bI(?:'ll| will) (?:send|put together|pull together|write up|get you|follow up with)\b[^.?\n]{0,40}\b(?:tips|pointers|ideas|notes|questions|advice|list)\b|\b(?:later|tomorrow)\b[^.?\n]{0,30}\btips\b|\btips\b[^.?:\n]{0,20}\b(?:later|tomorrow)\b/i;

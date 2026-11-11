@@ -7,7 +7,10 @@
 //   npm run evals:golden:record -- --only best-option-pick,best-option-why-it-fits
 import "../../lib/requireMeter.js";
 import { AWAITING_RECORDING, result, type GoldenCase, type GoldenStatus } from "../types.js";
-import { DAY, NONE, judge, observed, reply, type Line } from "./checkins.js";
+import { DAY, NONE, judge, observed, reply, type Line, type Reply } from "./checkins.js";
+// Everything the member received this turn, in order: a link sent on its own (shareLink) is in the sends, not in the reply text (audit
+// 2026-11-11: the pick's link went first, as DECISION_LINE asks, and these cases read only the reply text, so "no link" was the test's).
+const delivered = (r: Reply) => (r.sends.length ? r.sends.map((s) => s.text).join("\n") : r.text);
 
 const NEW: GoldenStatus = { live: false, until: AWAITING_RECORDING, why: "added with the cut-redraft and decision-question fix; needs its first recording" };
 const at = (min: number) => new Date(DAY.getTime() - min * 60_000);
@@ -46,14 +49,15 @@ export const CASES: GoldenCase[] = [
     run: async () => {
       const r = await reply({ firstName: "Sam", now: DAY, exchange, searching: NONE, message: "What do you think is the best option for me this week?", facts: FACTS as any, withExchange: { sent: SENT } });
       const misses: string[] = [];
-      const picked = SENT.filter((s) => r.text.includes(s.url));
-      if (!/SGLang|paper reading|Paper Reading|Founder Dinner|founder dinner/i.test(r.text)) misses.push("names no pick");
-      const others = [/paper/i, /SGLang|NVIDIA|inference/i, /founder dinner|dinner/i].filter((re) => re.test(r.text)).length;
+      const t = delivered(r);
+      const picked = SENT.filter((s) => t.includes(s.url));
+      if (!/SGLang|paper reading|Paper Reading|Founder Dinner|founder dinner/i.test(t)) misses.push("names no pick");
+      const others = [/paper/i, /SGLang|NVIDIA|inference/i, /founder dinner|dinner/i].filter((re) => re.test(t)).length;
       if (others < 2) misses.push("no comparison with the other options already sent");
       if (!picked.length) misses.push("no link for the pick");
-      if (PROMISE.test(r.text)) misses.push("an unrelated promise");
-      if (PRESUMES.test(r.text)) misses.push("presumes attendance");
-      const j = await judge(r.text, "Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week.", "Does the reply make one clear pick, say briefly why it beats each of the other two, give the details that decide it and what's unknown, and say which kind of benefit it offers (meeting someone to build with, learning from practitioners, or both) without claiming who will be there?");
+      if (PROMISE.test(t)) misses.push("an unrelated promise");
+      if (PRESUMES.test(t)) misses.push("presumes attendance");
+      const j = await judge(t, "Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week.", "Does the reply make one clear pick, say briefly why it beats each of the other two, give the details that decide it and what's unknown, and say which kind of benefit it offers (meeting someone to build with, learning from practitioners, or both) without claiming who will be there?");
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return result(misses, observed(r));
     },
@@ -69,12 +73,13 @@ export const CASES: GoldenCase[] = [
       const ex: Line[] = [...exchange, { at: at(3), from: "member", text: "What do you think is the best option for me this week?" }, { at: at(2), from: "co", text: "Tonight's SGLang x NVIDIA meetup is probably it." }];
       const r = await reply({ firstName: "Sam", now: DAY, exchange: ex, searching: NONE, message: "What’s the details and why it fits?", facts: FACTS as any, withExchange: { sent: SENT } });
       const misses: string[] = [];
-      if (!/5:30/.test(r.text)) misses.push("no time");
-      if (!r.text.includes(SENT[1].url)) misses.push("no link");
-      if (NOT_CONFIRMED.test(r.text)) misses.push("says the details aren't confirmed while giving them (contradiction)");
-      if (PROMISE.test(r.text)) misses.push("an unrelated promise");
-      if (PRESUMES.test(r.text)) misses.push("presumes attendance");
-      const j = await judge(r.text, "The member asked for the details of tonight's SGLang x NVIDIA meetup (hosted by NVIDIA, SGLang and Modal; drinks and talks with engineers working on inference and tooling; no venue listed) and why it fits them (they want a founding engineer).", "Does the reply give the details and name which kind of benefit the event offers from its own facts (learning from people working on inference, a chance to meet an engineer to build with, or both, labelled), with its limit (who comes isn't known), rather than only restating the member's own goal?");
+      const t = delivered(r);
+      if (!/5:30/.test(t)) misses.push("no time");
+      if (!t.includes(SENT[1].url)) misses.push("no link");
+      if (NOT_CONFIRMED.test(t)) misses.push("says the details aren't confirmed while giving them (contradiction)");
+      if (PROMISE.test(t)) misses.push("an unrelated promise");
+      if (PRESUMES.test(t)) misses.push("presumes attendance");
+      const j = await judge(t, "The member asked for the details of tonight's SGLang x NVIDIA meetup (hosted by NVIDIA, SGLang and Modal; drinks and talks with engineers working on inference and tooling; no venue listed) and why it fits them (they want a founding engineer).", "Does the reply give the details and name which kind of benefit the event offers from its own facts (learning from people working on inference, a chance to meet an engineer to build with, or both, labelled), with its limit (who comes isn't known), rather than only restating the member's own goal?");
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return result(misses, observed(r));
     },

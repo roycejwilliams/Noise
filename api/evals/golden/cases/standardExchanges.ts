@@ -228,14 +228,21 @@ export const CASES: GoldenCase[] = [
       const message = "know a low key wine spot near Hayes Valley for tonight?";
       const r = await reply({ firstName: "Noor", now: DAY, exchange, searching: NONE, message, stubEvents: [VELLUM_STUB] });
       const misses = slips(r);
+      // The good answer (audit 2026-11-11): the link, its one-line caption, and at most one short line after it that doesn't talk about
+      // the spot again ("Enjoy tonight."). The 11-09 failure was four texts restating the same bar.
       const texts = r.sends.filter((s) => s.text.trim());
       const link = texts.findIndex((s) => s.text.includes(VELLUM.url));
       if (link < 0) misses.push("no link to the spot");
       else {
         if (texts.slice(0, link).some((s) => /vellum/i.test(s.text))) misses.push("talks about the spot before its link");
-        if (texts.length - link - 1 > 1) misses.push(`${texts.length - link - 1} texts after the link: more than its one line`);
+        const after = texts.slice(link + 1);
+        if (!after.length) misses.push("the link with no caption");
+        const extra = after.slice(1);
+        if (extra.some((s) => /vellum|wine|bar|hayes|walk-?ins?|seats|natural/i.test(s.text))) misses.push("restates the spot after its caption");
+        if (extra.length > 1) misses.push(`${extra.length} more texts after the caption: at most one short line`);
+        if (extra.some((s) => words(s.text) > 15)) misses.push("a long text after the caption for a casual ask");
       }
-      if (texts.length > 2) misses.push(`${texts.length} texts for a casual ask`);
+      if (texts.length > 3) misses.push(`${texts.length} texts for a casual ask`);
       return done(misses, [r]);
     },
   },

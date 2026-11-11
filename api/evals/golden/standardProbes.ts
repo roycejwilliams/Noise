@@ -1,7 +1,7 @@
 // Probes for the standard exchanges' code checks (evals/golden/standardMatchers.ts): each matcher catches the failure its case was
 // written against and lets the honest version of the reply through (review of #454: honest limits were being failed). Layer 1, no model.
 import { ASSUMES_WENT, EVENT_UNCONFIRMED, TIPS_LATER, inventedClaim } from "./standardMatchers.js";
-import { hypotheticalNames, inventedFacts, repliesPerTurn } from "../lib/hardRules.js";
+import { hardRuleMisses, hypotheticalNames, inventedFacts, repliesPerTurn } from "../lib/hardRules.js";
 
 let total = 0;
 let failed = 0;
@@ -42,6 +42,21 @@ check("83: a second offer after an offer is a miss", repliesPerTurn(R("Nothing's
 check("a second text that repeats the first is a miss", repliesPerTurn(R("Gradient Reading Club, Thursday 7pm in SoMa.", "Gradient Reading Club, Thursday 7pm in SoMa."), [], "Which one should I go to?").length === 1);
 check("a share (no ask) still gets one reply", repliesPerTurn(R("Full budget. That's a real win, Julian.", "Go sleep it off. You earned it."), [], "We got the full budget approved").length === 1);
 check("no message given: the old one-reply rule", repliesPerTurn(R("One.", "Two more things here."), []).length === 1);
+
+// Case 82 (audit): an offer to check in after the coffees isn't tips promised for later.
+for (const s of ["I'll check in after Thursday to hear how it went.", "I'll follow up after your coffees.", "Good luck Thursday, I'll be around if you want to debrief."]) check(`82 lets through: ${s}`, !hits(TIPS_LATER, s));
+check("82 still catches: I'll follow up with a few questions to ask them", hits(TIPS_LATER, "I'll follow up with a few questions to ask them."));
+// Times (audit, case 86): a read's 24-hour time backs the same time said the usual way; a different time is still flagged.
+const READ = "SGLang x NVIDIA Meetup: when: starts 2026-10-13T17:30, ends 2026-10-13T20:30.";
+check("86 lets through: tonight 5:30 to 8:30", noted("SGLang x NVIDIA Meetup, tonight 5:30 to 8:30.", READ).length === 0 && noted("SGLang x NVIDIA Meetup starts at 5:30pm.", READ).length === 0);
+check("86 still catches: a time the read doesn't have", noted("SGLang x NVIDIA Meetup, tonight 6:30 to 8:30.", READ).length > 0);
+// Link then caption and #444 (audit): the shapes the standard set wants pass every hard rule.
+const H = (sends: { kind: "reply" | "find" | "link"; text: string }[], message: string, findUrls: string[] = [], facts = "") => hardRuleMisses({ text: sends.map((x) => x.text).join("\n"), sends, tools: [], kind: "reply", facts, theirLines: [message], coLines: [], findUrls, message });
+const VEL = "https://example.test/vellum-wine-room";
+check("79: link, caption, 'Enjoy tonight.'", H([{ kind: "find", text: VEL }, { kind: "find", text: "Vellum Wine Room on Hayes Street, natural wine, walk-ins only." }, { kind: "reply", text: "Enjoy tonight." }], "know a low key wine spot near Hayes Valley for tonight?", [VEL], "Vellum Wine Room Hayes Street Hayes Valley natural wine walk-ins").length === 0);
+check("73: the pick's link alone, then the reply", H([{ kind: "link", text: "https://example.test/gradient-reading-club" }, { kind: "reply", text: "Gradient Reading Club, Thursday 7pm. It beats the other two for you." }], "What's the best option for me this week?", [], "Gradient Reading Club Thursday 7pm https://example.test/gradient-reading-club").length === 0);
+check("74: a continuing second text after their question", H([{ kind: "reply", text: "Tonight at 6:30, a brewery hall in the Mission." }, { kind: "reply", text: "It's built more for learning than pitching." }], "What's the details and why it fits?", [], "Tonight 6:30 brewery hall Mission").length === 0);
+check("a link sent twice in a row is still a miss", H([{ kind: "link", text: VEL }, { kind: "find", text: VEL }, { kind: "find", text: "Vellum Wine Room." }], "send it again?", [VEL], "Vellum Wine Room").length > 0);
 
 console.log(`standard exchange matchers: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

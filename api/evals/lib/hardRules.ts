@@ -134,8 +134,19 @@ export function hypotheticalNames(text: string): string[] {
 }
 // Capitalized words after "say" that open a clause, not a name ("Say I tell Dana", "say It's").
 const NOT_INTRODUCED = new Set(["I", "It", "Its", "That", "This", "The", "We", "You", "They", "He", "She", "There", "What", "When", "If", "Yes", "No"]);
+// A 24-hour time in what the turn stood on ("starts 2026-10-13T17:30", a read's stored form) backs the same time said the usual way
+// ("5:30", "5:30pm"; audit 2026-11-11, best-option-from-reads: "tonight 5:30 to 8:30" was flagged against 17:30-20:30).
+export function withTwelveHourTimes(given: string): string {
+  const extra = [...given.matchAll(/(?<![\d:])([01]?\d|2[0-3]):([0-5]\d)\b/g)].flatMap((m) => {
+    const h = Number(m[1]);
+    if (h < 13 && h !== 0) return [];
+    const twelve = h === 0 ? 12 : h - 12;
+    return [`${twelve}:${m[2]}`, `${twelve}:${m[2]}${h === 0 ? "am" : "pm"}`];
+  });
+  return extra.length ? `${given}\n${[...new Set(extra)].join(" ")}` : given;
+}
 export function inventedFacts(i: HardRuleInput): string[] {
-  const given = [i.facts, ...i.theirLines, ...i.coLines, i.firstName ?? "", ...hypotheticalNames(i.text)].join("\n");
+  const given = withTwelveHourTimes([i.facts, ...i.theirLines, ...i.coLines, i.firstName ?? "", ...hypotheticalNames(i.text)].join("\n"));
   const src = { all: prepareSource(`${given}\n${SPOKEN_COMMON} ${OWN}`), asked: prepareSource(given) };
   const out: string[] = [];
   // A quote mark opens its own sentence: the capital after it ("Give", "Thanks") is a first word, not a name.
