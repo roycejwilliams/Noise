@@ -165,7 +165,7 @@ export function describeMatch(m: any): string | null {
   // Searched where its want is, not their home city (services/wantPlace.ts): the picker reads it as the right place, not a far one.
   // Last, so it never pushes sold-out, spots or the time past the cut.
   const si = m?.searchedIn;
-  if (si && si.source !== "home" && typeof si.place === "string" && si.place) parts.push(si.source === "area" ? `searched in ${si.place}, where they asked Cue to search` : `searched in ${si.place}, where this want of theirs is`);
+  if (si && si.source !== "home" && typeof si.place === "string" && si.place) parts.push(si.source === "area" ? `searched in ${si.place}, where they asked Cue to search` : si.source === "plan" ? `searched in ${si.place}, the place its search plan names` : `searched in ${si.place}, where this want of theirs is`);
   return parts.length ? parts.join("; ").replace(/\s+/g, " ").slice(0, 500) : null;
 }
 

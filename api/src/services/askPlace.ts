@@ -63,6 +63,16 @@ export function placesNamed(text: string): string[] {
   return out.filter((p) => !seen.has(norm(p)) && !!seen.add(norm(p)));
 }
 
+// Pure: the one place a goal's search plan names (Royce, 2026-11-10: a goal with no place of its own is searched where its own plan
+// names; "look for: small founder dinners SF" from a Sacramento member searched events in Sacramento while its web search said SF).
+// Read with placesNamed, the same detector the reply searches use. Two different places, or none: null, never a pick between them
+// (the goal looks where it did before).
+export function planNamesPlace(text: string | null | undefined): string | null {
+  const named = placesNamed(String(text ?? ""));
+  const distinct = named.filter((p, i) => !named.slice(0, i).some((q) => samePlace(p, q)));
+  return distinct.length === 1 ? distinct[0] : null;
+}
+
 // Pure: the place one search names: one its own words name, or one their message names that its words repeat.
 export function searchNamesPlace(words: string, message?: string | null): string | null {
   const own = placesNamed(words);
