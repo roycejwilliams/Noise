@@ -141,7 +141,8 @@ async function cachedCalendarEvents(): Promise<CoCalendarEvent[]> {
   const resolved = await Promise.all(
     (await listCalendarEvents()).map(async (e): Promise<CoCalendarEvent | null> => {
       if (e.city) return e;
-      const page = e.url ? await fetchLumaEventDetails(e.url).catch(() => null) : null;
+      // A Noise event's place, read in the background whoever asks (cached for every later reader): the sweep's lane.
+      const page = e.url ? await fetchLumaEventDetails(e.url, { lane: "sweep" }).catch(() => null) : null;
       const place = resolveCoEventPlace(e.city, page, process.env.CO_HOME_CITY, !!e.url);
       if (place.source === "unresolved") {
         unresolved++;

@@ -276,8 +276,9 @@ export async function unshareableEventLinks(urls: string[], read: (url: string) 
 
 // For the send-time re-read (sendCheck.ts recheckFind): an event page's record now. Luma's through its own reader (same cache as
 // before); any other event page through readEventPage. Null when it can't be read or isn't one event.
-export async function eventPageDetails(url: string, maxAgeMs: number): Promise<EventDetails | null> {
-  if (isLumaHost(url)) return (await import("./eventDetails.js")).fetchLumaEventDetails(url, { maxAgeMs });
+// lane: its only caller is the send-time re-read (sendCheck.ts), a background read.
+export async function eventPageDetails(url: string, maxAgeMs: number, lane: import("./eventDetails.js").LumaLane = "sweep"): Promise<EventDetails | null> {
+  if (isLumaHost(url)) return (await import("./eventDetails.js")).fetchLumaEventDetails(url, { maxAgeMs, lane });
   return (await readEventPage(url, { maxAgeMs })).event;
 }
 

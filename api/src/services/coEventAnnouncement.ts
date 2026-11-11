@@ -32,7 +32,7 @@ export function announcementAudience(people: { id: string; city: string | null; 
 async function resolveCityFor(event: LumaEvent): Promise<LumaEvent> {
   if (event.city) return event;
   const url = event.url ? (/^https?:\/\//.test(event.url) ? event.url : `https://lu.ma/${event.url}`) : null;
-  const page = url ? await fetchLumaEventDetails(url).catch(() => null) : null;
+  const page = url ? await fetchLumaEventDetails(url, { lane: "sweep" }).catch(() => null) : null;
   const resolved = resolveCoEventCity(event.city, page?.city, process.env.CO_HOME_CITY, page?.address ?? page?.venue);
   await recordDecision({ layer: 6, decision: "tier1.eventCity", userId: null, outcome: "act", action: resolved.source, proposal: { eventId: event.api_id, city: resolved.city } }).catch(() => {});
   return { ...event, city: resolved.city };
@@ -246,7 +246,7 @@ export async function afterAnnounced(p: { announcementId: number | string; userI
 // The link first, then a short caption from the event's own page.
 async function draftAnnouncement(person: Person, event: LumaEvent): Promise<string[]> {
   const url = event.url ? (/^https?:\/\//.test(event.url) ? event.url : `https://lu.ma/${event.url}`) : null;
-  const details = url ? await fetchLumaEventDetails(url).catch(() => null) : null;
+  const details = url ? await fetchLumaEventDetails(url, { lane: "sweep" }).catch(() => null) : null;
   const record = details ? renderEventDetails(event.name, details).join("\n") : `"${event.name}" starts ${event.start_at}.`;
   let caption = `Noise is hosting "${event.name}". Wanted you to see it first.`;
   try {
