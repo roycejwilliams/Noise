@@ -136,5 +136,60 @@ check("needQuality seeds the real path's facts (running work, sent records)", /r
   check("through the real send: the first draft gets the redraft note, once; the next goes", first.ok === false && /Sent before/.test(first.error ?? "") && second.ok === true, { first, second });
 }
 
+// Fix 5 (2026-11-10 quick_wine): the plain text sent after the loop ended can't redraft, so a past find it names with no link gets that
+// find's link first (on file only), then the text. Probed through the real sendReply, the way conversationReply.ts sends the plain text.
+{
+  const T = await import("../../src/agent/conversationTools.js");
+  const wine = [{ name: "The Cellar on Fell", url: "https://example.test/the-cellar-on-fell" }];
+  const FACT = `Cue sent them "The Cellar on Fell" on Nov 7; the link it sent: https://example.test/the-cellar-on-fell`;
+  const named = "The Cellar on Fell, the small natural-wine bar near Hayes.";
+  const plainTurn = async (o: { message?: string; draft?: string; isVoice?: boolean; facts?: string; referents?: typeof wine; before?: string; callId?: string; redraftLeft?: () => boolean }) => {
+    const out: string[] = [];
+    const quiet = console.log;
+    console.log = (...a: any[]) => {
+      const m = String(a[0] ?? "").match(/would share link (\S+)|would reply to \S+: "([^]*)"$/);
+      if (m) out.push(m[1] ?? m[2]);
+    };
+    const added: string[] = [];
+    const t = T.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: o.message ?? "what was the wine bar you sent?", isVoice: !!o.isVoice, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, dryRunReferents: o.referents ?? wine, ...(o.redraftLeft ? { redraftLeft: o.redraftLeft } : {}), sendCoReply: async () => true, facts: { add: (_k: string, v: string) => added.push(v), text: () => o.facts ?? FACT } } as any);
+    try {
+      if (o.before) await (t.tools as any).shareLink.execute({ urls: [o.before] }, { toolCallId: "0", messages: [] });
+      const r = await (t.tools as any).sendReply.execute({ message: o.draft ?? named }, { toolCallId: o.callId ?? "plain-text-reply", messages: [] });
+      return { r, out, added, state: t.state };
+    } finally {
+      console.log = quiet;
+    }
+  };
+  const a = await plainTurn({});
+  check("plain text naming a re-asked past find, no link: the link goes first, then the text", a.r.ok === true && a.out.length === 2 && a.out[0] === wine[0].url && a.out[1] === named && a.added.some((x) => x.includes(`Sent the link ${wine[0].url}`)), a.out);
+  const l = await plainTurn({ redraftLeft: () => false, callId: "9" });
+  check("the same on the last step (sendReply with no redraft left): link first, then the text", l.r.ok === true && l.out[0] === wine[0].url && l.out[1] === named, l.out);
+  const inDraft = await plainTurn({ draft: `${named}\n\nhttps://example.test/the-cellar-on-fell` });
+  check("already linked in the text: no extra link", inDraft.out.filter((x) => x === wine[0].url).length === 0 && inDraft.out.length === 1, inDraft.out);
+  const before = await plainTurn({ before: wine[0].url });
+  check("already linked this turn (shareLink): no duplicate", before.out.filter((x) => x === wine[0].url).length === 1 && before.out[before.out.length - 1] === named, before.out);
+  const wrong = await plainTurn({ message: "that link to the cellar was wrong", draft: "You're right, The Cellar on Fell link was wrong, sorry about that." });
+  check("'that link was wrong': no link pushed", !wrong.out.some((x) => x.startsWith("https://")) && wrong.out.length === 1, wrong.out);
+  const unrelated = await plainTurn({ message: "long day, just got home", draft: "Glad you're home. Anything you want to talk through tonight?" });
+  check("an unrelated plain-text reply: unchanged", unrelated.out.length === 1 && unrelated.out[0] === "Glad you're home. Anything you want to talk through tonight?", unrelated.out);
+  const offFile = await plainTurn({ facts: "nothing about it" });
+  check("a link not on file: never sent (only links on file)", offFile.out.length === 1 && offFile.out[0] === named, offFile.out);
+  const voice = await plainTurn({ isVoice: true });
+  check("a voice turn: unchanged (no link text added)", !voice.out.some((x) => x.startsWith("https://")), voice.out);
+  // Once a turn: a second plain text naming it again sends no second link (flushLinks never repeats one; the flag stops a second try).
+  {
+    const quiet = console.log;
+    const out: string[] = [];
+    console.log = (...x: any[]) => { const m = String(x[0] ?? "").match(/would share link (\S+)/); if (m) out.push(m[1]); };
+    const t = T.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "what was the wine bar you sent?", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, dryRunReferents: wine, sendCoReply: async () => true, facts: { add: () => {}, text: () => FACT } } as any);
+    await (t.tools as any).sendReply.execute({ message: named }, { toolCallId: "plain-text-reply", messages: [] });
+    await (t.tools as any).sendReply.execute({ message: `${named} Worth a second look.` }, { toolCallId: "plain-text-reply", messages: [] });
+    console.log = quiet;
+    check("at most once a turn: one link across two plain texts", out.length === 1, out);
+  }
+  const reply = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+  check("the plain-text fallback still sends through sendReply as plain-text-reply, and skips a voice note", /if \(!input\.isVoice && plain\.split[^\n]*\n\s*await \(tools\.sendReply as any\)\.execute\(\{ message: plain \}, \{ toolCallId: "plain-text-reply"/.test(reply));
+}
+
 console.log(`\nneed-matched replies: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
