@@ -260,5 +260,21 @@ const detailed: any = {
   check("review: an item's stricter length limit still holds in the bundle", long.problems.some((p) => /max_chars|maxChars|characters|length/i.test(p.why)), long.problems);
 }
 
+// ---------------------------------------------------------------- one pace for Luma's pages (2026-11-11 9am: HTTP 429 on the third search)
+{
+  const ED = await import("../../src/services/eventDetails.js");
+  ED.resetLumaPace();
+  const t0 = 1_000_000;
+  const waits = [0, 1, 2, 3, 4].map(() => ED.lumaPaceWait(t0));
+  check("pace: five reads asked at once start a second apart, whichever search asks", JSON.stringify(waits) === JSON.stringify([0, 1000, 2000, 3000, 4000]), waits);
+  check("pace: a read asked after the queue drained starts at once", ED.lumaPaceWait(t0 + 60_000) === 0);
+  ED.resetLumaPace();
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8");
+  check("pace: every real Luma page fetch goes through it (readLumaPage)", /if \(fetchImpl === fetch\) await lumaPace\(\);/.test(src));
+  let fetched = 0;
+  const luma = await R.readKeptFinds([{ match: { tier: 2, kind: "public_event", name: "x", url: "https://lu.ma/abc", reason: "" } }], { model: stubModel([detailedRead]).model, page: async () => (fetched++, { text: DETAILED_PAGE, gone: false }) }, { now: NOW });
+  check("discovery: a Luma link without its record is never fetched at discovery (it isn't paced there)", fetched === 0 && !luma.items[0].match.read);
+}
+
 console.log(`\nopportunity fit: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

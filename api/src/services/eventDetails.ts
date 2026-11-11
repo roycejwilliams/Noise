@@ -234,8 +234,27 @@ export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: numb
 // read it again).
 // status: the page's HTTP status (null when no answer came: timed out, unreachable, or a redirect hop refused); error: why there's no
 // html, said plainly. A 404 is a page that isn't there; a 403, 429 or 503 is Luma not serving it to us (never "no such event").
+// One pace for every Luma page read in this process (2026-11-11 9am sweep: two searches read 21 and 24 pages five at a time, and the third,
+// a minute later, got HTTP 429 on all 24). Reads start at most one per LUMA_PAGE_GAP_MS, whichever search, member or reply asks; the
+// in-process caches (this file's detailCache, lumaViaExa.ts pageCache) mean the same link read again within its TTL is never fetched.
+// Luma publishes no page limit: one a second is a guess at "safe", not a measured one. Only the real network fetch is paced.
+export const LUMA_PAGE_GAP_MS = 1000;
+let lumaNextSlot = 0;
+// Pure-ish: when this read may start (ms from now), and the slot after it reserved. Exported for the probes.
+export function lumaPaceWait(now: number, gap: number = LUMA_PAGE_GAP_MS): number {
+  const start = Math.max(now, lumaNextSlot);
+  lumaNextSlot = start + gap;
+  return start - now;
+}
+export const resetLumaPace = () => void (lumaNextSlot = 0);
+async function lumaPace(): Promise<void> {
+  const wait = lumaPaceWait(Date.now());
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+
 export async function readLumaPage(url: string, fetchImpl: typeof fetch = fetch): Promise<{ html: string | null; details: EventDetails | null; status: number | null; error: string | null }> {
   const key = lumaUrl(url);
+  if (fetchImpl === fetch) await lumaPace();
   let html: string | null = null;
   let status: number | null = null;
   let error: string | null = null;

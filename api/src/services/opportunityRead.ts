@@ -189,7 +189,10 @@ export async function readKeptFinds<T extends { match: any; unread?: unknown }>(
     if (it.unread || !m || m.sendAsRoundup || read + failed >= cap || readIsCurrent(m, now) || !deps.model) { out.push(it); continue; }
     try {
       let text = String(m.details?.description ?? "");
-      if (!text.trim() && typeof m.url === "string" && /^https:/.test(m.url) && deps.page) text = String((await deps.page(m.url))?.text ?? "").slice(0, READ_TEXT_CHARS);
+      // A Luma link without its record is never fetched here: Luma's pages are paced for the searches (eventDetails.ts lumaPace), and
+      // it gets its read from its record at send.
+      const luma = typeof m.url === "string" && /^https:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\//i.test(m.url);
+      if (!text.trim() && !luma && typeof m.url === "string" && /^https:/.test(m.url) && deps.page) text = String((await deps.page(m.url))?.text ?? "").slice(0, READ_TEXT_CHARS);
       if (text.trim().length < 80) { out.push(it); continue; }
       const r = await readOpportunity(m, deps, now, { text });
       if (r.pageHash) { read++; out.push({ ...it, match: { ...m, read: r } }); }
