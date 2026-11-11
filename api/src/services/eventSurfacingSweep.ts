@@ -61,7 +61,7 @@ export type SurfacingCandidate = {
 // search plan names (askText, goalEdges.ts edgeSearchText; askPlace.ts planNamesPlace) is where its event search looks, source "plan"
 // (Royce, 2026-11-10). Their search area, when set, still stands in first (their own words over the plan's). noPlan: that plan place
 // didn't settle on the map (placeToSearch), so it looks where it did before.
-export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps?: import("./wantPlace.js").PlaceDeps, o: { noPlan?: boolean } = {}): Promise<{ city: string | null; searchedIn: SearchedIn; areaUnread?: boolean }> {
+export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps?: import("./wantPlace.js").PlaceDeps, o: { noPlan?: boolean; noCurrent?: boolean } = {}): Promise<{ city: string | null; searchedIn: SearchedIn; areaUnread?: boolean }> {
   const W = await import("./wantPlace.js");
   let want = candidate.want ?? null;
   // A promise Co made on a call (askId "promise:...") is Co's own words, not a want of theirs: it searches their home city.
@@ -89,6 +89,14 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
     const named = (await import("./askPlace.js")).planNamesPlace(candidate.askText);
     if (named) return { city: named, searchedIn: { key: want.key, place: named, source: "plan" } };
   }
+  // A near-me search (no place in its words, the conversation that started it, its plan or their search area; and not one whose place
+  // they removed): where they are now, only from their own dated, quoted line within CURRENT_PLACE_DAYS (Royce, 2026-11-11). Otherwise
+  // home, as before. A read that fails is home.
+  if (!o.noCurrent && wp && wp.source !== "removed" && fb.searchedIn.source === "home" && !fb.areaUnread) {
+    const placeNowOf = (deps ?? W.realPlaceDeps).whereNow;
+    const here = W.currentUsable(placeNowOf ? await placeNowOf(candidate.userId).catch(() => null) : null);
+    if (here && !W.samePlace(here.place, candidate.city)) return { city: here.place, searchedIn: { key: want.key, place: here.place, source: "current" } };
+  }
   return fb;
 }
 // The want's place resolved against their home (services/placeResolve.ts, Royce 2026-10-29: "Bay Area" from a Sacramento member was
@@ -98,8 +106,8 @@ export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | 
 // (never the bare word, never a guess). A want with no place, or no home city on file, is as before.
 // point: the want's stored coordinates for city (placeResolve.ts): the search geocodes city to exactly this (geocoding.ts withPinnedPlace).
 export type SearchWhere = { city: string | null; searchedIn: SearchedIn; skip: string | null; place: import("./placeResolve.js").PlaceOnMap | null; retry?: string | null; point?: import("./geocoding.js").GeoPoint | null };
-export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps: { place?: import("./wantPlace.js").PlaceDeps; resolve?: import("./placeResolve.js").ResolveDeps; noPlan?: boolean } = {}): Promise<SearchWhere> {
-  const where = await searchPlace(candidate, deps.place, { noPlan: deps.noPlan }).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } as SearchedIn }));
+export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps: { place?: import("./wantPlace.js").PlaceDeps; resolve?: import("./placeResolve.js").ResolveDeps; noPlan?: boolean; noCurrent?: boolean } = {}): Promise<SearchWhere> {
+  const where = await searchPlace(candidate, deps.place, { noPlan: deps.noPlan, noCurrent: deps.noCurrent }).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } as SearchedIn }));
   if ("areaUnread" in where && where.areaUnread) return { ...where, city: null, skip: null, place: null, retry: "their search area couldn't be read this run; tried again next run" };
   // Their search area (searchArea.ts): resolved once, when they set it, on its own row; searched at that point, never the bare word.
   if (where.searchedIn.source === "area" && where.city) {
@@ -119,13 +127,16 @@ export async function placeToSearch(candidate: Pick<SurfacingCandidate, "askId" 
   // A place read from the plan that doesn't settle (ambiguous, no place by that name, far from home, or not placed this run) is never
   // searched as a guess and never holds the goal back: it looks where it did before (their home city).
   if (where.searchedIn.source === "plan" && (!r || r.skip || r.retry || !r.city)) return placeToSearch(candidate, { ...deps, noPlan: true });
+  // Where they are now that doesn't settle, or is far from home (inferred, so far_not_searched): home, never a guess and never skipped.
+  if (where.searchedIn.source === "current" && (!r || r.skip || r.retry || !r.city)) return placeToSearch(candidate, { ...deps, noCurrent: true });
   if (!r) return { ...where, city: null, skip: null, place: null, retry: "its place couldn't be resolved this run; tried again next run" };
   return { city: r.skip || r.retry ? null : r.city, searchedIn: where.searchedIn, skip: r.skip, place: r.place, retry: r.retry ?? null, point: r.skip || r.retry ? null : (r.point ?? null) };
 }
 // Where a find was searched, kept on the find (its match) so the send can say so once (wantPlace.ts noteDue).
 // source "area": the want has no place of its own and looked where they asked Cue to search from now on (searchArea.ts).
 // source "plan": a goal with no place of its own, searched where its own search plan names (searchPlace).
-export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" | "area" | "plan" };
+// current: a search with no place of its own, looked for where they are now (wantPlace.ts currentUsable: their own dated, quoted line).
+export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" | "area" | "plan" | "current" };
 
 // How long an unanswered tease stays "open" before Co treats it as
 // abandoned. Referenced by sendblue.ts's pending-offer lookup too — a reply

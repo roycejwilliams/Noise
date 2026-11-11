@@ -35,7 +35,16 @@ export const BUNDLE_LIMITS = { openingChars: 280, closingChars: 140, captionChar
 export type PickWhy = { whyMember: string; whyNow: string } | null;
 // tierPick: the best of its tier for them this morning (services/sweepSelect.ts tierPicks): never skipped for fit (composeBundle).
 // againWhy: why a resend comes back (harness/matchGate.ts repeatRule): never answered or talked about in a month, or what changed.
-export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; againWhy?: string | null; tierPick?: boolean };
+// where: say where it searched, once (services/wantPlace.ts whereNoteFor).
+export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; againWhy?: string | null; tierPick?: boolean; where?: import("../services/wantPlace.js").WhereNote | null };
+
+// Pure: the note a thing carries about where Cue searched for it (Royce, 2026-11-11). Cue phrases it; the note only says what's true.
+export function whereNote(w: import("../services/wantPlace.js").WhereNote | null | undefined): string {
+  if (!w) return "";
+  return w.kind === "inferred"
+    ? ` (they didn't name a place for this search, so Cue looked around ${w.place}: say that once, as a short clause in your caption, and that they can tell you if they meant somewhere else)`
+    : ` (they moved to ${w.home} since setting this search to ${w.place}, the place they named: your closing is one short question asking whether to keep it on ${w.place} or switch it to ${w.home})`;
+}
 export type ComposeInput = {
   firstName: string;
   items: BundleItem[];
@@ -140,7 +149,7 @@ export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: 
   const items = i.items
     .map((b, n) => {
       const pick = b.pick ? `\nCue's daily pick's read (a lead to check against its facts, never a fact and never words to repeat): ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now, as the pick saw it: ${b.pick.whyNow}` : ""}` : "";
-      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? againNote(b.againWhy) : ""}${b.item.roundup ? ROUNDUP_NOTE : ""}\n${renderFacts(b.item.facts)}${pick}`;
+      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? againNote(b.againWhy) : ""}${b.item.roundup ? ROUNDUP_NOTE : ""}${whereNote(b.where)}\n${renderFacts(b.item.facts)}${pick}`;
     })
     .join("\n\n");
   return `${CO_VOICE}
@@ -152,7 +161,7 @@ HOW IT GOES OUT
 - Each caption describes its own thing only, in its own words: what it is and why it fits them. Never mention, compare with or group it with the other things, and never repeat another caption's reason.
 ${many ? "- After the last thing, end with your own line (it goes in \"opening\"): you know them, what they're going through and how they've been, so say what these mean for them now, however you'd say it. Your call, in Cue's voice. Ground it in what you actually know about them below; never invent a feeling or a situation, and never name what someone is unless they told you. (Royce, 2026-10-13: tie it back to \"knowing the user ... we want to be that help\"; \"it doesn't need to be scripted. Cue should have a mind of its own but still be on brand\".)\n" : ""}- A closing question only when it's genuinely useful: a real choice between these that needs their say, or something their answer would change. Otherwise the captions and links are the whole message and "closing" is null. Never a generic check ("Does this one interest you?", "Thoughts?", "Any of these catch your eye?"). (Royce, 2026-11-11.)
 - A caption is at most ${BUNDLE_LIMITS.captionChars - 40} characters and ${BUNDLE_LIMITS.captionSentences} sentences, and never ends with a question; the opening at most ${BUNDLE_LIMITS.openingChars}; the closing at most ${BUNDLE_LIMITS.closingChars}. Don't mention links.
-- Keep three things apart: what its page says (said as the page's: "the page describes…"), your read of what that could do for them, and what isn't known. When something essential to the fit isn't in its facts, narrow what you say, or skip it.
+- Keep three things apart: what its page says (said as the page's), your read of what that could do for them (said as a read: "the page says X; that could mean Y"), and what isn't known. A quote can be misread: never state your read as what the page says. When something essential to the fit isn't in its facts, narrow what you say, or skip it.
 - Never "apply now", "worth applying now" or any push to sign up unless its facts show a way to apply or register that was read and a state or deadline that makes now matter. Logistics they need to decide (day and time, area, cost, approval or registration state) when its facts give them; never a street address, never a guess.
 - If two things have similar names, tell them apart by what they are, when and where.
 - A suggestion for how to use it only when its format makes it useful (a small discussion where they'll be asked what they're building); most of the time what it is, why it's worth their time, and the link are the whole thing.
@@ -254,6 +263,15 @@ const NEGATED = /\b(?:not|no|never|isn'?t|doesn'?t|don'?t|won'?t|can'?t|nor|rath
 // Words for people in general: never a goal pasted on ("someone solid", "people", "folks").
 const GENERIC_PEOPLE = new Set("someone people folk person other others friend new good solid real just like-minded alongside meet find connect hire recruit land bump cross paths".split(" ").map(stem));
 
+// Pure: the caption names the place (its first word, or a short form: "SF" for San Francisco, "NYC" for New York).
+const SHORT_FORMS: Record<string, string[]> = { "san francisco": ["sf", "san fran", "the city"], "new york": ["nyc", "ny", "new york city", "manhattan", "brooklyn"], "los angeles": ["la", "l.a."], sacramento: ["sac"], washington: ["dc", "d.c."] };
+export function placeSaid(text: string, place: string): boolean {
+  const t = ` ${text.toLowerCase().replace(/[^a-z0-9. ]+/g, " ")} `;
+  const p = place.toLowerCase().split(",")[0].trim();
+  const forms = [p, ...(SHORT_FORMS[p] ?? []), ...Object.entries(SHORT_FORMS).filter(([, v]) => v.includes(p)).map(([k]) => k)];
+  return forms.some((f) => t.includes(` ${f} `) || t.includes(` ${f}.`) || t.includes(` ${f},`) || t.includes(` ${f}?`) || t.includes(` ${f}'`));
+}
+
 export type Checked = { captions: Map<number, string>; problems: { at: "opening" | "closing" | number | "bundle"; why: string }[] };
 // Pure: every part of the draft against its rules. Caption numbers are 1-based, matching THE THINGS.
 export function checkComposed(d: Draft, i: ComposeInput): Checked {
@@ -283,6 +301,7 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if (URGENT_APPLY.test(c) && !b.item.applyRoute) problems.push({ at: n, why: `thing ${n}'s caption pushes them to apply or sign up now, and no way in with a state that makes now matter was read; say how it works from its facts, or leave that out` });
     const pasted = goalPasted(c, b.item.record ?? "", [i.memberBlock ?? "", b.item.grounding].join("\n"));
     if (pasted.length) problems.push({ at: n, why: `thing ${n}'s caption says they could meet or find ${pasted.map((w) => `"${w}"`).join(", ")} there, and its facts never mention that: say what its page supports (who it's for, what happens), and the limit` });
+    if (b.where?.kind === "inferred" && !placeSaid(c, b.where.place)) problems.push({ at: n, why: `thing ${n}'s caption doesn't say where Cue looked (around ${b.where.place}, since they didn't name a place); add it as a short clause` });
     if (PRESUMED_GOING.test(c)) problems.push({ at: n, why: `thing ${n}'s caption presumes they're going; nothing says they are (a request or a registration isn't going): say it as "if you go"` });
     if (GOAL_RESTATED.test(c)) problems.push({ at: n, why: `thing ${n}'s caption gives their goal back as the reason; say what the thing offers toward it, from its facts` });
     captions.set(n, c);
@@ -314,6 +333,9 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if (/\?\s*$/.test(o) || /https?:\/\//i.test(o)) problems.push({ at: "opening", why: "the opening is a question or has a link" });
     else framing(o, "opening", BUNDLE_LIMITS.openingChars);
   }
+  // A moved search's question is the closing, and names both places.
+  const moved = i.items.map((b) => b.where).find((w) => w?.kind === "moved") as Extract<import("../services/wantPlace.js").WhereNote, { kind: "moved" }> | undefined;
+  if (moved && (!d.closing || !placeSaid(d.closing, moved.place) || !placeSaid(d.closing, moved.home))) problems.push({ at: "closing", why: `they moved to ${moved.home}: the closing asks once whether to keep this search on ${moved.place} or switch it to ${moved.home}` });
   if (d.closing) {
     const q = tidy(d.closing);
     if (!/\?\s*$/.test(q) || (q.match(/\?/g) ?? []).length > 1) problems.push({ at: "closing", why: "the closing must be one question" });

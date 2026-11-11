@@ -3326,8 +3326,10 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
         continue;
       }
       const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string; tierPick?: boolean } }).pick;
+      // Where it searched, said once (services/wantPlace.ts whereNoteFor, Royce 2026-11-11): at most one such note a message.
+      const where = items.some((b) => b.where) ? null : await whereFor(userId, x).catch(() => null);
       // No why-member (a tier pick the picker didn't send itself): no pick line, the find's own facts speak for it.
-      items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again), againWhy: (x.payload as { againWhy?: string }).againWhy ?? null, ...(pk?.tierPick && morningFind(x, state.now, person.timezone) ? { tierPick: true } : {}) });
+      items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again), againWhy: (x.payload as { againWhy?: string }).againWhy ?? null, ...(pk?.tierPick && morningFind(x, state.now, person.timezone) ? { tierPick: true } : {}), ...(where ? { where } : {}) });
     }
     // The pick's set line only for a bundle of exactly the finds it chose together (review of #135: a set line could describe finds
     // that didn't make it into the message).
@@ -3416,30 +3418,9 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
     }
   }
 
-  // Where their finds come from, said once (services/wantPlace.ts, Royce 2026-10-15): the first find searched in a place they didn't name
-  // in the want itself carries one line, right before the closing question. It's marked said only once it was delivered.
-  let placeNote: { key: string; line: string } | null = null;
-  if (composed && !opts.dryRun) {
-    const W = await import("../services/wantPlace.js");
-    let after: string | null = null;
-    for (const it of composed.perItem) {
-      const s = (it.candidate.payload as { match?: { searchedIn?: { key: string | null; place: string | null; source: string } } }).match?.searchedIn;
-      if (!s?.key || s.source !== "told") continue;
-      const row = await W.realPlaceDeps.row(userId, s.key).catch(() => null);
-      const line = W.noteDue(row, person.city ?? null);
-      if (line) {
-        placeNote = { key: s.key, line };
-        after = it.messages[it.messages.length - 1] ?? null;
-        break;
-      }
-    }
-    if (placeNote) {
-      // Right after its own find's caption, so it's about that find; before the closing question when the caption can't be found.
-      const i = after ? composed.messages.lastIndexOf(after) : -1;
-      const at = i >= 0 ? i + 1 : composed.messages.length - (composed.closing ? 1 : 0);
-      composed = { ...composed, messages: [...composed.messages.slice(0, at), placeNote.line, ...composed.messages.slice(at)], text: `${composed.text}\n${placeNote.line}`, notes: [...composed.notes, "where their finds come from, said once"] };
-    }
-  }
+  // Where their finds come from, said once (Royce, 2026-10-15; in Cue's own words since 2026-11-11): the composer was given the note
+  // (whereFor above) and its caption or closing checked for it; it's marked said once delivered.
+  const whereSaid = composed && !opts.dryRun ? composed.included.map((b) => b.where).find(Boolean) ?? null : null;
 
   // Does it belong now (harness/momentFit.ts, Royce 2026-11-07): an optional check-in is judged against their latest texts and call
   // (the stamped exchange the draft is written from, and the latest call, always in view). Code guards the verdict: wait re-queues it
@@ -3784,8 +3765,8 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   }
   // Co's record of what it did (services/coFacts.ts).
   if (result.delivered.length) await recordProactiveText(userId, c.type, result.delivered.join(" "), c.id);
-  if (placeNote && result.delivered.includes(placeNote.line)) {
-    await import("../services/wantPlace.js").then((W) => W.markNoted(userId, placeNote!.key)).catch((err: any) => console.error("proactive: marking where their finds come from as said failed (non-fatal):", err?.message ?? err));
+  if (whereSaid && result.delivered.length) {
+    await import("../services/wantPlace.js").then((W) => W.markNoted(userId, whereSaid.key)).catch((err: any) => console.error("proactive: marking where their finds come from as said failed (non-fatal):", err?.message ?? err));
   }
   // The stopped-looking line, told once it was delivered (services/askRetire.ts).
   if (rideNote) {
@@ -3871,4 +3852,16 @@ export function nextLocalHour(after: Date, timezone: string | null, hour: number
   let t = local.set({ hour, minute: 0, second: 0, millisecond: 0 });
   if (t <= local) t = t.plus({ days: 1 });
   return t.toJSDate();
+}
+
+// Where a find was searched, as the note its text carries once (services/wantPlace.ts whereNoteFor): its search's row, and their home with
+// the day they said it (services/whereabouts.ts where:home). A failed read is no note.
+async function whereFor(userId: string, c: { payload: unknown }): Promise<import("../services/wantPlace.js").WhereNote | null> {
+  const s = (c.payload as { match?: { searchedIn?: { key: string | null; place: string | null; source: string } } }).match?.searchedIn;
+  if (!s?.key || !s.place) return null;
+  const W = await import("../services/wantPlace.js");
+  const row = await W.realPlaceDeps.row(userId, s.key);
+  const { rows } = await (await import("../db/db.js")).default.query(`SELECT place, read_at FROM want_places WHERE user_id = $1 AND want_key = 'where:home' AND place IS NOT NULL`, [userId]);
+  const home = rows[0] ? { place: String(rows[0].place), at: new Date(rows[0].read_at) } : null;
+  return W.whereNoteFor(s, row, home);
 }

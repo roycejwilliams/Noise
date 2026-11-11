@@ -184,6 +184,7 @@
     "evals/sentLookup/recommendationMemory.ts",
     "evals/opportunity/roundupPage.ts",
     "evals/opportunity/fit.ts",
+    "evals/discovery/whereabouts.ts",
     "evals/goals/planCurrent.ts",
     "evals/goals/taperHolds.ts",
     "evals/proactive/specifics.ts",

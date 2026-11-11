@@ -104,7 +104,7 @@ ${openItemsBlock(o.openAsks)}${conditionsOnFileBlock(o.openAsks, o.intent)}
   - goals and activity_preferences come only from what they say about themselves or want for themselves, never from the subject of a one-off request (research, a document, advice, a single search): "find me venues for my launch party" alone is not a goal or an interest; "I'm launching in November, find me venues" gives the goal "launch in November".
   - blockers: challenges or struggles in their life they mentioned (never frustrations with Cue itself).
   - availability_pattern: how often and when they want to connect (e.g. "weekday evenings"): when they're free for things, never how often or when Cue may text or call them (that's a rule of theirs, read elsewhere).
-  - city: ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target ("roles in NYC", "investors in NYC", "events in Miami"). Empty string if they didn't say.
+  - city: ONLY where they live now or are actually moving to, said as a move ("I live in Oakland", "moved to Austin", "moving to Austin next month", "I'm based in Denver"). Being somewhere for now ("I'm in NYC", "in LA this week", "heading to Austin Thu-Sun", "visiting Boston") is a trip, not where they live: empty here (whereabouts below). Never a city that only comes up as a preference or target ("roles in NYC", "investors in NYC", "events in Miami"). Empty string if they didn't say.
   - emotional_state: one word for their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout).
   - long_term_direction: a sentence capturing their longer-term personal and career direction, distinct from immediate goals. Empty string if not discussed.
 
@@ -122,6 +122,8 @@ ${openItemsBlock(o.openAsks)}${conditionsOnFileBlock(o.openAsks, o.intent)}
   - availability: their stated GENERAL, RECURRING availability in their own words; null for a one-off request for a specific call or meeting time.
 
 6. planned_event: did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering, not a vague "I should get out more")? event_name in their own words; event_date resolved to YYYY-MM-DD from today's date only when you can resolve it confidently (a specific day or an unambiguous "this Thursday"), else null, never a guess; event_location as city or venue if mentioned, else null. Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is), something Cue offered, or an event you would have to infer is none. quote: their exact words that say they are going, copied from their line. All null if none.
+
+6b. whereabouts: are they somewhere for now, not as a move ("I'm in NYC", "in LA till Friday", "heading to NYC Thu-Sun", "visiting Boston this week")? place as they said it; from and until as YYYY-MM-DD from today's date only when their words give them ("till Friday", "Thu-Sun"), else null, never a guess; quote: their exact words, copied from their line. A move ("moved to", "live in", "based in") goes in city, never here; a place they only mention (an event there, a friend there, a place they ruled out) is none. All null if none.
 
 7. style: Cue keeps a short list of how this person likes Cue to text them.
 Current notes:
@@ -144,6 +146,7 @@ Return ONLY valid JSON, no preamble:
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
  "intent": {"asks": [${ASK_JSON}], "concrete_preferences": [], "wants": [], "availability": null, ${CRITERIA_FOR_JSON}},
  "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
+ "whereabouts": {"place": null, "from": null, "until": null, "quote": null},
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
  "advice": null or {"topic": "...", "gist": "..."},
  "met_someone": null or "their exact words"${o.preferences ? `,
@@ -158,6 +161,8 @@ export type TurnLearning = {
   cadence: unknown;
   intent: CapturedIntentData | null;
   planned_event: CapturedEventMentionData | null;
+  // Somewhere for now (a trip), unvalidated: services/whereabouts.ts holds it to their words.
+  whereabouts?: unknown;
   style: { changed?: boolean; notes?: unknown } | null;
   // What Co advised in this reply, when it did (services/advice.ts).
   advice: { topic: string; gist: string } | null;
@@ -179,6 +184,7 @@ export function parseTurnLearning(text: string): TurnLearning | null {
       cadence: p.cadence ?? "unstated",
       intent: p.intent && typeof p.intent === "object" ? p.intent : null,
       planned_event: p.planned_event && typeof p.planned_event === "object" ? p.planned_event : null,
+      whereabouts: p.whereabouts && typeof p.whereabouts === "object" ? p.whereabouts : null,
       style: p.style && typeof p.style === "object" ? p.style : null,
       advice: p.advice && typeof p.advice.topic === "string" && typeof p.advice.gist === "string" ? { topic: p.advice.topic, gist: p.advice.gist } : null,
       metSomeone: typeof p.met_someone === "string" && p.met_someone.trim() ? p.met_someone.trim().slice(0, 200) : null,
@@ -292,6 +298,9 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
           cadence: learned.cadence,
         },
       }).catch((err: any) => console.error("turnLearning: profile write failed (non-fatal):", err?.message ?? err)),
+      import("./whereabouts.js").then((W) => W.storeTrip(input.userId, learned.whereabouts, input.message)).catch((err: any) =>
+        console.error("turnLearning: whereabouts write failed (non-fatal):", err?.message ?? err),
+      ),
       storePlannedEventMention(input.userId, learned.planned_event, input.message).catch((err: any) =>
         console.error("turnLearning: planned event write failed (non-fatal):", err?.message ?? err),
       ),

@@ -221,7 +221,7 @@ export function mergeCandidates(google: PlaceCandidate[], local: PlaceCandidate[
 export type PlaceHow = "confirmed" | "inferred";
 // Pure: how a want's place was set. Their own words in the want, or a correction they made, is theirs (confirmed); a place read from
 // their other lines is Cue's inference. Only a confirmed place may be searched far from home on its own say-so (Royce, 2026-10-29).
-export const placeHow = (source: PlaceSource | "home" | "plan"): PlaceHow => (source === "their_words" || source === "corrected" ? "confirmed" : "inferred");
+export const placeHow = (source: PlaceSource | "home" | "plan" | "current"): PlaceHow => (source === "their_words" || source === "corrected" ? "confirmed" : "inferred");
 
 export type FarVerdict = "near" | "far_named_by_them" | "far_in_window" | "far_not_searched";
 // Pure: whether a resolved place far from home is searched. Far and confirmed: searched (they named it). Far and inferred: searched
@@ -259,7 +259,7 @@ export type ResolvedSearch = { city: string | null; skip: string | null; place: 
 
 // One want's place, resolved against their home: the city to search (a qualified label), or why its search is skipped or waits for
 // the next run. Nothing here ever falls back to their home for a want that has a place. Never throws.
-export async function resolveWantPlace(i: { userId: string; key: string | null; place: string; source: PlaceSource | "home" | "plan"; homeCity: string | null }, deps: ResolveDeps): Promise<ResolvedSearch> {
+export async function resolveWantPlace(i: { userId: string; key: string | null; place: string; source: PlaceSource | "home" | "plan" | "current"; homeCity: string | null }, deps: ResolveDeps): Promise<ResolvedSearch> {
   // No home city on file (or no want): the place word as before this existed.
   if (!i.homeCity || !i.key) return { city: i.place, skip: null, place: null };
   const how = placeHow(i.source);

@@ -153,7 +153,7 @@ export async function extractPsychographicProfile(
           "goals": [], // array of things they are working toward
           "blockers": [], // array of challenges or struggles in their life they mentioned (never frustrations with Cue itself)
           "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
-          "city": "", // ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target — "roles in NYC", "investors in NYC", "events in Miami" say nothing about where they are. Empty string if they didn't say.
+          "city": "", // ONLY where they live now or are actually moving to, said as a move ("I live in Oakland", "moved to Austin", "moving to Austin next month", "I'm based in Denver"). Being somewhere for now ("I'm in NYC", "in LA this week", "visiting Boston") is a trip, not where they live. Never a city that only comes up as a preference or target — "roles in NYC", "investors in NYC", "events in Miami" say nothing about where they are. Empty string if they didn't say.
           "emotional_state": "", // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
           "long_term_direction": "" // a sentence capturing their longer-term personal + career direction/trajectory — where they're headed, distinct from immediate goals/blockers. Empty string if not discussed.
         }
@@ -652,13 +652,14 @@ export function cadenceDaysFor(preference: unknown): number | null {
 // A city only replaces the one on file when their own words place them
 // there. A city named as a target ("roles in NYC", "investors in NYC") is a
 // preference, not a move.
+// Move words only (Royce, 2026-11-11: "moved to / live in / moving to / I'm based in" is a move; "I'm in X", "heading to X", "back in X"
+// or "visiting X" is a trip, the cheaper mistake, kept by services/whereabouts.ts with its window and never as their home).
 const LIVES_THERE = [
-  /\b(i(?:'m| am)?|we(?:'re| are)?)\s+(?:currently\s+)?(?:in|based in|living in|out here in|over in)\b/i,
-  /\b(i|we)\s+(?:live|moved|relocated)\b/i,
-  /\b(moving|relocating|heading|headed)\s+(?:to|out to|back to)\b/i,
+  /\b(i(?:'m| am)?|we(?:'re| are)?)\s+(?:now\s+)?(?:based in|living in)\b/i,
+  /\b(i|we)\s+(?:now\s+)?(?:live|moved|relocated)\b/i,
+  /\b(moving|relocating)\s+(?:to|out to|back to)\b/i,
   /\bbased (?:in|out of)\b/i,
-  /\bmy (?:place|apartment|home|office) (?:is )?in\b/i,
-  /\b(?:i(?:'m| am)?)\s+(?:from|back in)\b/i,
+  /\bmy (?:place|apartment|home) (?:is )?(?:now )?in\b/i,
 ];
 
 // Fixed 2026-09-17: this used to test the WHOLE transcript, Co's lines
@@ -706,12 +707,26 @@ function personsOwnLines(transcript: string): string {
     .join(" ");
 }
 
+// Their own line that names the city (the move's source), or their last line.
+export function personsOwnLineFor(transcript: string, city: string): string {
+  const lines = transcript.split("\n").filter((l) => /^user:/i.test(l.trim())).map((l) => l.replace(/^user:\s*/i, "").trim());
+  const first = city.split(/[ ,]/)[0].toLowerCase();
+  return (lines.reverse().find((l) => l.toLowerCase().includes(first)) ?? lines[0] ?? "").slice(0, 300);
+}
+
+const MOVED_SOMEWHERE = /\b(?:moved|relocated|live here now|living here now)\b(?!\s+(?:fast|quickly|on|forward|ahead|past))/i;
+const BEING_IN = /\b(i(?:'m| am)?|we(?:'re| are)?)\s+(?:now\s+|currently\s+)?in\b/i;
 export function cityChangeAllowed(existingCity: string | null, newCity: string | null, transcript: string): boolean {
   if (!newCity) return false;
   if (!existingCity) return true; // nothing to protect yet
   if (newCity.trim().toLowerCase() === existingCity.trim().toLowerCase()) return true;
 
   const ownWords = personsOwnLines(transcript);
+  // "I'm in NYC now, moved last week": being there counts as home only when their own words also say they moved.
+  if (MOVED_SOMEWHERE.test(ownWords)) {
+    const m = BEING_IN.exec(ownWords);
+    if (m && placeLikeWordFollows(ownWords.slice(m.index + m[0].length, m.index + m[0].length + 40), newCity)) return true;
+  }
   for (const re of LIVES_THERE) {
     const m = re.exec(ownWords);
     if (!m) continue;
@@ -1071,6 +1086,8 @@ export async function storeProfile(
       proposal: { from: existing.city, to: clean.city },
       checks: [{ name: "they_said_they_live_there", pass: cityAllowed, reason: cityAllowed ? "their own words place them there" : "named as a preference, not a move" }],
     }).catch(() => {});
+    // Their home as a fact with its source and date (services/whereabouts.ts): their own line, kept with the move.
+    if (cityAllowed) await import("./whereabouts.js").then((W) => W.storeHome(user_id, clean.city!, personsOwnLineFor(transcript, clean.city!))).catch(() => {});
   }
   const longTermDirectionMerged = clean.long_term_direction || existing?.long_term_direction || null;
 
