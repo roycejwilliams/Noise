@@ -296,5 +296,13 @@ check("offers are offers", ["I can intro you to someone there.", "Want me to boo
   const inbound = await turn(`Hey. What's on your mind? ${WOKE}`, { their: "Hey Cue.", sys: `${system}\nThis call: they called you.`, sameQuestion: judge(true) });
   check("a same-answer follow-on on any turn is the turn's question: said", said(inbound, WOKE), inbound);
 }
+{
+  // "AV" (audio/visual) is vocabulary, not a name (golden checkin-thread-echo, 2026-11-10: "…by when (final count, AV…)" was held as a
+  // name nothing gave it, in the golden hard rule and, through the same list, on calls).
+  const H = await import("../lib/hardRules.js");
+  const line = "Then get the menu sorted with the venue, and ask what they need from you and by when (final count, AV, dietary needs).";
+  check("AV is in the common terms", G.SPOKEN_COMMON.split(" ").includes("AV"));
+  check("the hard rule doesn't read AV as a name", !(H as any).inventedFacts({ text: line, facts: "", theirLines: ["Hayes Valley just confirmed! What should I sort out next for the 14th?"], coLines: [], firstName: "Jordan" }).some((x: string) => /\(AV\)/.test(x)));
+}
 console.log(`offerGuardFalsePositives: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

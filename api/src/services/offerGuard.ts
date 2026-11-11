@@ -157,7 +157,7 @@ export const HELD_OFFER_LINE = "That's not something I can do from here.";
 
 // Capitalized words that are formats, everyday apps and titles, not a claim about anyone or anywhere ("I'll send the PDF",
 // "a Google Doc"). They back a spoken name like any source line (callLlmProxy.ts callSources); a promise's subject never.
-export const SPOKEN_COMMON = "PDF Google Doc Docs Sheets Slides Drive Gmail Calendar LinkedIn Instagram iMessage Messages FaceTime Zoom Slack Notion Luma Calendly Venmo Uber Lyft Airbnb Eventbrite AI CEO CTO COO CFO VC VCs FAQ RSVP ASAP ETA TBD ID URL Mr Mrs Ms Dr Q1 Q2 Q3 Q4";
+export const SPOKEN_COMMON = "PDF Google Doc Docs Sheets Slides Drive Gmail Calendar LinkedIn Instagram iMessage Messages FaceTime Zoom Slack Notion Luma Calendly Venmo Uber Lyft Airbnb Eventbrite AI CEO CTO COO CFO VC VCs FAQ RSVP ASAP ETA TBD ID URL AV Mr Mrs Ms Dr Q1 Q2 Q3 Q4";
 
 // The call prompt's sections that carry what Co knows about them (services/elevenLabsCalls.ts CALL_CONTEXT_BLOCK, CALL_NOW).
 const KNOWN_SECTION = /^# (?:What you know about|Right now|What (?:Co|Cue) has found for them)\b/;
