@@ -582,7 +582,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // once, with the check's reasons. Once a turn, only while a redraft can still follow (read again now: the check takes time), never
         // on a turn that touches their safety, and never once something has already answered them this turn (review of #457: the note's
         // "answer everything" would restate what went; a holding line isn't an answer). Past that, what the check left goes out as before.
-        if (message.trim() && canRedraft && !state.cutNudged && !ctx.safetyConcern && !state.safetyFlagged && !answeredSent().length && (ctx.redraftLeft?.() ?? true)) {
+        // A link sent on its own before the reply (DECISION_LINE: the pick's link with shareLink, then the reply) answers nothing in words,
+        // so it doesn't stop the redraft: the redraft restates no link.
+        if (message.trim() && canRedraft && !state.cutNudged && !ctx.safetyConcern && !state.safetyFlagged && !answeredSent().some((m) => !/^\s*https?:\/\/\S+\s*$/.test(m)) && (ctx.redraftLeft?.() ?? true)) {
           const { cutLostSubstance, cutRedraftNote } = await import("./cutRedraft.js");
           const g = ctx.lastGrounding?.() ?? null;
           if (g && cutLostSubstance(g)) {

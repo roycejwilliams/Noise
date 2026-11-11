@@ -46,7 +46,9 @@ const turn = (message: string, check: (draft: string) => G, o: { redraftLeft?: (
     dryRunReferents: SENT.map((s) => ({ name: s.name, url: s.url })),
   } as any) as any;
   const send = (m: string, toolCallId = "x") => t.tools.sendReply.execute({ message: m }, { toolCallId, messages: [] });
-  return { send, state: t.state, sends };
+  // The pick's link sent on its own first, as DECISION_LINE asks (Royce, 2026-11-11): "send its link again with shareLink before your reply".
+  const shareLink = (url: string) => t.tools.shareLink.execute({ urls: [url] }, { toolCallId: "link", messages: [] });
+  return { send, shareLink, state: t.state, sends };
 };
 const fail = (reason: string) => ({ name: "claim_other_person", pass: false, reason });
 
@@ -57,6 +59,7 @@ const CUT_0605: G = { draft: DRAFT_0605, final: "Tonight's SGLang x NVIDIA meetu
 const REDRAFT_0605 = "Tonight's SGLang x NVIDIA meetup is my pick. The page says it's drinks and talks with engineers working on inference and tooling, hosted by NVIDIA, SGLang and Modal, which beats the paper reading (a 45 minute discussion, good for learning, less for meeting) and the founder dinner (founders, not engineers).\n\nWhat you'd get is mostly learning from people doing inference work, with a chance to meet an engineer you could build with. Who actually shows up isn't something I can know.\n\nTonight 5:30-8:30pm: https://lu.ma/sglang-nvidia";
 {
   const t = turn(ASK_BEST, (d) => (d === DRAFT_0605 ? CUT_0605 : { draft: d, final: d, outcome: "as_drafted", checks: [] }));
+  await t.shareLink("https://lu.ma/sglang-nvidia");
   const r1 = await t.send(DRAFT_0605);
   check("06:05: a pick whose comparison the check cut isn't sent as its headline: one whole redraft, with the reason", r1.ok === false && /fact check couldn't back part of that reply/.test(r1.error) && /inference and tooling specifically/.test(r1.error) && t.sends.length === 0 && !t.state.sent, r1);
   const r2 = await t.send(REDRAFT_0605);
@@ -64,6 +67,7 @@ const REDRAFT_0605 = "Tonight's SGLang x NVIDIA meetup is my pick. The page says
   const visible = t.state.sentMessages.join("\n\n");
   check("final 06:05 sequence: one pick, a comparison with the options already sent, the benefit and its limit, the link", /my pick/.test(visible) && /paper reading/.test(visible) && /founder dinner/.test(visible) && /learning/.test(visible) && /meet an engineer/.test(visible) && /isn't something I can know/.test(visible) && /lu\.ma\/sglang-nvidia/.test(visible), visible);
   check("... and never the bare headline on its own", !t.state.sentMessages.includes("Tonight's SGLang x NVIDIA meetup is probably it."), t.state.sentMessages);
+  check("... the pick's link went once, first, on its own (a link sent before the reply doesn't stop the redraft)", t.state.sentMessages[0] === "https://lu.ma/sglang-nvidia" && t.state.sentMessages.filter((m: string) => m === "https://lu.ma/sglang-nvidia").length === 1, t.state.sentMessages);
 }
 // ---------------------------------------------------------------- 06:07, as it happened: details stripped to the honest line + a promise
 const DRAFT_0607 = "It's tonight, 5:30 to 8:30pm, NVIDIA and SGLang and Modal hosting the night before the SGLang Summit. Free, still open, no exact venue listed yet, so worth checking the page before heading out.";
@@ -82,14 +86,16 @@ const REDRAFT_0607 = "Tonight 5:30-8:30pm, hosted by NVIDIA, SGLang and Modal: d
 // ---------------------------------------------------------------- bounded: once a turn, then the existing behaviour
 {
   const t = turn(ASK_BEST, () => CUT_0605);
+  await t.shareLink("https://lu.ma/sglang-nvidia");
   await t.send(DRAFT_0605);
   const r2 = await t.send(DRAFT_0605);
-  check("a second cut in the same turn goes out as the check left it (one redraft a turn, never a loop)", r2.ok !== false && t.state.sentMessages[0] === CUT_0605.final, { r2, sent: t.state.sentMessages });
+  check("a second cut in the same turn goes out as the check left it (one redraft a turn, never a loop)", r2.ok !== false && t.state.sentMessages.includes(CUT_0605.final), { r2, sent: t.state.sentMessages });
 }
 {
   const t = turn(ASK_BEST, () => CUT_0605, { redraftLeft: () => false });
   const r = await t.send(DRAFT_0605);
-  check("no redraft when none can follow (last step, last seconds): what's left goes, as before", r.ok !== false && t.state.sentMessages[0] === CUT_0605.final, r);
+  // No redraft can follow, so the pick's link goes first on its own (#448, now on a decision ask too), then what the check left.
+  check("no redraft when none can follow (last step, last seconds): what's left goes, as before, after the pick's link", r.ok !== false && t.state.sentMessages[0] === "https://lu.ma/sglang-nvidia" && t.state.sentMessages[1] === CUT_0605.final, { r, sent: t.state.sentMessages });
 }
 {
   const t = turn(ASK_BEST, () => CUT_0605);
@@ -139,6 +145,7 @@ check("fit asks widened: 'why does this fit', 'is this relevant to me', 'relevan
 // ---------------------------------------------------------------- review of #457: never a redraft once something already answered them
 {
   const t = turn(ASK_BEST, (d) => (d === DRAFT_0605 ? CUT_0605 : { draft: d, final: d, outcome: "as_drafted", checks: [] }));
+  await t.shareLink("https://lu.ma/sglang-nvidia");
   t.state.sentMessages.push("Tonight's SGLang x NVIDIA meetup is my pick.");
   t.state.sent = true;
   t.state.workSinceSend = true;
@@ -147,6 +154,7 @@ check("fit asks widened: 'why does this fit', 'is this relevant to me', 'relevan
 }
 {
   const t = turn(ASK_BEST, (d) => (d === DRAFT_0605 ? CUT_0605 : { draft: d, final: d, outcome: "as_drafted", checks: [] }));
+  await t.shareLink("https://lu.ma/sglang-nvidia");
   t.state.sentMessages.push("Let me look");
   t.state.holdLines.push("Let me look");
   const r = await t.send(DRAFT_0605);
