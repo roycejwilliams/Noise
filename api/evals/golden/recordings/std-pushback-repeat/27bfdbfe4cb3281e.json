@@ -1,0 +1,102 @@
+{
+  "hash": "27bfdbfe4cb3281e",
+  "case": "std-pushback-repeat",
+  "recorded_at": "2026-11-11T20:54:39.022Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Thread: Cue: https://example.test/gradient-reading-club Cue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching. Cue: https://example.test/inference-engineers Cue: Inference Engi...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Thread:\nCue: https://example.test/gradient-reading-club\nCue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching.\nCue: https://example.test/inference-engineers\nCue: Inference Engineers Meetup, tonight 6:30pm in the Mission: talks on serving models in production.\nCue: https://example.test/foundry-founder-dinner\nCue: Foundry Founder Dinner, Friday 7:30pm: twelve seed-stage founders at one table.\nMember: Why the Foundry dinner over the reading club?\nCue: The dinner puts you at one table with twelve seed founders, so you'd hear who else is hiring engineers.\nMember: Hm ok but why is that good for me\nCue: Twelve founders at one table means you'll hear who's hiring engineers right now.\nMember: You said the same thing twice\nCue: Fair. Let me give you the actual difference instead of repeating myself.\n\nThe reading club's page explicitly says no pitching, no recruiting talk. It's structured around discussing one paper, so it's not a room built for talking about hiring, even though the people there are ML engineers.\n\nThe dinner is twelve seed-stage founders at one table, which is a format that puts you in direct conversation with each person rather than mingling. I don't know who any of the twelve are or whether they're hiring, so I can't promise it turns into a lead.\n\nIf the pitch-adjacent feel of a founder dinner is what drains you, the reading club is the easier night. If you'd rather take the shot at conversations that could lead somewhere on hiring, the dinner is built for that even without a guarantee.\nOn file: Details on file for \"Gradient Reading Club\": Thursday Oct 15, 7pm, a members' loft in SoMa; about 30 people, mostly ML researchers and engineers; one paper is read and discussed together; the page says \"no pitching, no recruiting talk\"; free, RSVP on the page. Not on file: which paper. Details on file for \"Inference Engineers Meetup\": Tuesday Oct 13, 6:30pm, a brewery hall in the Mission; three 15-minute talks on serving models in production, then open networking; about 120 RSVPs; free. Not on file: the speakers' names, who else attends. Details on file for \"Foundry Founder Dinner\": Friday Oct 16, 7:30pm, hosted by an early-stage fund; twelve seed-stage founders at one table; $40 a seat; apply on the page, the host picks the table. Not on file: who the other founders are. The member is a founder hiring a founding engineer; pitch-heavy events wear them out.\n\nCue's text:\n\"\"\"Fair. Let me give you the actual difference instead of repeating myself.\n\nThe reading club's page explicitly says no pitching, no recruiting talk. It's structured around discussing one paper, so it's not a room built for talking about hiring, even though the people there are ML engineers.\n\nThe dinner is twelve seed-stage founders at one table, which is a format that puts you in direct conversation with each person rather than mingling. I don't know who any of the twelve are or whether they're hiring, so I can't promise it turns into a lead.\n\nIf the pitch-adjacent feel of a founder dinner is what drains you, the reading club is the easier night. If you'd rather take the shot at conversations that could lead somewhere on hiring, the dinner is built for that even without a guarantee.\"\"\"\n\nAfter the member pointed out the repeat, does Cue own it in a few words at most and then give a genuinely DIFFERENT angle (a new reason from the details on file, an honest limit of the dinner, or reconsidering the pick, for example the reading club's room of ML engineers), not the same twelve-founders-who's-hiring point reworded, and without explaining how it works? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'Fair.' then pivots to no-pitching page detail, conversation format, and honest limit 'I don't know who any of the twelve are... can't promise it turns into a lead'\"}",
+      "usage": {
+        "input_tokens": 1394,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 433,
+        "output_tokens_details": {
+          "thinking_tokens": 359
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwoiQuDm7zRhMbrkkyYq",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'Fair.' then pivots to no-pitching page detail, conversation format, and honest limit 'I don't know who any of the twelve are... can't promise it turns into a lead'\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1394,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 433,
+          "output_tokens_details": {
+            "thinking_tokens": 359
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "27bfdbfe4cb3281e",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

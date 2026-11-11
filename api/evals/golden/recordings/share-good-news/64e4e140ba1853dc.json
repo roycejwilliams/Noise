@@ -1,0 +1,102 @@
+{
+  "hash": "64e4e140ba1853dc",
+  "case": "share-good-news",
+  "recorded_at": "2026-11-11T20:49:16.856Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member told Cue: \"We closed the seed round this morning. Two years of no's and it finally happened.\". Earlier: Member: \"Last partner meeting tomorrow at 10. If this one says no I'm going to take a long walk.\" / Cue: \"Then walk either way. You've earned the air.\".\n\nCue's text:\n\"\"\"Mara. Two years and it's done.\"\"\"\n\nDoes the text meet the news with real warmth AND something of Cue's own (a specific reaction, an observation or a question that follows from it), WITHOUT opening by restating what they said, generic praise only, or inventing details they didn't give (investors' names, amounts, what happens next)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Two years and it's done\\\" merely restates her words with no added warmth, reaction, or question.\"}",
+      "usage": {
+        "input_tokens": 296,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 132,
+        "output_tokens_details": {
+          "thinking_tokens": 84
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwoJvv67cHtnQRHZqCqU",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Ep0FCsQCCBMYAipAd98rpmSi8dNf+6DNO9Je/s+yLlOAIvWBY01ZfyVlW2i+KO6VbuxIPDsqXKRbSDeoABXjtq2baGJnUpxIObRVwzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBzKnT1wbCAToIBBAAGgwC2ooDTzcFGjcEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAX3shI488p77vza/IbecgM8WKl9lqn0kDW79HzhrrsnyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxf2UPCn36zcs6s2PIaDGaY6inlYHr1XV3IvSIwgHrAEUXwiFCESX6xdOn4wQQNR41UTDYtM7FnzP9XNoU2VojseOyDOJkUvHuHi2qvKoUCC7/FspdccndSRARQM9o2RD8NgQkUb8/tMRVjVpcrfgQK/5ROfMmf2yKC5TsAEZB2nPMjHN0dfxVLK5mnzlgVkx/smKTlDJS+BkT42kqvJz70hnJHbKz6WpBm0IqeL6hIEua3ZFBRg5LXc7dmpOAmE4mzbSP5Yg9mMT6aFbJowMK7uJeRCgroHhFMjnbJ7qdYnoIlW15pAdE83sNhXzyBHoUoizrE5l6pA1s1eqK+WXcPdmw5QaIDAs79k+wi9BkuZ8TNleB+8yRFAwpNVa9NbPCGeaKoV2twfuSYyVyk9HtZzxErYVJGVGdsTVpwnKI5vmwR8Ay4JsXcoAE2bHnY5C3voclVGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Two years and it's done\\\" merely restates her words with no added warmth, reaction, or question.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 296,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 132,
+          "output_tokens_details": {
+            "thinking_tokens": 84
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "64e4e140ba1853dc",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

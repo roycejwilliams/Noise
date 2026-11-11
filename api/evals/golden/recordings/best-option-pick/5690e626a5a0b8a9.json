@@ -1,0 +1,97 @@
+{
+  "hash": "5690e626a5a0b8a9",
+  "case": "best-option-pick",
+  "recorded_at": "2026-11-11T20:55:36.038Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week. Cue's text:...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week.\n\nCue's text:\n\"\"\"ERROR EVAL CAP: this call could pass the cost cap $1.72 ($1.6147 used). This run stops here so it cannot spend more. Raise EVAL_TOKEN_CAP / EVAL_COST_CAP_USD only if you mean to.\"\"\"\n\nDoes the reply make one clear pick, say briefly why it beats each of the other two, give the details that decide it and what's unknown, and say which kind of benefit it offers (meeting someone to build with, learning from practitioners, or both) without claiming who will be there?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Text is an error message ('ERROR EVAL CAP... This run stops here') with no pick, no comparison, no event details, and no stated benefit type.\"}",
+      "usage": {
+        "input_tokens": 325,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 65,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwonwbZ89ah4Bwk9hQy9",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Text is an error message ('ERROR EVAL CAP... This run stops here') with no pick, no comparison, no event details, and no stated benefit type.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 325,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 65,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "5690e626a5a0b8a9",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

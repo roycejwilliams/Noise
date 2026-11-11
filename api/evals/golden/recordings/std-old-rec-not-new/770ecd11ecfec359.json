@@ -1,0 +1,97 @@
+{
+  "hash": "770ecd11ecfec359",
+  "case": "std-old-rec-not-new",
+  "recorded_at": "2026-11-11T20:55:21.175Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: On Fri Oct 9 Cue sent the Northgate Founder Residency; the member said \"Not for me right now, I can't do 10 weeks in person. Maybe spring\". Today they asked \"Anything new worth my time this week?\" and Cue's sea...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: On Fri Oct 9 Cue sent the Northgate Founder Residency; the member said \"Not for me right now, I can't do 10 weeks in person. Maybe spring\". Today they asked \"Anything new worth my time this week?\" and Cue's search returned the residency again plus a new event, Applied ML Builders Night (Thu Oct 15, 6pm, SoMa, engineers demoing what they've shipped with small models).\n\nCue's text:\n\"\"\"Nothing's running on that right now. Want me to start on it?\nIf you want, I can start looking, whether that's events worth going to or something toward the founding engineer search.\"\"\"\n\nDoes Cue leave the residency out (or at most mention it as the one they already set aside for spring), never presenting it as new, and share what is actually new? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Cue's text never mentions Applied ML Builders Night at all, and says 'Nothing's running on that right now' instead of surfacing the new event or re-excluding the residency properly.\"}",
+      "usage": {
+        "input_tokens": 384,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 75,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwomqgpBPyvFLoh2yJei",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Cue's text never mentions Applied ML Builders Night at all, and says 'Nothing's running on that right now' instead of surfacing the new event or re-excluding the residency properly.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 384,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 75,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "770ecd11ecfec359",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

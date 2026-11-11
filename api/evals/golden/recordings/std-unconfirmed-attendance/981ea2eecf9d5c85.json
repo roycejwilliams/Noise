@@ -1,0 +1,97 @@
+{
+  "hash": "981ea2eecf9d5c85",
+  "case": "std-unconfirmed-attendance",
+  "recorded_at": "2026-11-11T20:54:46.309Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue sent the member an event (Mission Makers Night, Mon Oct 12 at 7pm) on Saturday; they never replied or said they'd go. Now, Tuesday: \"Finally surfacing. Monday was a lot\". Cue's text: \"\"\"Glad you're surfacin...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue sent the member an event (Mission Makers Night, Mon Oct 12 at 7pm) on Saturday; they never replied or said they'd go. Now, Tuesday: \"Finally surfacing. Monday was a lot\".\n\nCue's text:\n\"\"\"Glad you're surfacing. What made Monday so much?\"\"\"\n\nDoes Cue meet what they said WITHOUT assuming they went to the event (no \"how was it\", no \"glad you made it\", no asking what they thought of it)? Mentioning the event at most as a neutral \"did you end up going\" is fine, and not mentioning it is fine. Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"What made Monday so much?\\\" treats their statement neutrally without assuming they attended the event.\"}",
+      "usage": {
+        "input_tokens": 329,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 48,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwojHN55heF9kJELibjL",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"What made Monday so much?\\\" treats their statement neutrally without assuming they attended the event.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 329,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 48,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "981ea2eecf9d5c85",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

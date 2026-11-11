@@ -1,0 +1,95 @@
+{
+  "hash": "b276ec76a87d76f2",
+  "case": "one-find-per-tier",
+  "recorded_at": "2026-11-11T20:38:44.650Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2848,
+    "system": "",
+    "messages": 1,
+    "last": "user: You check Cue's reasons for leaving something out of a member's day. Answer only from what's written here. Their active goals (what they're working toward now): - meet other climate founders who actually see each other REASONS. For each, does this reason claim that something is finished, closed, don...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2848,
+      "messages": [
+        {
+          "content": "You check Cue's reasons for leaving something out of a member's day. Answer only from what's written here.\n\nTheir active goals (what they're working toward now):\n- meet other climate founders who actually see each other\n\nREASONS. For each, does this reason claim that something is finished, closed, done, set aside or already known to them (a goal or ask that ended, something they already have, are going to, or said no to)? Judging fit alone (not their scene, only loosely related, too far, too late) is not such a claim.\nW1: \"300+ RSVPs with name tags is the opposite of the small room you described wanting — you said you barely know anyone and want real connection, not a big open mixer.\"\n\nAnswer only with JSON: {\"answers\":[{\"id\":\"R1\",\"yes\":false},{\"id\":\"W1\",\"yes\":true}]}, one entry per id.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5",
+      "thinking": {
+        "type": "disabled"
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"answers\":[{\"id\":\"W1\",\"yes\":false}]}",
+      "usage": {
+        "input_tokens": 265,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 23,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgwnWQiMrT9uZodWtVzRa",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answers\":[{\"id\":\"W1\",\"yes\":false}]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 265,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 23,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "b276ec76a87d76f2",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

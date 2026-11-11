@@ -1,0 +1,102 @@
+{
+  "hash": "f10cdb263c614e48",
+  "case": "std-best-option-this-week",
+  "recorded_at": "2026-11-11T20:51:48.597Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Gradient Reading Club, Thursday 7pm. Out of the three, it's the one built for people doing the actual work, not pitching: the page says no pitching, no recruiting talk, just a paper read and discussed together, about 30 ML researchers and engineers in a SoMa loft. Free, RSVP on the page. It's a room to learn from and meet people building this stuff, more than a hunting ground, since the dinner's seat-at-the-table format and the meetup's 120-person crowd both lean more toward pitching and networking, which you said wears you down. No idea yet who specifically shows up, just what the page says the night is for.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 337,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 63,
+        "output_tokens_details": {
+          "thinking_tokens": 60
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgwoWBzkjLJtRwMgucXFA",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSlQYKEAgTGAI4AUIIdGhpbmtpbmcSDFUkkOUxy63g8oFeExoMbDwfjuCbeAiIEy4JIjDOWGR4lIhnSTaX0q7IM6gUW7hOLKvXyAcTuhFr42/5rqX0LhuqjSdQPv4vgjQnsVMqsgWOTv9XCXR11cM6y/RbAc6eNQDDZGSHTGcB6ejGJipGM9YXnzgypQPnlCu4iLKtAbnxT+f0ZJfrSCoacxdCYcVR4W5HVDdROSs9WYCPTc4F1VUyAFnt7WVEnbKS40oqkhPclds69qEk5DGNAaZRat6TNJNO0XNrE0SMuHGN03odRECp+RJ48/xhMnMZNySzEgpEPwctWIDbsFqQJTZuJfiqhJxkcL3HjfLemBWuKSWoS+ul15SFmDztWKM9fBf9pdCFUH4rTxM7yGzh/rnFJwXCQ5R/OdEwvWvDeYR/4qB2rvE9RCauGFmX9EeOIrk60behoRERRAkKeGVnngpA9EIIbELJGoeKM6XNieMxVTV7UAw4gnjyzCK8/9U9E1yv8qXWWswgl0/583r4Pm1wlKLes9pxneTmTKhgU9mV97UA0tPh7wVCdG5SyIioVIw8ubRkojVu/WrKquzV703pnwFr3jHdyXRxPizeQSXjf8PeNsgf3hZoGGg8BMtiajPRLYbiL0EN6z3OHhaEF/p78NzMvLf44AxcyiAwh+1wz74gAJ1yA0mR0O2y6ehgHeYoIGU7hlRYim3qivXpeBSo7+bZw9IHBvPZLgGLwbJQ5RRSxRDbHF2tKuc9NIE0LVnRboRrXLQffhErcLHVCyEZ1LHvM56pZlqYs2ADOIOwJG/YUp+0lVJCRWpqD/b02XlDW7BXZoQj5ERDefKdvkE0G6Q+ayyQHGcDpZ5DOG9dHomMTP3+bWuu5q8lgjk8COoOvKAAIhTjLy3yDvXyt8BgdZqk5oUBa5d29sRoPYIoE2CynVRzNlev6qksl27qVP3QXCdplcg2QRQXfVjRZV4YM/YR+Nw6uTyDzPTUVDQA8d9h2MjRTUEQJPc5l0HdfXYGGRHDyaG+nX/OocAMdHtO+YuGZpYYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 337,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 63,
+          "output_tokens_details": {
+            "thinking_tokens": 60
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "f10cdb263c614e48",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

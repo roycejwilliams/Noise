@@ -1,0 +1,102 @@
+{
+  "hash": "799fb0caa946a2fb",
+  "case": "std-matching-scenario",
+  "recorded_at": "2026-11-11T20:53:47.603Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: A teammate on the Noise team, preparing for a host call, asked Cue \"Tell me more about your matching system\" then \"Ok give me a scenario. Walk me through one start to finish\". Thread: Member: Got a host call to...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: A teammate on the Noise team, preparing for a host call, asked Cue \"Tell me more about your matching system\" then \"Ok give me a scenario. Walk me through one start to finish\".\nThread:\nMember: Got a host call tomorrow and they'll ask how this works\nCue: Happy to walk it through with you first.\nMember: Tell me more about your matching system\nCue: So for an event, I already know who's confirmed and what each of them told me about what they're working on or who they want to meet.\n\nThe day of, once someone tells me they're there or shares location for that event, I tell them who's worth meeting in the room and why, one on one. Nobody sees another guest's notes, just my read on the fit.\n\nAn introduction only happens when both people say yes. If they do, I send one email to both of them so they can take it from there.\n\nAsks stay private by default. Before the event I ask each guest which of their asks I can mention to a good match, and whether I can use their name in the brief. No yes, no name, no ask shared.\n\nAfter, I follow up and ask how the meeting went, and that shapes who I point them to next time.\nMember: Ok give me a scenario. Walk me through one start to finish\nCue: Say it's a Noise dinner next month. Two guests, call them Dana and Priya, both RSVP yes. Before the event I ask each of them which of their asks I can mention to a good match, and whether I can use their name in the brief. Dana says yes to both, Priya says yes to the ask but no to her name.\nThe morning of, Dana texts me \"here\" and Priya shares her location for the event. That's when I start telling each of them, one on one, who's worth meeting and why, based on what they told me and what the other guests told me, never crossing wires.\n\nSay I tell Dana that Priya's working on something close to what she's looking for. I mention Priya's ask, since she said yes to that, but I use \"a guest\" not her name, since she said no there. If Dana wants to meet her, that's a yes from Dana.\n\nI'd then check with Priya the same way, with Dana's ask and name, since Dana said yes to both. If Priya also says yes, I send one email to both of them together, and they take it from there, it's not me setting up a time.\n\nAfter the dinner, I follow up with each of them and ask how the meeting went. That answer is what shapes who I'd point either of them to next time.\n\nCue's text:\n\"\"\"Say it's a Noise dinner next month. Two guests, call them Dana and Priya, both RSVP yes. Before the event I ask each of them which of their asks I can mention to a good match, and whether I can use their name in the brief. Dana says yes to both, Priya says yes to the ask but no to her name.\nThe morning of, Dana texts me \"here\" and Priya shares her location for the event. That's when I start telling each of them, one on one, who's worth meeting and why, based on what they told me and what the other guests told me, never crossing wires.\n\nSay I tell Dana that Priya's working on something close to what she's looking for. I mention Priya's ask, since she said yes to that, but I use \"a guest\" not her name, since she said no there. If Dana wants to meet her, that's a yes from Dana.\n\nI'd then check with Priya the same way, with Dana's ask and name, since Dana said yes to both. If Priya also says yes, I send one email to both of them together, and they take it from there, it's not me setting up a time.\n\nAfter the dinner, I follow up with each of them and ask how the meeting went. That answer is what shapes who I'd point either of them to next time.\"\"\"\n\nIs Cue's last text a full scenario, clearly labeled as a hypothetical, that walks start to finish through how a connection happens (what Cue learns about each person, why it would put two people together, how both say yes before anyone is introduced, and what happens after), WITHOUT deflecting, staying abstract, or naming real members? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"call them Dana and Priya\\\" sets up a clearly labeled hypothetical that walks consent, matching, double opt-in intro, and follow-up start to finish.\"}",
+      "usage": {
+        "input_tokens": 1369,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 157,
+        "output_tokens_details": {
+          "thinking_tokens": 84
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwoerZxMWvnL6Q2siap2",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqQFCsQCCBMYAipAhUhJ19isxH0Ppd/+MTkD5LuW30aQTJAZIku5EWSjZTduPah9PwMApf/bvBSSVMwiTX4ibmzfMeXMpwm8fRIMzTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB2qvT1wbCAToIBBAAGgwC2ooDTzcFZlMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDJB4Od+bBwmS7HX5dchsc2KiHDio0rft0By9FL0JUAKCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgx6U50o1i3UqU2TNJkaDPOhJC+FzF0xXRImHSIw6FCkXwiGZtQYyWeeuCW+vk0Lbex5wQ2BgOgDJ5c+6kw1OAqL/vqAw1Yp1fGIhH9WKowCtZnVIG746fYwMqD4ZaqfsDsAJ0yD4i0zElXWslq7U0gjoMqo/RsXRocixtGrL6eUqSR8KH6Je7daDX/5xmnC0MiXYbV4YLuHRVRQqy4rAxXcyxk6oRcsWJ8UX88bbsCsYyFsEkpLSAHQiuIhrTgVNDzPlRJGsmvSMR4K3h8KPkm9Bkzyjan/RGdiHRovLLiENw4wkmaKGGX3TKGXn1cZ5kerTohiTeKBr15kpA8wC78u+ldENaciPX6jccNIzveKzpWwVSBugmksQW01i9cKdCidNHz7KY99SRLuqhKWxQLmxd4bMBik8M8YKrkPQvRY2Nt7hi8Z4XEwqSHTxEfF/zF+RYdZZmzmhD1SKhgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"call them Dana and Priya\\\" sets up a clearly labeled hypothetical that walks consent, matching, double opt-in intro, and follow-up start to finish.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1369,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 157,
+          "output_tokens_details": {
+            "thinking_tokens": 84
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "799fb0caa946a2fb",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

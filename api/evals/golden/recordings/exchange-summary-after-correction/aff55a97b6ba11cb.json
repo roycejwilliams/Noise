@@ -1,7 +1,7 @@
 {
   "hash": "aff55a97b6ba11cb",
   "case": "exchange-summary-after-correction",
-  "recorded_at": "2026-11-11T00:32:01.083Z",
+  "recorded_at": "2026-11-11T20:42:51.822Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\":\"They're clarifying they want the problem statement about the Theo situation, not whatever Cue just gave them\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants problem statement reframed around Theo situation\",\"pushback\":\"Cue gave a problem statement about something unrelated (matching/building), not about Theo\",\"lesson\":\"When he asks for 'my problem statement', ground it in whatever he was just talking about, not a prior unrelated thread.\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\",\"goals_challenges\"],\"missing\":[\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
+      "text": "{\"reason\":\"They're rejecting the cofounder problem statement and asking for one about Theo instead, correcting what Cue gave them.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants a problem statement about Theo\",\"pushback\":\"wanted the Theo problem statement, not the cofounder one\",\"lesson\":\"When he asks for 'my problem statement', check which thread he means before answering.\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
       "usage": {
         "input_tokens": 6553,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 432,
+        "output_tokens": 411,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgvCUyiiEvYMevZVudEsb",
+        "id": "msg_011CgwnpQTz7raAHfrmSWrRC",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\":\"They're clarifying they want the problem statement about the Theo situation, not whatever Cue just gave them\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants problem statement reframed around Theo situation\",\"pushback\":\"Cue gave a problem statement about something unrelated (matching/building), not about Theo\",\"lesson\":\"When he asks for 'my problem statement', ground it in whatever he was just talking about, not a prior unrelated thread.\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\",\"goals_challenges\"],\"missing\":[\"major_transition\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
+            "text": "{\"reason\":\"They're rejecting the cofounder problem statement and asking for one about Theo instead, correcting what Cue gave them.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":false,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"wants a problem statement about Theo\",\"pushback\":\"wanted the Theo problem statement, not the cofounder one\",\"lesson\":\"When he asks for 'my problem statement', check which thread he means before answering.\",\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":null,\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"current_situation\"],\"missing\":[\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"the problem about Theo\",\"item\":null,\"not_item\":null,\"between\":[]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 432,
+          "output_tokens": 411,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

@@ -1,0 +1,97 @@
+{
+  "hash": "b230edd16ca31f86",
+  "case": "best-option-from-reads",
+  "recorded_at": "2026-11-11T20:55:46.091Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on in...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on inference and tooling; drinks and talks; venue unknown), and a seated dinner for early-stage founders. The member wants a founding engineer.\n\nCue's text:\n\"\"\"ERROR EVAL CAP: this call could pass the cost cap $1.72 ($1.6524 used). This run stops here so it cannot spend more. Raise EVAL_TOKEN_CAP / EVAL_COST_CAP_USD only if you mean to.\"\"\"\n\nDoes the reply make one pick, compare it to the other two using those facts, name the benefit kind the facts support (learning from practitioners vs peer founders) with its limit, and avoid claiming who will be there?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"The text is a cost cap error message, not a reply recommending an event: 'this call could pass the cost cap $1.72'\"}",
+      "usage": {
+        "input_tokens": 373,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 55,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwoogbSWzsySYWUvbmtM",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"The text is a cost cap error message, not a reply recommending an event: 'this call could pass the cost cap $1.72'\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 373,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 55,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "b230edd16ca31f86",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

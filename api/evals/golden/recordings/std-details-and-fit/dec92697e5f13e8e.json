@@ -1,0 +1,102 @@
+{
+  "hash": "dec92697e5f13e8e",
+  "case": "std-details-and-fit",
+  "recorded_at": "2026-11-11T20:52:23.662Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Thread: Cue: https://example.test/gradient-reading-club Cue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching. Cue: https://example.test/inference-engineers Cue: Inference Engi...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Thread:\nCue: https://example.test/gradient-reading-club\nCue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching.\nCue: https://example.test/inference-engineers\nCue: Inference Engineers Meetup, tonight 6:30pm in the Mission: talks on serving models in production.\nCue: https://example.test/foundry-founder-dinner\nCue: Foundry Founder Dinner, Friday 7:30pm: twelve seed-stage founders at one table.\nMember: What's the best option for me this week?\nCue: The Inference Engineers Meetup tonight.\nMember: What's the details and why it fits?\nCue: Tonight at 6:30, a brewery hall in the Mission. Three 15-minute talks on serving models in production, then open networking, about 120 RSVPs, free.\nIt's built more for learning than pitching, the format's talks first, no founder-table vibe, which matches you not wanting another pitch-heavy night. Good room to pick up what other teams are doing with inference at scale, though no way to know who specifically shows up.\nOn file: Details on file for \"Inference Engineers Meetup\": Tuesday Oct 13, 6:30pm, a brewery hall in the Mission; three 15-minute talks on serving models in production, then open networking; about 120 RSVPs; free. Not on file: the speakers' names, who else attends. The member is a founder hiring a founding engineer.\n\nCue's text:\n\"\"\"Tonight at 6:30, a brewery hall in the Mission. Three 15-minute talks on serving models in production, then open networking, about 120 RSVPs, free.\nIt's built more for learning than pitching, the format's talks first, no founder-table vibe, which matches you not wanting another pitch-heavy night. Good room to pick up what other teams are doing with inference at scale, though no way to know who specifically shows up.\"\"\"\n\nIs it one coherent answer that gives the details on file, NAMES the kind of benefit (for example: meeting a potential hire or collaborator, versus learning from practitioners) rather than a vague \"good fit\", and says its limits (what isn't known, like who attends, or what the format makes hard), without inventing anything, promising unrelated follow-up, or restating their goal back to them? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"which matches you not wanting another pitch-heavy night\\\" restates an assumed goal back to the member instead of just naming the benefit and limits.\"}",
+      "usage": {
+        "input_tokens": 895,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 652,
+        "output_tokens_details": {
+          "thinking_tokens": 588
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwoYHp4ZSGH8EYHYbdiq",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"which matches you not wanting another pitch-heavy night\\\" restates an assumed goal back to the member instead of just naming the benefit and limits.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 895,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 652,
+          "output_tokens_details": {
+            "thinking_tokens": 588
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "dec92697e5f13e8e",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
