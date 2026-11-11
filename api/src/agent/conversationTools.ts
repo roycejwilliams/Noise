@@ -653,8 +653,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         let message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent(), findsWaitingNow) : draft, ctx.resolvedContent);
         // The check cut the substance (agent/cutRedraft.ts, Royce 2026-11-11): what's left doesn't go; the whole reply is written again
         // once, with the check's reasons. Once a turn, only while a redraft can still follow (read again now: the check takes time), never
-        // on a turn that touches their safety. Past that, what the check left goes out as before.
-        if (message.trim() && canRedraft && !state.cutNudged && !ctx.safetyConcern && !state.safetyFlagged && (ctx.redraftLeft?.() ?? true)) {
+        // on a turn that touches their safety, and never once something has already answered them this turn (review of #457: the note's
+        // "answer everything" would restate what went; a holding line isn't an answer). Past that, what the check left goes out as before.
+        if (message.trim() && canRedraft && !state.cutNudged && !ctx.safetyConcern && !state.safetyFlagged && !answeredSent().length && (ctx.redraftLeft?.() ?? true)) {
           const { cutLostSubstance, cutRedraftNote } = await import("./cutRedraft.js");
           const g = ctx.lastGrounding?.() ?? null;
           if (g && cutLostSubstance(g)) {

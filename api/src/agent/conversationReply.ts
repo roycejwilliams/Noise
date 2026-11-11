@@ -41,12 +41,15 @@ export function replyLengthLine(message: string): string | null {
 // suggestions"; from that morning's turn: "best option for me this week?" got a bare pick, and "why it fits?" got the member's own goal
 // said back instead of what the event offers). Code only spots the ask; the model decides the pick and the reasons, from the facts.
 // Only on these asks, so every other turn's prompt is unchanged.
-export const DECISION_ASK = /\b(?:best (?:option|one|bet|pick|choice)|which (?:one|of (?:these|those|them|the)\b|(?:is|would be|sounds) better)|(?:should|do) i (?:go(?: to)?|pick|choose|do|hit) [^?.!]{1,80}\bor\b|pick (?:one )?for me|choose for me|what would you (?:pick|choose|go (?:with|to))|if you were me)\b/i;
-export const FIT_ASK = /\bwhy (?:it|this|that)(?: one)? (?:fits|works|makes sense|is (?:a )?(?:good )?(?:fit|pick))\b|\bwhy (?:is )?(?:it|this|that)(?: one)? (?:for|right for) me\b|\bhow (?:does )?(?:it|this|that) fit\b|\bwhy (?:should|would) i go\b|\bwhy (?:this|that) one\b/i;
+export const DECISION_ASK = /\b(?:best (?:option|one|bet|pick|choice)|which (?:one|of (?:these|those|them|the)\b|(?:is|would be|sounds) better)|(?:should|do) i (?:go(?: to)?|pick|choose|hit) (?![^?.!]*\bor not\b)[^?.!]{1,80}\bor\b|pick (?:one )?for me|choose for me|what would you (?:pick|choose|go (?:with|to)|do)|if you were me|(?:is|are) (?:it|this|that|they|the [\w'-]+(?: [\w'-]+)?) worth (?:it|going|the trip|my time)\b)|^\s*(?:the )?[\w'&-]+(?: [\w'&-]+){0,3} or (?!not\b)(?:the )?[\w'&-]+(?: [\w'&-]+){0,3}\s*\?\s*$/i;
+export const FIT_ASK = /\bwhy (?:it|this|that)(?: one)? (?:fits|works|makes sense|is (?:a )?(?:good )?(?:fit|pick))\b|\bwhy (?:is )?(?:it|this|that)(?: one)? (?:for|right for) me\b|\bhow (?:does )?(?:it|this|that) fit\b|\bwhy (?:does|would) (?:it|this|that)(?: one)? (?:fit|suit|work for)\b|\b(?:is |how is |why is )?(?:it|this|that)(?: one)? relevant (?:to|for) me\b|\brelevant to me\b|\bwhy (?:should|would) i go\b|\bwhy (?:this|that) one\b/i;
 export const DECISION_LINE = "They're asking you to choose. Pick one and own it, in one reply: why it beats the other options you already sent them, naming each in a short clause from its own facts; the details that decide it (when, where, cost, how to get in); what you don't know about it; and its link.";
 export const FIT_LINE = "Say which kind of good it is for them, from the event's own facts (who it's for, its format, its hosts): a room to meet someone they could build or work with, a room to learn from people doing the work, or both, said as which. Then its limit: who actually comes isn't known, so say what the page says the night is for, never who will be there. Their own goal comes in only in their words, as why that kind of good matters to them.";
-// Pure on its inputs: adds the lines this message asks for to the turn's instructions.
-export function addAnswerShapeLines(rf: ReplyFacts, message: string): void {
+// Pure on its inputs: adds the lines this message asks for to the turn's instructions, only when Cue has sent them finds to choose
+// among (review of #457: "which of the three is cheapest?" or "should I take the offer?" with no finds sent aren't event decisions).
+// findsSent: the turn's referents or recent sent finds, or a sent find's facts in this reply's facts (services/turnContext.ts).
+export function addAnswerShapeLines(rf: ReplyFacts, message: string, findsSent = rf.facts.some((f) => /^Cue sent them "/.test(f.text))): void {
+  if (!findsSent) return;
   if (DECISION_ASK.test(message)) addInstruction(rf, DECISION_LINE);
   if (DECISION_ASK.test(message) || FIT_ASK.test(message)) addInstruction(rf, FIT_LINE);
 }
@@ -430,7 +433,7 @@ export async function runConversationReplyAgent(
   if (noFirstRead) withdrawDoorMoment(input.facts, noFirstRead.why);
 
   // A decision or a why-it-fits ask gets its answer-shape line (addAnswerShapeLines). Texts only: a photo turn answers the photo.
-  if (!input.imageForVision) addAnswerShapeLines(input.facts, input.resolvedContent);
+  if (!input.imageForVision) addAnswerShapeLines(input.facts, input.resolvedContent, !!input.turn?.referents?.length || !!input.turn?.sent?.some((s) => Date.now() - s.sentAt.getTime() < 14 * 86_400_000) || input.facts.facts.some((f) => /^Cue sent them "/.test(f.text)));
 
   const lastCoMessage = lastCoLine(input.recentConversation);
   // Real context on them: anything in their snapshot's first four sections (what they said, what they're in the middle of, how they

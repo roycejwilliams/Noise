@@ -117,11 +117,41 @@ check("questions about what's ahead do", RG.asksWhatsAhead("what's coming up for
 // ---------------------------------------------------------------- the decision and why-it-fits lines ride only on those asks
 check("'best option' and 'which one' are decision asks", CRP.DECISION_ASK.test(ASK_BEST) && CRP.DECISION_ASK.test("which one should I go to?") && CRP.DECISION_ASK.test("should I go to the dinner or the meetup?"));
 check("'why it fits' is a fit ask; a plain question is neither", CRP.FIT_ASK.test(ASK_WHY) && !CRP.DECISION_ASK.test("what time is it?") && !CRP.FIT_ASK.test("what time is it?"));
-const rf = () => ({ facts: [], instructions: [] }) as any;
+// With finds sent: a sent find's facts in this reply's facts (services/turnContext.ts sentFindFacts starts "Cue sent them").
+const rf = () => ({ facts: [{ id: "F1", kind: "known", text: 'Cue sent them "SGLang x NVIDIA Meetup" on Nov 10; the link it sent: https://lu.ma/sglang-nvidia.' }], instructions: [] }) as any;
 const r1 = rf(); CRP.addAnswerShapeLines(r1, ASK_BEST);
 const r2 = rf(); CRP.addAnswerShapeLines(r2, ASK_WHY);
 const r3 = rf(); CRP.addAnswerShapeLines(r3, "just landed");
 check("a decision ask gets the pick-and-compare line and the benefit line; a why-it-fits ask the benefit line; others nothing", r1.instructions.length === 2 && r1.instructions.includes(CRP.DECISION_LINE) && r1.instructions.includes(CRP.FIT_LINE) && r2.instructions.length === 1 && r2.instructions[0] === CRP.FIT_LINE && r3.instructions.length === 0, { r1, r2, r3 });
+// Review of #457: only when Cue has sent them finds to choose among; the misses and false hits it found.
+const none = () => ({ facts: [], instructions: [] }) as any;
+const n1 = none(); CRP.addAnswerShapeLines(n1, "Which of the three is cheapest?");
+const n2 = none(); CRP.addAnswerShapeLines(n2, "would you take the offer?");
+const n3 = none(); CRP.addAnswerShapeLines(n3, ASK_BEST);
+check("no finds sent: no decision or benefit line, whatever the ask", n1.instructions.length === 0 && n2.instructions.length === 0 && n3.instructions.length === 0);
+const s1 = rf(); CRP.addAnswerShapeLines(s1, ASK_BEST, false);
+const s2 = rf(); CRP.addAnswerShapeLines(s2, ASK_BEST, true);
+check("the caller's finds-sent read decides (referents or recent sends)", s1.instructions.length === 0 && s2.instructions.length === 2);
+check("now caught: 'Dinner or meetup?', 'What would you do?', 'is the dinner worth it?'", ["Dinner or meetup?", "What would you do?", "is the dinner worth it?"].every((m) => CRP.DECISION_ASK.test(m)));
+check("not decisions: 'should i do this or not', 'would you take the offer?'", !CRP.DECISION_ASK.test("should i do this or not") && !CRP.DECISION_ASK.test("should i do this or not?") && !CRP.DECISION_ASK.test("would you take the offer?"));
+check("fit asks widened: 'why does this fit', 'is this relevant to me', 'relevant to me?'", ["why does this fit?", "Why does that one suit me", "is this relevant to me?", "relevant to me?"].every((m) => CRP.FIT_ASK.test(m)));
+
+// ---------------------------------------------------------------- review of #457: never a redraft once something already answered them
+{
+  const t = turn(ASK_BEST, (d) => (d === DRAFT_0605 ? CUT_0605 : { draft: d, final: d, outcome: "as_drafted", checks: [] }));
+  t.state.sentMessages.push("Tonight's SGLang x NVIDIA meetup is my pick.");
+  t.state.sent = true;
+  t.state.workSinceSend = true;
+  const r = await t.send(DRAFT_0605);
+  check("a cut after an earlier text already answered this turn goes as the check left it (no 'answer everything' redraft restating it)", r.ok !== false && !t.state.cutNudged, r);
+}
+{
+  const t = turn(ASK_BEST, (d) => (d === DRAFT_0605 ? CUT_0605 : { draft: d, final: d, outcome: "as_drafted", checks: [] }));
+  t.state.sentMessages.push("Let me look");
+  t.state.holdLines.push("Let me look");
+  const r = await t.send(DRAFT_0605);
+  check("... a holding line isn't an answer: the redraft still happens", r.ok === false && /Write the whole reply again/.test(r.error), r);
+}
 
 console.log(`cut redraft: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
