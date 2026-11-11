@@ -99,5 +99,22 @@ check("needQuality seeds the real path's facts (running work, sent records)", /r
   check("a promise in another sentence of the same reply is still cut", RG.unbackedFollowup("You tell me what you want, I keep an eye out. I'll text you the moment something turns up.", rf) !== null);
 }
 
+// Fixes 1 and 2 (2026-11-10 paid run): the eval grades what was sent in order (a shared link included), runs a subset, and a dry run's
+// listOpenAsks can report the fixture's running search.
+{
+  const needSrc = readFileSync(new URL("./needQuality.ts", import.meta.url), "utf8");
+  check("needQuality grades the dry-run sends in order (shared links and replies)", /would share link \(\\S\+\)/.test(needSrc) && /separate texts in send order/.test(needSrc));
+  check("needQuality takes --only and passes the fixture's running search to listOpenAsks", /--only/.test(needSrc) && /dryRunOpenAsks: c\.seed\.running\.map/.test(needSrc));
+  check("needQuality prints tools and fact-check cuts", /tools: \$\{/.test(needSrc) && /fact check \$\{g\.outcome\}/.test(needSrc));
+  const T = await import("../../src/agent/conversationTools.js");
+  const quiet = console.log;
+  console.log = () => {};
+  const t = T.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "anything yet?", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, dryRunOpenAsks: [{ text: "ways to meet backend engineers in SF", type: "seeking" }], sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any);
+  const open = await (t.tools as any).listOpenAsks.execute({}, { toolCallId: "1", messages: [] });
+  const none = await (T.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "x", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any).tools as any).listOpenAsks.execute({}, { toolCallId: "2", messages: [] });
+  console.log = quiet;
+  check("dry-run listOpenAsks reports the fixture's asks; without them, nothing (as before)", open.asks?.[0]?.text === "ways to meet backend engineers in SF" && none.asks?.length === 0, { open, none });
+}
+
 console.log(`\nneed-matched replies: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
