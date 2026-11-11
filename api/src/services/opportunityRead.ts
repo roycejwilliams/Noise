@@ -116,13 +116,21 @@ const SOFT = new Set("that this with from their they there about into what which
 const stem1 = (w: string) => { const x = w.replace(/(?:ings?|ers?|ies|es|s)$/, ""); return x.length >= 4 ? x : w; };
 const stemOf = (w: string) => stem1(stem1(w));
 const substance = (t: string) => (t.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !SOFT.has(w)).map(stemOf);
+// Numbers and negation count too (second review of #456: "for 150 to 200 founders" held against "15 to 20", and "not for investors"
+// against "for investors and founders"): every number in the paraphrase is in the quote, and both say no, or neither does.
+const NUMBERS = (t: string) => new Set(t.replace(/,/g, "").match(/\d+(?:\.\d+)?/g) ?? []);
+const NEGATION = /\b(?:not|no|never|none|nobody|without|n't|cannot|isn't|aren't|won't|don't|doesn't)\b|n't\b/i;
 export function paraphraseHolds(text: string, quote: string): boolean {
   const q = new Set(substance(quote));
-  return substance(text).every((w) => q.has(w));
+  if (!substance(text).every((w) => q.has(w))) return false;
+  const qn = NUMBERS(quote);
+  if (![...NUMBERS(text)].every((n) => qn.has(n))) return false;
+  return NEGATION.test(text) === NEGATION.test(quote);
 }
 // What the page's words must carry for each kind of benefit.
 export const BENEFIT_CUE: Record<BenefitKind, RegExp> = {
-  meet_collaborators: /\b(?:co-?founders?|collaborat\w*|team up|hiring|recruit\w*|join (?:a|an|our|the) (?:team|startup)|build (?:together|with)|looking for (?:a |an )?(?:co-?founder|engineer|partner|teammate)|match(?:ed|ing)? (?:with|you)|partners?)\b/i,
+  // Never a bare "partners" ("hosted with our partners at Acme": second review of #456).
+  meet_collaborators: /\b(?:co-?founders?|collaborat\w*|team up|hiring|recruit\w*|join (?:a|an|our|the) (?:team|startup)|build (?:together|with)|looking for (?:a |an )?(?:co-?founder|engineer|partner|teammate)|match(?:ed|ing)? (?:with|you)|find (?:a |your )?(?:co-?founder|collaborator|teammate|partner)|partner up)\b/i,
   learn_from_practitioners: /\b(?:talks?|demos?|present\w*|speakers?|panels?|workshops?|fireside|lessons?|learn\w*|shares?|sharing|discussion|deep dives?|case stud\w*)\b/i,
   fundraising: /\b(?:investors?|vcs?|venture|rais(?:e|ing)|fund(?:ing|raising)?|capital|pitch\w*|angels?)\b/i,
   peer_founders: /\b(?:founders?|ceos?|builders?|operators?)\b/i,
@@ -153,6 +161,12 @@ export function readIsCurrent(m: Readable, now: Date = new Date()): boolean {
 
 // The read, from what was just read at send. Never throws: a model read that fails or can't be held to the page leaves the structured
 // facts and an unknown, never an invented line.
+// One read per page, shared by every member and search in this process (second review of #456): keyed by its link and the hash of the
+// page text it came from, kept READ_MAX_AGE_MS. A read holds no member data (the page's facts, its unknowns, what they support).
+const sharedReads = new Map<string, OpportunityRead>();
+export const clearSharedReads = () => sharedReads.clear();
+const sharedKey = (url: string | null, hash: string) => `${url ?? ""}|${hash}`;
+
 // o.text: the page text read now at discovery (the find has no send-time read yet); otherwise its event record or send-time page.
 export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = new Date(), o: { text?: string } = {}): Promise<OpportunityRead> {
   if (!o.text && readIsCurrent(m, now)) return m.read!;
@@ -163,6 +177,8 @@ export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = n
   const base = recordFacts(m.details);
   const page = String(m.details?.description ?? o.text ?? m.pageNow ?? "").slice(0, READ_TEXT_CHARS * 2);
   const hash = page.trim() ? { pageHash: pageHash(page) } : {};
+  const shared = hash.pageHash ? sharedReads.get(sharedKey(url, hash.pageHash)) : undefined;
+  if (shared && now.getTime() - Date.parse(shared.readAt) < READ_MAX_AGE_MS && shared.source === source) return shared;
   if (page.trim().length < 80 || !deps.model) return { v: 1, url, source, readAt, facts: base, unknowns: page.trim() ? [] : ["what happens there and who it's for: its page has no description"], benefits: [] };
   const parsed = await deps.model(readPrompt(m.name, page)).then((raw) => parseRead(raw, page)).catch(() => null);
   // A failed read keeps no hash, so the next read tries again.
@@ -170,7 +186,12 @@ export async function readOpportunity(m: Readable, deps: ReadDeps, now: Date = n
   // Structured fields win over a paraphrase of the same field.
   const have = new Set(base.map((f) => f.field));
   const facts = [...base, ...parsed.facts.filter((f) => !have.has(f.field) || !["when", "area", "cost", "registration"].includes(f.field))].slice(0, MAX_FACTS);
-  return { v: 1, url, source, readAt, facts, unknowns: parsed.unknowns, benefits: parsed.benefits, ...hash };
+  const read: OpportunityRead = { v: 1, url, source, readAt, facts, unknowns: parsed.unknowns, benefits: parsed.benefits, ...hash };
+  if (hash.pageHash) {
+    if (sharedReads.size > 2000) sharedReads.clear();
+    sharedReads.set(sharedKey(url, hash.pageHash), read);
+  }
+  return read;
 }
 
 // At discovery: a read for each kept find (after the gate: never an unread or exited one) that has none current, at most

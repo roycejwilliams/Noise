@@ -73,6 +73,7 @@ const detailedRead = {
 
 // ---------------------------------------------------------------- the read is made once, at the send-time read, and reused
 {
+  R.clearSharedReads();
   const page = { text: DETAILED_PAGE, gone: false };
   const stub = stubModel([detailedRead]);
   const saved: any[] = [];
@@ -83,6 +84,7 @@ const detailedRead = {
   check("send check: the read is made from the page just read and saved on the find", r.ok && r.match.read?.source === "own_page" && r.match.read.benefits.length === 2 && saved.length === 1 && saved[0].read, r);
   const again: any = await S.checkBeforeSend({ id: "c1", userId: "u", payload: { match: r.match } }, ZONE, deps);
   check("send check: within the fresh window the same read is reused, never a second model read", again.ok && stub.prompts.length === 1 && again.match.read === r.match.read);
+  R.clearSharedReads();
   const failing: any = { ...deps, readModel: async () => { throw new Error("down"); } };
   const r2: any = await S.checkBeforeSend({ id: "c2", userId: "u", payload: { match: { ...match } } }, ZONE, failing);
   check("send check: a read that fails never holds the send; it leaves an unknown, never an invented line", r2.ok && r2.match.read.facts.length === 0 && /couldn't be read/.test(r2.match.read.unknowns[0]), r2.match?.read);
@@ -201,6 +203,7 @@ const detailed: any = {
   const keptMatch = (): any => ({ tier: 3, kind: "opportunity", name: "Builders' Table", url: URL_, source: "web", reason: "", statedDates: { start: "2026-11-19" } });
   let fetches = 0;
   const pageDeps = (text: string) => ({ page: async () => (fetches++, { text, gone: false }) });
+  R.clearSharedReads();
   const stub = stubModel([detailedRead]);
   const items = [{ match: keptMatch() }, { match: { ...keptMatch(), name: "Undated Thing", url: "https://x.example/u" }, unread: { days: [], why: "unknown" } }];
   const d1 = await R.readKeptFinds(items, { model: stub.model, ...pageDeps(DETAILED_PAGE) }, { now: NOW });
@@ -209,6 +212,7 @@ const detailed: any = {
   const d2 = await R.readKeptFinds(d1.items, { model: stub.model, ...pageDeps(DETAILED_PAGE) }, { now: new Date(NOW.getTime() + 3_600_000) });
   check("discovery: once read, a later run doesn't read it again", d2.read === 0 && stub.prompts.length === 1 && fetches === 1);
   check("discovery: the picker sees its summary", SH.describeMatch(d1.items[0].match)!.startsWith("supports: meet_collaborators"));
+  R.clearSharedReads();
   const capped = await R.readKeptFinds(Array.from({ length: 9 }, (_, k) => ({ match: { ...keptMatch(), url: `${URL_}/${k}` } })), { model: stubModel([detailedRead]).model, ...pageDeps(DETAILED_PAGE) }, { now: NOW });
   check("discovery: bounded per run", capped.read === R.DISCOVERY_READS_PER_RUN && capped.items.length === 9 && capped.items.slice(R.DISCOVERY_READS_PER_RUN).every((i) => !i.match.read));
 
@@ -220,12 +224,14 @@ const detailed: any = {
   const changedStub = stubModel([detailedRead]);
   const changed: any = await S.checkBeforeSend({ id: "k2", userId: "u", payload: { match: d1.items[0].match } }, ZONE, sendDeps(`${DETAILED_PAGE} Update: now two tables.`, changedStub.model));
   check("send: the page changed since, so it's read again", changed.ok && changedStub.prompts.length === 1 && changed.match.read !== d1.items[0].match.read, changed);
+  R.clearSharedReads();
   const oldStub = stubModel([detailedRead]);
   const old = { ...d1.items[0].match, read: { ...d1.items[0].match.read, readAt: "2026-11-01T00:00:00.000Z" } };
   const stale: any = await S.checkBeforeSend({ id: "k3", userId: "u", payload: { match: old } }, ZONE, sendDeps(DETAILED_PAGE, oldStub.model));
   check("send: a read older than a week is read again, even when the page looks the same", stale.ok && oldStub.prompts.length === 1, stale);
 
   // A failed read never blocks discovery: the find goes on as it came.
+  R.clearSharedReads();
   const broken = await R.readKeptFinds([{ match: keptMatch() }], { model: async () => { throw new Error("down"); }, ...pageDeps(DETAILED_PAGE) }, { now: NOW });
   check("discovery: a read that fails leaves the find as it was (today's behavior)", broken.items.length === 1 && !broken.items[0].match.read && broken.failed === 1, broken);
   const noPage = await R.readKeptFinds([{ match: keptMatch() }], { model: stubModel([detailedRead]).model, page: async () => { throw new Error("fetch failed"); } }, { now: NOW });
@@ -262,18 +268,36 @@ const detailed: any = {
 
 // ---------------------------------------------------------------- one pace for Luma's pages (2026-11-11 9am: HTTP 429 on the third search)
 {
-  const ED = await import("../../src/services/eventDetails.js");
-  ED.resetLumaPace();
-  const t0 = 1_000_000;
-  const waits = [0, 1, 2, 3, 4].map(() => ED.lumaPaceWait(t0));
-  check("pace: five reads asked at once start a second apart, whichever search asks", JSON.stringify(waits) === JSON.stringify([0, 1000, 2000, 3000, 4000]), waits);
-  check("pace: a read asked after the queue drained starts at once", ED.lumaPaceWait(t0 + 60_000) === 0);
-  ED.resetLumaPace();
   const src = (await import("node:fs")).readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8");
-  check("pace: every real Luma page fetch goes through it (readLumaPage)", /if \(fetchImpl === fetch\) await lumaPace\(\);/.test(src));
+  check("pace: every real Luma page fetch goes through it (readLumaPage)", /if \(fetchImpl === fetch && !\(await lumaPace\(o\.lane \?\? "reply"\)\)\)/.test(src));
   let fetched = 0;
   const luma = await R.readKeptFinds([{ match: { tier: 2, kind: "public_event", name: "x", url: "https://lu.ma/abc", reason: "" } }], { model: stubModel([detailedRead]).model, page: async () => (fetched++, { text: DETAILED_PAGE, gone: false }) }, { now: NOW });
   check("discovery: a Luma link without its record is never fetched at discovery (it isn't paced there)", fetched === 0 && !luma.items[0].match.read);
+}
+
+// ---------------------------------------------------------------- second review of #456
+{
+  check("B: a number the quote doesn't have breaks the paraphrase", !R.paraphraseHolds("for 150 to 200 founders", "for 15 to 20 founders") && R.paraphraseHolds("for 15 to 20 founders", "An intimate evening for 15 to 20 founders"));
+  check("B: negation must agree", !R.paraphraseHolds("not for investors", "for investors and founders") && !R.paraphraseHolds("for investors", "not for investors") && R.paraphraseHolds("not for investors", "this night is not for investors"));
+  check("C: 'hosted with our partners at Acme' is no collaborator cue; 'find a cofounder' is", !R.BENEFIT_CUE.meet_collaborators.test("hosted with our partners at Acme") && R.BENEFIT_CUE.meet_collaborators.test("a night to find a cofounder"));
+  R.clearSharedReads();
+  const one = stubModel([detailedRead]);
+  const a = await R.readKeptFinds([{ match: { tier: 3, kind: "opportunity", name: "Builders' Table", url: "https://builders.example/table", reason: "" } }], { model: one.model, page: async () => ({ text: DETAILED_PAGE, gone: false }) }, { now: NOW });
+  const b = await R.readKeptFinds([{ match: { tier: 3, kind: "opportunity", name: "Builders' Table", url: "https://builders.example/table", reason: "" } }], { model: one.model, page: async () => ({ text: DETAILED_PAGE, gone: false }) }, { now: NOW });
+  check("D: two members with the same event page: one model read, shared", one.prompts.length === 1 && !!a.items[0].match.read && b.items[0].match.read?.pageHash === a.items[0].match.read?.pageHash, one.prompts.length);
+  const ED = await import("../../src/services/eventDetails.js");
+  ED.resetLumaPace();
+  const t0 = 5_000_000;
+  const sweep = Array.from({ length: 30 }, () => ED.lumaPaceTake(t0, ED.LUMA_PACE.sweepMaxWaitMs));
+  check("A: the sweep still paces: a burst of 4, then a second apart, bounded (past 20s it isn't queued)", JSON.stringify(sweep.slice(0, 6)) === JSON.stringify([0, 0, 0, 0, 1000, 2000]) && sweep.slice(0, 24).every((w) => w !== null) && sweep.slice(24).every((w) => w === null), sweep);
+  const reply = ED.lumaPaceTake(t0, ED.LUMA_PACE.replyMaxWaitMs);
+  check("A: a reply's read after 30 sweep reads returns at once (not read now), never waiting 30s behind them", reply === null);
+  check("A: a reply's read once the bucket refills goes right away", ED.lumaPaceTake(t0 + 60_000, ED.LUMA_PACE.replyMaxWaitMs) === 0);
+  ED.resetLumaPace();
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8");
+  check("A: a read the pace turns away is no refusal and overwrites nothing cached", /return \{ html: null, details: null, status: null, error: LUMA_PACED \}/.test(src) && /r\.error === LUMA_PACED \? \(cached\?\.details \?\? null\)/.test(src));
+  const rk = (await import("node:fs")).readFileSync(new URL("../../src/services/eventRanking.ts", import.meta.url), "utf8");
+  check("A: a ranking reads at most RANK_PAGE_READS pages, the best fits first", /needs\.length > RANK_PAGE_READS && askText \? await prefilterByFit\(needs, askText, RANK_PAGE_READS\)/.test(rk));
 }
 
 console.log(`\nopportunity fit: ${total - failed}/${total} passed`);
