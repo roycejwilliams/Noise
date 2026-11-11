@@ -182,6 +182,7 @@
     "evals/sweepSelect/shadowOff.ts",
     "evals/sentLookup/run.ts",
     "evals/sentLookup/recommendationMemory.ts",
+    "evals/opportunity/roundupPage.ts",
     "evals/goals/planCurrent.ts",
     "evals/goals/taperHolds.ts",
     "evals/proactive/specifics.ts",

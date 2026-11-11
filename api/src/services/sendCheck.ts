@@ -172,6 +172,11 @@ Return ONLY JSON: {"state": "open" | "closed" | "unclear", "quote": "the page's 
 const LIST_LINE = /^\s*(?:[-*•▪◦→>]|\d{1,2}[.)]|\p{Extended_Pictographic})\s*\S/u;
 // A headline that counts things ("Five places to look for founder support", "10 fellowships open now").
 const COUNT_HEADLINE = /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|top \d{1,2})\s+(?:[\w'-]+\s+){0,3}?(?:places|programs|programmes|ways|resources|things|options|opportunities|accelerators|fellowships|residencies|communities|grants|picks|orgs|organizations|funds|incubators)\b/i;
+// A page that counts the gatherings it covers ("lists three founder events", "5 dinners worth your evening"), read near its top; and how
+// much of a flat page is its title zone.
+const PAGE_COUNT = /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:[\w'-]+\s+){0,2}?(?:events|dinners|meetups|gatherings|mixers|salons|nights)\b/i;
+const PAGE_COUNT_CHARS = 1500;
+const PAGE_TITLE_CHARS = 160;
 const URLS = /https?:\/\/[^\s)"'<>\]]+/gi;
 // links: every candidate, those whose host carries its name or acronym first (named); the rest are only pages about it.
 export type Roundup = { items: number; line: string | null; links: string[]; named?: string[] };
@@ -183,11 +188,15 @@ export function roundupOf(text: string, name: string, o: { page?: boolean } = {}
   const t = String(text ?? "");
   if (!t.trim() || !name.trim() || !namesThing(t, name)) return null;
   const lines = t.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-  // Its first line names it: the post or page is about this thing, whatever else it lists (review of #441).
-  if (namesThing(lines[0] ?? "", name)) return null;
+  // Its first line names it: the post or page is about this thing, whatever else it lists (review of #441). A page read flat (the reader
+  // returns most web pages as one run of text) has no first line, so its opening is its title zone, never the whole page (2026-11-11: a
+  // blog post listing three founder events went out as one of them, because the flat page "named it in its first line").
+  const opening = o.page && lines.length <= 2 ? t.slice(0, PAGE_TITLE_CHARS) : (lines[0] ?? "");
+  if (namesThing(opening, name)) return null;
   const items = lines.filter((l) => LIST_LINE.test(l));
   const named = items.filter((l) => namesThing(l, name));
-  const headline = COUNT_HEADLINE.test(t.slice(0, 300));
+  // A page that counts the events it covers near its top ("the calendar lists three founder events this week") is a roundup too.
+  const headline = COUNT_HEADLINE.test(t.slice(0, 300)) || (!!o.page && PAGE_COUNT.test(t.slice(0, PAGE_COUNT_CHARS)));
   const isRoundup = o.page ? headline : (items.length >= 3 && named.length >= 1 && named.length < items.length) || headline;
   if (!isRoundup) return null;
   const line = named[0] ?? lines.find((l) => namesThing(l, name)) ?? null;
