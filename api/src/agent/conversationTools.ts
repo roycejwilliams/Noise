@@ -2470,6 +2470,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
+  // The reply loop is done (agent/conversationReply.ts, right after the model run): no late line after this, its timer cleared.
+  const endTurn = () => {
+    state.turnOver = true;
+    if (turnLoop?.lateTimer) clearTimeout(turnLoop.lateTimer);
+  };
   guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx), changed: (t) => ctx.facts?.changed?.(t) });
   // One reply, unless something new came in (2026-10-28 before/after run: a job-offer reply sent "That's huge, Priya. Congratulations."
   // then a second text, "Congratulations. That it's the first one in years...", and golden nothing-at-all records the same shape: a
@@ -2479,10 +2484,5 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // answer meant to ride with a link. Parallel calls in one step count: the first claims the turn's reply before it awaits anything.
   // Outermost, after the guard, so a held second text never reaches the guard's log as a send.
   wrapSendsForOneReply(tools as Record<string, any>, state, () => !!ctx.answerOwed, ctx.dryRun, () => askedForSomething(ctx.resolvedContent));
-  // The reply loop is done (agent/conversationReply.ts, right after the model run): no late line after this, its timer cleared.
-  const endTurn = () => {
-    state.turnOver = true;
-    if (turnLoop?.lateTimer) clearTimeout(turnLoop.lateTimer);
-  };
   return { tools: orderForCache(tools), state, flushLinks, loop: () => turnLoop, endTurn };
 }
