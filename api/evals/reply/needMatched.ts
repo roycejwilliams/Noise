@@ -88,5 +88,16 @@ check("grounding: a hope or guess of theirs said back as how it turned out is a 
 const need = readFileSync(new URL("./needQuality.ts", import.meta.url), "utf8");
 check("needQuality seeds the real path's facts (running work, sent records)", /runningWorkLine\(\[\], \[\], \{ asks: c\.seed\.running/.test(need) && /sentFindFacts\(/.test(need) && (need.match(/seed: \{/g) ?? []).length === 4);
 
+// Fix 3 (2026-11-10 paid run): a description of how Cue works on their word isn't a promise made now; a bare promise still is.
+{
+  const RG = await import("../../src/harness/replyGrounding.js");
+  const rf = RG.baseReplyFacts();
+  check("'You tell me what you want…, I keep an eye out…' is not an unbacked promise", RG.unbackedFollowup("The rest is the same instinct, just running all the time. You tell me what you want (a kind of person, a room, a program), I keep an eye out and bring you what fits.", rf) === null);
+  check("'When you tell me what you're after, I keep watching for it' is not one either", RG.unbackedFollowup("When you tell me what you're after, I keep watching for it.", rf) === null);
+  check("'When you get there, I'll text you the address' is still a promise (future, not a description)", RG.unbackedFollowup("When you get there, I'll text you the address.", rf) !== null);
+  check("a bare 'I'll keep an eye out' with nothing running is still cut", RG.unbackedFollowup("I'll keep an eye out for engineers this week.", rf) !== null);
+  check("a promise in another sentence of the same reply is still cut", RG.unbackedFollowup("You tell me what you want, I keep an eye out. I'll text you the moment something turns up.", rf) !== null);
+}
+
 console.log(`\nneed-matched replies: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

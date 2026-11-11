@@ -916,8 +916,25 @@ function clockTimes(s: string): string[] {
 // and never with a timing commitment. Co's own task is real scheduled work
 // (services/coTasks.ts): a follow-up it describes is kept, and the claim check
 // still needs it to cite that task.
+// A promise made now, not a description of how Cue works when they ask: a sentence conditioned on the member ("you tell me what you
+// want, I keep an eye out", "when you", "once you", "say you", "if you"), said in the present, describes what happens on their word, so
+// it isn't held to running work (2026-11-10 paid run: the matching walkthrough lost "You tell me what you want…, I keep an eye out" to this
+// check). A bare "I'll keep an eye out" with nothing running is still a promise.
+const MEMBER_CONDITION = /\b(?:you tell me|if you|when you|once you|say you)\b/i;
+export function standingPromiseMatch(text: string): RegExpMatchArray | null {
+  for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+    const m = followupPromiseMatch(sentence);
+    if (!m) continue;
+    const cond = sentence.search(MEMBER_CONDITION);
+    // Only a description in the present ("I keep an eye out"): "When you get there, I'll text you the address" is still a promise.
+    const future = /\b(?:i'?ll|i will|will|let me)\b/i.test(sentence);
+    if (cond !== -1 && cond <= (m.index ?? sentence.indexOf(m[0])) && !future) continue;
+    return m;
+  }
+  return null;
+}
 export function unbackedFollowup(draft: string, rf: ReplyFacts): RegExpMatchArray | null {
-  const found = followupPromiseMatch(draft);
+  const found = standingPromiseMatch(draft);
   if (!found) return null;
   const ongoing = rf.facts.some((f) => f.kind === "ongoing");
   const timingCommitment = /\b(the second|the moment|right when|as soon as|right away|immediately|tonight|tomorrow|today|this week)\b/i.test(draft);
@@ -1948,7 +1965,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[], opts: { all
     if (failed.some((f) => f.name === "no_crowd_claim") && crowdClaim(s)) return false;
     if (failed.some((f) => f.name === "no_unknown_clash") && clashClaim(s)) return false;
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
-    if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
+    if (failed.some((f) => f.name === "no_followup_promise") && standingPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_internal_narration") && narratesInternalState(s, opts)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
     if (failed.some((f) => f.name === "no_result_promise") && resultPromiseMatch(s)) return false;
