@@ -46,7 +46,12 @@ const LINED_OWN_PAGE = `${DINNER}\nThe second of two dinners this month.\nA seat
   check("a flat page counting events with no list of dates is not a roundup", roundupOf(`Harbor notes | Blog. We counted three founder events worth your time. ${DINNER} is one; details soon.`, DINNER, { page: true }) === null);
   // The cheap misses from the review, caught: "15+ events", "a dozen events", "three workshops and two talks", each with several dates.
   const flatList = (count: string) => `Bay notes | Blog Home About. This week's calendar has ${count} for builders: Mon, Nov 9 a talk; Wed, Nov 11 a workshop; Thu, Nov 12 ${DINNER}; Fri, Nov 13 a games night.`;
-  for (const count of ["15+ events", "a dozen events", "three workshops and two talks"]) check(`a flat list counting "${count}" is a roundup`, !!roundupOf(flatList(count), DINNER, { page: true }));
+  for (const count of ["15+ events", "a dozen events"]) check(`a flat list counting "${count}" is a roundup`, !!roundupOf(flatList(count), DINNER, { page: true }));
+  // Second review of #455: an own page's footer of other dates, and a series page whose find is one session, are never a list.
+  const footer = `${"Harbor Builders | Home About Events Contact. A seated dinner for 15 to 20 founders. ".padEnd(300, " ")}${DINNER} is on Thu, Nov 12 at 5:30 PM. Host approval required. ${"Details: two long tables, no talks. ".repeat(20)} More events from Harbor: Nov 19 · Dec 3 · Dec 10. We host four dinners this fall.`;
+  check("an own flat page with a 'More events' footer of dates is not a roundup", roundupOf(footer, DINNER, { page: true }) === null);
+  check("a series page (three workshops on Nov 4, 11, 18) whose find is one session is not a roundup", roundupOf(`Builder Workshops | Home Events. Three workshops this month for founders: Nov 4, Nov 11 and Nov 18. ${DINNER} closes the series on Nov 18.`, DINNER, { page: true }) === null);
+  check("'three workshops and two talks' alone no longer counts", roundupOf(flatList("three workshops and two talks"), DINNER, { page: true }) === null);
   // Still missed (noted in the PR): a title that names the thing among others ("X and two other events this week").
   // Posts (X) keep the first-line rule.
   check("a post whose first line names it is still not a roundup", roundupOf(`${DINNER} is on Thursday\n- seated\n- 15 to 20 founders\n- host approval`, DINNER) === null);

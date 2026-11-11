@@ -173,22 +173,24 @@ const LIST_LINE = /^\s*(?:[-*•▪◦→>]|\d{1,2}[.)]|\p{Extended_Pictographic
 // A headline that counts things ("Five places to look for founder support", "10 fellowships open now").
 const COUNT_HEADLINE = /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|top \d{1,2})\s+(?:[\w'-]+\s+){0,3}?(?:places|programs|programmes|ways|resources|things|options|opportunities|accelerators|fellowships|residencies|communities|grants|picks|orgs|organizations|funds|incubators)\b/i;
 // A flat page that counts the gatherings it covers ("lists three founder events", "15+ events", "a dozen events", "three workshops"), read
-// near its top; and how much of a flat page is its title zone. Never a duration ("two nights") or a host's history.
-const PAGE_COUNT = /\b(?:\d{1,2}\+?|a dozen|dozen|two|three|four|five|six|seven|eight|nine|ten)\s+(?:[\w'-]+\s+){0,2}?(?:events|dinners|meetups|gatherings|mixers|salons|workshops|talks)\b/gi;
+// near its top; and how much of a flat page is its title zone. Never a duration ("two nights") or a host's history; never "workshops" or
+// "talks" (a series page whose find is one session lists its own sessions: second review of #455).
+const PAGE_COUNT = /\b(?:\d{1,2}\+?|a dozen|dozen|two|three|four|five|six|seven|eight|nine|ten)\s+(?:[\w'-]+\s+){0,2}?(?:events|dinners|meetups|gatherings|mixers|salons)\b/gi;
 // "we've hosted 30 dinners", "since 2023", "over 50 events", "one of three dinners in our fall series", "of the three": its own history or series.
 const COUNT_HISTORY_BEFORE = /\b(?:hosted|held|run|ran|thrown|organized|since \d{4}|over|more than|one of|of (?:our|the|its|these)|of)\s*$/i;
 // "12 events a year", "four dinners each season": how often, not what's listed.
 const COUNT_RATE_AFTER = /^\s*(?:a|per|each|every)\s+(?:year|month|week|season|quarter)\b|^\s*annually\b|^\s*(?:in|so far|to date|since)\b/i;
 const PAGE_COUNT_CHARS = 900;
 const PAGE_TITLE_CHARS = 160;
-// A list cue: several different dates on the page ("Wed, Nov 11 … Thu, Nov 12 … Fri, Nov 13").
+// A list cue: several different dates in the same opening window ("Wed, Nov 11 … Thu, Nov 12 … Fri, Nov 13"), never a footer ("More events
+// from Harbor: Nov 19 · Dec 3 · Dec 10") further down an event's own page.
 const MONTH_DAY = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b/gi;
 // Pure: a flat page that counts several gatherings near its top, not as its own history or rate, and lists several dates.
 export function flatPageCountsEvents(t: string): boolean {
   const top = t.slice(0, PAGE_COUNT_CHARS);
   const counted = [...top.matchAll(PAGE_COUNT)].some((m) => !COUNT_HISTORY_BEFORE.test(top.slice(Math.max(0, (m.index ?? 0) - 30), m.index ?? 0)) && !COUNT_RATE_AFTER.test(top.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 25)));
   if (!counted) return false;
-  const dates = new Set([...t.matchAll(MONTH_DAY)].map((m) => `${m[1].slice(0, 3).toLowerCase()} ${Number(m[2])}`));
+  const dates = new Set([...top.matchAll(MONTH_DAY)].map((m) => `${m[1].slice(0, 3).toLowerCase()} ${Number(m[2])}`));
   return dates.size >= 3;
 }
 const URLS = /https?:\/\/[^\s)"'<>\]]+/gi;
