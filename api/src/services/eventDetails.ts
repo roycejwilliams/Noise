@@ -50,12 +50,19 @@ export type EventDetails = {
   // said as a guess (renderEventDetails).
   zoneGuessed?: boolean;
   // Luma's own registration state on its page (registration_availability: "open", "waitlist", "sold-out", ...), as the page says it.
-  // Upcoming isn't the same as taking registrations: a waitlisted or sold-out event exists, it just isn't open (soldOut is true for
-  // both, as the page's own sold_out flag already was for a waitlist).
+  // Upcoming isn't the same as taking registrations: a waitlisted or sold-out event exists, it just isn't open.
   registration?: string | null;
+  // Full, with a waitlist to join (registration "waitlist"; Royce, 2026-11-10: offered, said honestly as waitlist only, never turned
+  // away as sold out). soldOut stays for full with no way on: a waitlist event is soldOut false and waitlist true, and never has spots.
+  waitlist?: boolean;
   // The page's own schema.org record says it's cancelled (eventStatus EventCancelled). Absent: the page didn't say (unknown, not live).
   cancelled?: boolean;
 };
+
+// A waitlist event's registration, as Cue is told it (COPY: needs Royce's wording approval). The caption check (sendCheck.ts
+// captionNumbersBacked) refuses a caption that says there are spots, or that Cue can get them off the waitlist.
+export const WAITLIST_FACT = "Registration: waitlist only (no open spots; joining puts them on the waitlist, not in).";
+export const WAITLIST_SHORT = "waitlist only (no open spots)";
 
 // Tier 3: what the source post actually says.
 export type OpportunityDetails = { postText: string };
@@ -96,7 +103,9 @@ export function parseLumaEventPage(html: string): EventDetails | null {
   const description = proseMirrorText(data.description_mirror).replace(/\n{3,}/g, "\n\n").trim();
   const registration = typeof data.registration_availability === "string" ? data.registration_availability : null;
   // Sold out by any of the page's own flags (2026-11-10 sample: one real event page said registration "sold-out" with sold_out false).
-  const soldOut = data.sold_out === true || ticket.is_sold_out === true || registration === "sold-out" ? true : typeof data.sold_out === "boolean" ? false : null;
+  // A waitlist (Luma marks a waitlisted event sold_out too) is its own state: offered as waitlist only, not sold out.
+  const waitlist = registration === "waitlist";
+  const soldOut = waitlist ? false : data.sold_out === true || ticket.is_sold_out === true || registration === "sold-out" ? true : typeof data.sold_out === "boolean" ? false : null;
   const cancelled = lumaPageCancelled(html);
   return {
     startAt: ev.start_at ?? data.start_at ?? null,
@@ -116,6 +125,7 @@ export function parseLumaEventPage(html: string): EventDetails | null {
     // Who the host listed it for, as the page's own record says ("public", or "private": anyone with the link, never listed).
     visibility: typeof ev.visibility === "string" ? ev.visibility : null,
     ...(registration ? { registration } : {}),
+    ...(waitlist ? { waitlist: true } : {}),
     ...(cancelled ? { cancelled: true } : {}),
   };
 }
@@ -285,6 +295,7 @@ export function renderEventDetails(name: string, d: EventDetails): string[] {
   if (d.hosts.length) lines.push(`Hosted by ${d.hosts.join(", ")}.`);
   if (d.price) lines.push(d.price === "free" ? "It's free." : `Tickets are ${d.price}.`);
   if (d.soldOut) lines.push("It's sold out.");
+  else if (d.waitlist) lines.push(WAITLIST_FACT);
   else if (d.spotsRemaining !== null) lines.push(`${d.spotsRemaining} spots left.`);
   if (d.requiresApproval) lines.push("Registration needs host approval.");
   if (d.guestCount) lines.push(`${d.guestCount} ${d.guestCount === 1 ? "person has" : "people have"} registered so far.`);

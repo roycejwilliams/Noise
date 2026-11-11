@@ -503,9 +503,11 @@ export async function lumaEventsViaExa(
     return keep(rec, rec.slug ?? slug, title, {
       price: d.price,
       guestCount: d.guestCount,
-      // The page's own flags: sold out by any of them, or a waitlist (Luma marks a waitlisted event sold out too).
-      soldOut: d.soldOut === true || rec.registrationOpen === false || rec.spotsRemaining === 0,
+      // The page's own flags: sold out by any of them. A waitlist (Luma marks it sold out and not open too) is kept, as waitlist only
+      // (Royce, 2026-11-10: offered honestly, never turned away as sold out).
+      soldOut: d.waitlist ? false : d.soldOut === true || rec.registrationOpen === false || rec.spotsRemaining === 0,
       ...(rec.registration ? { registration: rec.registration } : {}),
+      ...(d.waitlist ? { waitlist: true } : {}),
     });
   };
   // The API answers many at once; pages are read a few at a time, so a block stops the search early instead of after every read.
