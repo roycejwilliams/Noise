@@ -91,9 +91,26 @@ export function unsourced(sentence: string, source: string | Source): Mention[] 
 }
 
 // A source text, normalized once: the spoken checks run per sentence on the voice's hot path, against the whole call.
-export type Source = { raw: string; hay: string; flat: string; nums: Set<string> };
+export type Source = { raw: string; hay: string; flat: string; nums: Set<string>; times?: Set<string> };
+// Clock times as minutes of the day, every reading of each: "9:45" is 9:45 or 21:45, "19:45" only 19:45, "7pm" 19:00. A time said is
+// backed when one of its readings is one of the source's (review of 8471cdb0: by substring, "9:45" passed against "19:45").
+const CLOCK = /(?<![\d:])(\d{1,2})(?::([0-5]\d))?\s?(a\.?m\.?|p\.?m\.?)?(?![\d:])/gi;
+export function clockReadings(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(CLOCK)) {
+    const h = Number(m[1]);
+    const min = m[2] ?? "00";
+    const ap = (m[3] ?? "").replace(/\./g, "").toLowerCase();
+    if (!m[2] && !ap) continue;
+    if (h > 23 || (ap && (h < 1 || h > 12))) continue;
+    if (ap) out.add(`${(h % 12) + (ap === "pm" ? 12 : 0)}:${min}`);
+    else if (h >= 13 || h === 0) out.add(`${h}:${min}`);
+    else out.add(`${h}:${min}`).add(`${h + 12}:${min}`);
+  }
+  return out;
+}
 // A contraction's tail is not part of the word they said: "RSVP'd" backs "RSVP" (2026-10-12, a document was refused for it).
-export const prepareSource = (source: string): Source => ({ raw: source, hay: norm(`${source}\n${source.replace(/(\w)['’](?:d|ll|re|ve)\b/gi, "$1")}`), flat: squash(source), nums: numbersOf(source, true) });
+export const prepareSource = (source: string): Source => ({ raw: source, hay: norm(`${source}\n${source.replace(/(\w)['’](?:d|ll|re|ve)\b/gi, "$1")}`), flat: squash(source), nums: numbersOf(source, true), times: clockReadings(source) });
 
 // The numbers in a text, as whole numbers ("$3,000" is 3000, "20th" is 20, never the "20" inside "2026"). The extraction is
 // taskWeb numbersBacked's; its substring match is too loose for a whole call's prompt, so a number here has to be a whole one.
@@ -108,7 +125,11 @@ export function numbersOf(text: string, withWords = false): Set<string> {
 const NAME_JOINERS = new Set(["the", "and", "for", "of", "at", "de", "la"]);
 function unbackedMentions(mentions: Mention[], src: Source): Mention[] {
   return mentions.filter((m) => {
-    if (m.kind === "time") return !src.flat.includes(squash(m.text).replace(/m$/, "m"));
+    if (m.kind === "time") {
+      const said = [...clockReadings(m.text)];
+      const known = src.times ?? clockReadings(src.raw);
+      return !(said.length && said.some((t) => known.has(t)));
+    }
     const n = norm(m.text.replace(/['’]s$/i, ""));
     if (src.hay.includes(n)) return false;
     // A plural of a backed word is backed ("PDFs" for "PDF", 2026-10-08 live call: "Should I keep sending PDFs?" was replaced).

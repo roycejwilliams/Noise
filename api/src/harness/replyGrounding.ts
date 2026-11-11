@@ -997,8 +997,10 @@ const searchedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) =>
 const SAYS_DONE = /\b(?:looked|searched|checked|dug|tried|went through|had a look|ran a search|did a search)\b/i;
 const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to|on it|give me|a (?:minute|sec(?:ond)?|moment)|more soon|soon|hang tight|stand by|tonight|tomorrow|later|back to you|another (?:pass|look|try|round)|more to come|next)\b|\b(?:look|search|digg?|check|hunt|find|try)ing\b|\bI'(?:ll|m)\b|\bI am\b/i;
 export const saysSearchDone = (claim: string): boolean => { const t = claim.replace(/[’‘]/g, "'"); return SAYS_DONE.test(t) && !SAYS_ONGOING.test(t); };
+// Words that say the work goes on ("still digging", "on it"): a sentence with them isn't a bare "nothing is running".
+export const STILL_AT_IT = /\b(?:still|digging|working on|looking into|searching|on it|looking|working)\b/i;
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
-  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
+  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !STILL_AT_IT.test(sentence);
 }
 
 // The honest line that replaces a cut "still working on it" (item 3): said once, never on top of one that already says it.
@@ -1601,8 +1603,17 @@ export function citesTheirThread(c: Pick<Claim, "factId" | "quote">, rf: Pick<Re
   return t.includes(q) || q.includes(t);
 }
 
-// A check-in or a bare greeting, from their words alone (the same reading as evals/lib/hardRules.ts turnKind).
-const CHECKIN_TEXT = /\bchecking in\b|\bcheck(?:ing)? in on you\b|^\s*(?:hey|hi|hello|yo|morning|evening|good (?:morning|afternoon|evening))\b[\s,!.]*(?:(?:there|cue|co|you)\b[\s,!.]*)?$/i;
+// A message that is only a check-in or a bare greeting ("Hey cue, just checking in", "hey"), never one that goes on to ask something
+// (review of 8471cdb0: "checking in on the venue search" and "Just checking in, is anything running?" were cut).
+const CHECKIN_ONLY = /^\s*(?:(?:hey|hi|hello|yo)(?:\s+(?:there|cue|co))?[\s,!.]*)?(?:just\s+)?(?:checking in|check(?:ing)? in on you)[\s,!.]*$|^\s*(?:hey|hi|hello|yo|morning|evening|good (?:morning|afternoon|evening))\b[\s,!.]*(?:(?:there|cue|co|you)\b[\s,!.]*)?$/i;
+// Their message asks where something stands: then a true "nothing is running" answers them.
+const ASKS_STATUS = /\?|\b(?:running|working on|any (?:update|news|word)|status|where (?:are|is|do) (?:we|things|it)|how(?:'s| is) (?:the|my)|anything (?:going|happening|new))\b/i;
+// Pure: a work_status claim that says nothing runs, on a turn that is only a check-in or small talk and asks nothing about status.
+export function checkinStatusTalk(claim: string, message: string, moment: string | null | undefined): boolean {
+  if (ASKS_STATUS.test(message)) return false;
+  if (moment !== "small_talk" && !CHECKIN_ONLY.test(message)) return false;
+  return /\bnothing\b/i.test(claim) && !STILL_AT_IT.test(claim);
+}
 // A model's "supported" only counts if its citation checks out in code.
 export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources, admissions: Map<string, boolean> = new Map(), ownership: Map<string, boolean> = new Map()): GateCheck[] {
   // A hint (model-written read) is never support, even when cited.
@@ -1692,7 +1703,7 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     }
     // A check-in never reports that nothing is running, however true (the check-in line: "never a line saying nothing is waiting or
     // running"; 2026-11-11, golden checkin-nothing: "nothing on the fire right now" passed as true status). Small talk is the moment read's.
-    if (pass && c.type === "work_status" && (rf.moment === "small_talk" || CHECKIN_TEXT.test(src.message ?? "")) && /\bnothing\b|\bno(?:t)? (?:running|search|task)/i.test(c.text)) {
+    if (pass && c.type === "work_status" && checkinStatusTalk(c.text, src.message ?? "", rf.moment)) {
       pass = false;
       reason += " (a check-in never reports Cue's own state)";
     }

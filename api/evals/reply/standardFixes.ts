@@ -100,6 +100,18 @@ check("'happy to' offers only with an offer verb", S2.offers("Happy to dig into 
   const [asked] = G.claimChecks([claim("Nothing's running for you right now", id)], ci as any, { message: "is anything running for me?", recentConversation: "" } as any);
   check("asked what's running: the true 'nothing running' still passes", asked.pass, asked.reason);
 }
+// Review of 8471cdb0: the check-in rule cuts only a bare "nothing is running" on a message that is only a check-in and asks nothing.
+{
+  const T = (claim: string, message: string, moment: string | null = null) => G.checkinStatusTalk(claim, message, moment);
+  check("28 still fails: 'nothing on the fire right now' on 'Hey cue, just checking in'", T("nothing on the fire right now", "Hey cue, just checking in"));
+  check("...and on small talk", T("nothing on the fire right now", "lol same", "small_talk"));
+  check("a check-in that asks: 'Nothing is running for you right now.' passes", !T("Nothing is running for you right now.", "Just checking in, is anything running for me right now?"));
+  check("'checking in on the venue search' isn't only a check-in", !T("Nothing back on the venue search yet.", "checking in on the venue search"));
+  check("...and 'still on it' is work going on", !T("Nothing back on the venue search yet, still on it.", "Hey cue, just checking in"));
+  check("'hey': 'Nothing new on the sponsor search; still digging.' passes", !T("Nothing new on the sponsor search; still digging.", "hey"));
+  check("'hey': a bare 'nothing running' still fails", T("Nothing's running for you right now.", "hey"));
+  check("an ordinary question with small talk read: not a check-in claim when it asks", !T("Nothing's running right now.", "any update on the dinner?", "small_talk"));
+}
 // shareFinds never resends a link that just went this turn (std-thin-page): link, caption, nothing twice.
 {
   const { createConversationTools } = await import("../../src/agent/conversationTools.js");

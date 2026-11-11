@@ -50,6 +50,10 @@ check("82 still catches: I'll follow up with a few questions to ask them", hits(
 const READ = "SGLang x NVIDIA Meetup: when: starts 2026-10-13T17:30, ends 2026-10-13T20:30.";
 check("86 lets through: tonight 5:30 to 8:30", noted("SGLang x NVIDIA Meetup, tonight 5:30 to 8:30.", READ).length === 0 && noted("SGLang x NVIDIA Meetup starts at 5:30pm.", READ).length === 0);
 check("86 still catches: a time the read doesn't have", noted("SGLang x NVIDIA Meetup, tonight 6:30 to 8:30.", READ).length > 0);
+// Review of 8471cdb0: clock times match by reading, never by substring ("9:45" is not "19:45"), across 12 and 24 hours.
+const NINE = "Doors at 19:45, Oct 15.";
+check("'9:45' is not backed by 19:45; '7:45pm' and '7:45' are", noted("The talk starts at 9:45, Oct 15.", NINE).length > 0 && noted("The talk starts at 7:45pm, Oct 15.", NINE).length === 0 && noted("The talk starts at 7:45, Oct 15.", NINE).length === 0);
+check("'6pm' is backed by '6:00-8:00pm' (6:00 reads as 6 or 18); '8pm' by '8:00pm'; '9pm' is not", noted("The dinner starts at 6pm, Oct 15.", "Thu Oct 15, 6:00-8:00pm.").length === 0 && noted("The dinner ends at 8pm, Oct 15.", "Thu Oct 15, 6:00-8:00pm.").length === 0 && noted("The dinner ends at 9pm, Oct 15.", "Thu Oct 15, 6:00-8:00pm.").length > 0);
 // Link then caption and #444 (audit): the shapes the standard set wants pass every hard rule.
 const H = (sends: { kind: "reply" | "find" | "link"; text: string }[], message: string, findUrls: string[] = [], facts = "") => hardRuleMisses({ text: sends.map((x) => x.text).join("\n"), sends, tools: [], kind: "reply", facts, theirLines: [message], coLines: [], findUrls, message });
 const VEL = "https://example.test/vellum-wine-room";
