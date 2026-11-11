@@ -557,6 +557,10 @@ export function loopTools(
       description: toolUse("readPage"),
       inputSchema: z.object({ url: z.string().describe("The page to read.") }),
       execute: async ({ url }) => {
+        // A stub event's page reads as its stub lines (2026-11-11 audit: a model that reads the page of a find it got from a stubbed search
+        // was told the page can't be read); any other page isn't read.
+        const stubPage = ctx.stubSearch ? ctx.stubEvents?.find((e) => e.url === url) : undefined;
+        if (stubPage) return { ok: true, text: stubPage.lines.join("\n"), emails: [] };
         if (ctx.stubSearch) return { ok: false, error: "Test run: pages aren't read. Don't describe it." };
         if (outOfTime()) return OUT_OF_TIME;
         const { readPageText } = await import("../services/webOpportunitySearch.js");
@@ -651,7 +655,15 @@ export function loopTools(
           }
           // The first find after a "looking" line threads under their text, as results always have.
           if (!sent.length && loop.holdSent) ctx.threadNext?.();
-          if (!(await say(it.link, `Co replied: ${it.link}`))) {
+          // The link already went this turn as its own text (shareLink, the plain-text link-first send): never twice (2026-11-11, golden
+          // std-thin-page: shareLink sent it, then shareFinds sent it again). Its caption follows it only while nothing went in between.
+          const lastWent = state.sentMessages[state.sentMessages.length - 1];
+          if (state.sentMessages.includes(it.link) && lastWent !== it.link) {
+            loop.shared.push(it.link);
+            refused.push(`${f.name}: its link already went this turn; say anything more about it in your reply`);
+            continue;
+          }
+          if (lastWent !== it.link && !(await say(it.link, `Co replied: ${it.link}`))) {
             notDone(`The link ${it.link} didn't send.`);
             continue;
           }

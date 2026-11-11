@@ -56,13 +56,15 @@ export const SAYS_LINK_WRONG = /\b(?:wrong|not the|isn'?t the|wasn'?t the|was a 
 // 2026-11-11). Here because the past-find link guard below reads DECISION_ASK too; conversationReply.ts re-exports both.
 export const DECISION_ASK = /\b(?:best (?:option|one|bet|pick|choice)|which (?:one|of (?:these|those|them|the)\b|(?:is|would be|sounds) better)|(?:should|do) i (?:go(?: to)?|pick|choose|hit) (?![^?.!]*\bor not\b)[^?.!]{1,80}\bor\b|pick (?:one )?for me|choose for me|what would you (?:pick|choose|go (?:with|to)|do)|if you were me|(?:is|are) (?:it|this|that|they|the [\w'-]+(?: [\w'-]+)?) worth (?:it|going|the trip|my time)\b)|^\s*(?:the )?[\w'&-]+(?: [\w'&-]+){0,3} or (?!not\b)(?:the )?[\w'&-]+(?: [\w'&-]+){0,3}\s*\?\s*$/i;
 export const FIT_ASK = /\bwhy (?:it|this|that)(?: one)? (?:fits|works|makes sense|is (?:a )?(?:good )?(?:fit|pick))\b|\bwhy (?:is )?(?:it|this|that)(?: one)? (?:for|right for) me\b|\bhow (?:does )?(?:it|this|that) fit\b|\bwhy (?:does|would) (?:it|this|that)(?: one)? (?:fit|suit|work for)\b|\b(?:is |how is |why is )?(?:it|this|that)(?: one)? relevant (?:to|for) me\b|\brelevant to me\b|\bwhy (?:should|would) i go\b|\bwhy (?:this|that) one\b/i;
-// Pure: the past finds they refer to that the draft names with no link gone this turn (or riding in it). A decision ask counts when the
+// Pure: the past finds they refer to that the draft names with no link gone this turn (or riding in it). A decision or why-it-fits ask counts when the
 // draft names exactly one of them (2026-11-11, std-best-option-this-week: the pick went without its link; DECISION_LINE asks for it):
 // naming two or more is a comparison, not a pick, and no link is pushed.
 export function unlinkedPastFinds(draft: string, message: string, referents: readonly { name: string; url: string | null }[], linksThisTurn: readonly string[]): { name: string; url: string }[] {
   if (SAYS_LINK_WRONG.test(message)) return [];
   const reasks = REASKS_FIND.test(message);
-  if (!reasks && !DECISION_ASK.test(message)) return [];
+  // A why-it-fits ask about the pick counts the same way (2026-11-11, golden best-option-why-it-fits: the details and the fit went with no
+  // link to the event they were about).
+  if (!reasks && !DECISION_ASK.test(message) && !FIT_ASK.test(message)) return [];
   const named = referents
     .filter((x): x is { name: string; url: string } => !!x.url && /^https?:\/\//.test(x.url))
     .filter((x) => namesFind(draft, { name: x.name, url: x.url }));

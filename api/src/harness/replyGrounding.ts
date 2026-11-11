@@ -998,8 +998,7 @@ const SAYS_DONE = /\b(?:looked|searched|checked|dug|tried|went through|had a loo
 const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to|on it|give me|a (?:minute|sec(?:ond)?|moment)|more soon|soon|hang tight|stand by|tonight|tomorrow|later|back to you|another (?:pass|look|try|round)|more to come|next)\b|\b(?:look|search|digg?|check|hunt|find|try)ing\b|\bI'(?:ll|m)\b|\bI am\b/i;
 export const saysSearchDone = (claim: string): boolean => { const t = claim.replace(/[’‘]/g, "'"); return SAYS_DONE.test(t) && !SAYS_ONGOING.test(t); };
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
-  // "Nothing's on my radar for you" says the same (2026-11-11, golden std-old-rec-not-new: it was cut and the canned line replaced it).
-  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion|on my radar)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
+  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
 }
 
 // The honest line that replaces a cut "still working on it" (item 3): said once, never on top of one that already says it.
@@ -1011,7 +1010,7 @@ export async function withNothingRunningLine(final: string, failed: GateCheck[],
   if (!failed.some((c) => c.name === "claim_work_status")) return final;
   // Cue searched in this turn: "nothing's running" would deny it (the receipt is what Cue did, the line would contradict it).
   if (!rf || !nothingRunsAt(rf) || startedThisTurn(rf) || searchedThisTurn(rf)) return final;
-  if (/\bnothing(?:'s| is)\s+(?:actively\s+)?(?:running|being worked|in motion|on my radar)\b/i.test(final)) return final;
+  if (/\bnothing(?:'s| is)\s+(?:actively\s+)?(?:running|being worked|in motion)\b/i.test(final)) return final;
   const [honest] = NOTHING_RUNNING_LINE.split(". ");
   // What's left already offers or asks something: the honest part goes first, and no second offer.
   if (final.trim() && (await offers(final))) return `${honest}. ${final.trim()}`;
@@ -1602,6 +1601,8 @@ export function citesTheirThread(c: Pick<Claim, "factId" | "quote">, rf: Pick<Re
   return t.includes(q) || q.includes(t);
 }
 
+// A check-in or a bare greeting, from their words alone (the same reading as evals/lib/hardRules.ts turnKind).
+const CHECKIN_TEXT = /\bchecking in\b|\bcheck(?:ing)? in on you\b|^\s*(?:hey|hi|hello|yo|morning|evening|good (?:morning|afternoon|evening))\b[\s,!.]*(?:(?:there|cue|co|you)\b[\s,!.]*)?$/i;
 // A model's "supported" only counts if its citation checks out in code.
 export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources, admissions: Map<string, boolean> = new Map(), ownership: Map<string, boolean> = new Map()): GateCheck[] {
   // A hint (model-written read) is never support, even when cited.
@@ -1688,6 +1689,12 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
         pass = false;
         reason += nothingRunsAt(rf) ? ` (${NOTHING_RUNNING_REASON})` : " (that work isn't among what the running-work line lists for them)";
       }
+    }
+    // A check-in never reports that nothing is running, however true (the check-in line: "never a line saying nothing is waiting or
+    // running"; 2026-11-11, golden checkin-nothing: "nothing on the fire right now" passed as true status). Small talk is the moment read's.
+    if (pass && c.type === "work_status" && (rf.moment === "small_talk" || CHECKIN_TEXT.test(src.message ?? "")) && /\bnothing\b|\bno(?:t)? (?:running|search|task)/i.test(c.text)) {
+      pass = false;
+      reason += " (a check-in never reports Cue's own state)";
     }
     // An offer Co makes in this reply (goal ownership, 2026-10-13) is a capability claim backed by its offer fact (goalOwnership.ts
     // offerFactLines, kind "capability"): the reader's claim type says offer vs. promise, never a phrasing pattern. A promise said as set

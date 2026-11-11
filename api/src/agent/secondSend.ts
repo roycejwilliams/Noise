@@ -84,7 +84,7 @@ export const askedForSomething = (message: string | null | undefined): boolean =
 // An offer to do something for them, in its usual wordings. A second text that only offers again, after a text this turn that already
 // offered, is a repeat whatever its words (2026-11-11, golden std-old-rec-not-new: "Want me to start on it?" went, then "If you want, I can
 // start looking, whether that's events worth going to or something toward the founding engineer search." as a second text).
-const OFFER = /\b(?:want me to|would you like me to|should i|shall i|i (?:can|could) (?:start|look|keep|dig|find|send|check|search|set|turn|pull|line|put)|happy to|say the word|let me know if you(?:'d)? (?:like|want))\b/i;
+const OFFER = /\b(?:want me to|would you like me to|should i|shall i|i (?:can|could) (?:start|look|keep|dig|find|send|check|search|set|turn|pull|line|put)|happy to (?:start|look|keep|dig|find|send|check|search|set|turn|pull|line|put|share|walk)|say the word|let me know if you(?:'d)? (?:like|want))\b/i;
 export const offers = (t: string): boolean => OFFER.test(t.replace(/[’]/g, "'"));
 // Pure: every sentence of this text offers, and a text that went this turn already offered.
 export function reOffers(message: string, said: readonly string[]): boolean {

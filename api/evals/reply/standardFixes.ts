@@ -77,8 +77,43 @@ G.addFact(busy as any, "unknown", "Cue's daily search isn't looking for anything
 G.addFact(busy as any, "known", G.runningWorkLine(['Cue is working on task #12 for them: "a venue for their dinner"'], []));
 const [busyRadar] = G.claimChecks([claim("Nothing's running for you right now", busy.facts[0].id)], busy as any, { message: "anything new?", recentConversation: "" } as any);
 check("...and not 'nothing running' while a task runs", !busyRadar.pass, busyRadar.reason);
-check("'Nothing's on my radar for you right now' is an honest status when nothing runs", G.honestNothingRunning(rf as any, "Nothing's on my radar for you right now."));
-check("...but not while a task runs", !G.honestNothingRunning(busy as any, "Nothing's on my radar for you right now."));
+// Narrowed in review: "on my radar" is not the running-work status words, so it's no honest-status allowance (check-ins stay status-free).
+check("'Nothing's on my radar for you right now' is no honest-status allowance", !G.honestNothingRunning(rf as any, "Nothing's on my radar for you right now.") && G.honestNothingRunning(rf as any, "Nothing's running for you right now."));
+
+// ---- audit round (2026-11-11 evening)
+const WHY = "What’s the details and why it fits?";
+const DETAILS = "Tonight, 5:30 to 8:30, free, hosted by NVIDIA, SGLang and Modal. Format is drinks and talks.";
+const SG = [{ name: "SGLang x NVIDIA Meetup", url: "https://lu.ma/sglang-nvidia-test" }, { name: "Founder Dinner SF", url: "https://lu.ma/founder-dinner-sf-test" }];
+check("a why-it-fits ask whose draft names the one find: its link is asked for", F.unlinkedPastFinds(DETAILS, WHY, SG, []).length === 1);
+check("...not once it went", F.unlinkedPastFinds(DETAILS, WHY, SG, [SG[0].url]).length === 0);
+const S2 = await import("../../src/agent/secondSend.js");
+check("'happy to' offers only with an offer verb", S2.offers("Happy to dig into it.") && !S2.offers("Happy to hear it went well.") && !S2.reOffers("Happy to hear that.", ["Want me to look?"]));
+// A check-in never reports "nothing running", however true (checkin-nothing).
+{
+  const ci = { facts: [] as any[], instructions: [] as string[] };
+  G.addFact(ci as any, "known", G.runningWorkLine([], []));
+  const id = ci.facts[0].id;
+  const [onCheckin] = G.claimChecks([claim("nothing on the fire right now", id)], ci as any, { message: "Hey cue, just checking in", recentConversation: "" } as any);
+  check("a check-in: 'nothing on the fire right now' fails", !onCheckin.pass, onCheckin.reason);
+  const [onSmallTalk] = G.claimChecks([claim("nothing on the fire right now", id)], { ...ci, moment: "small_talk" } as any, { message: "lol same", recentConversation: "" } as any);
+  check("small talk too", !onSmallTalk.pass);
+  const [asked] = G.claimChecks([claim("Nothing's running for you right now", id)], ci as any, { message: "is anything running for me?", recentConversation: "" } as any);
+  check("asked what's running: the true 'nothing running' still passes", asked.pass, asked.reason);
+}
+// shareFinds never resends a link that just went this turn (std-thin-page): link, caption, nothing twice.
+{
+  const { createConversationTools } = await import("../../src/agent/conversationTools.js");
+  const URL = "https://example.test/founders-supper";
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: any[]) => { lines.push(a.join(" ")); };
+  const t = createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "a founder dinner this month?", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, stubSearch: true, stubEvents: [{ name: "Founders Supper", url: URL, tier: 2, lines: ["Wednesday Oct 21, 7pm, SoMa."] }], sendCoReply: async () => true, facts: { add: () => {}, text: () => `Founders Supper ${URL}` } } as any) as any;
+  await t.tools.searchEvents.execute({ what: "founder dinner" }, { toolCallId: "s", messages: [] });
+  await t.tools.shareLink.execute({ urls: [URL] }, { toolCallId: "l", messages: [] });
+  await t.tools.shareFinds.execute({ items: [{ link: URL, caption: "Founders Supper, Wednesday Oct 21 at 7pm in SoMa." }] }, { toolCallId: "f", messages: [] });
+  console.log = log;
+  check("the link went once, then its caption", t.state.sentMessages.filter((m: string) => m === URL).length === 1 && t.state.sentMessages[t.state.sentMessages.length - 1] === "Founders Supper, Wednesday Oct 21 at 7pm in SoMa.", t.state.sentMessages);
+}
 
 console.log(`reply standard-set fixes: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
