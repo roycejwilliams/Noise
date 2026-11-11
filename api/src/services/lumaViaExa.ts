@@ -312,14 +312,19 @@ export function classifyLumaPage(r: { html: string | null; status: number | null
 export const LUMA_PAGES = { concurrency: 5, blockedPauseMinutes: 30, blockedPauseMaxMinutes: 24 * 60, okCacheMinutes: 60, okProbeMinutes: 10 } as const;
 let pagesBlocked: { at: number; until: number; why: string; streak: number } | null = null;
 export const lumaPagesBlocked = (now: number = Date.now()) => (pagesBlocked && now < pagesBlocked.until ? pagesBlocked : null);
+// The refusals in a row: a served probe doesn't reset it (the 11-11 429 came on the event pages while Luma's discover page was still
+// served, so the pause never grew); only a search whose page reads all went through does (noteCleanRead).
+let blockStreak = 0;
 function notePagesBlocked(now: number, why: string): void {
   if (pagesBlocked && now < pagesBlocked.until) return;
-  const streak = (pagesBlocked?.streak ?? 0) + 1;
+  const streak = ++blockStreak;
   const pause = Math.min(LUMA_PAGES.blockedPauseMinutes * 2 ** (streak - 1), LUMA_PAGES.blockedPauseMaxMinutes) * 60_000;
   pagesBlocked = { at: now, until: now + pause, why, streak };
 }
 // For tests.
-export const resetLumaPages = () => ((pagesBlocked = null), (pagesOkAt = 0), pageCache.clear());
+export const resetLumaPages = () => ((pagesBlocked = null), (pagesOkAt = 0), (blockStreak = 0), pageCache.clear());
+// A search whose page reads were all served: the next refusal starts the pause over at its shortest.
+const noteCleanRead = () => void (blockStreak = 0);
 // A page read that found the event (or that it isn't there) is kept an hour; a failure or a block isn't kept.
 const pageCache = new Map<string, { at: number; v: LumaPageCheck }>();
 async function checkPage(slug: string, deps: LumaViaExaDeps, now: number): Promise<LumaPageCheck> {
@@ -514,6 +519,7 @@ export async function lumaEventsViaExa(
   const checked: (ViaExaEvent | null)[] = [];
   if (route === "api") checked.push(...(await Promise.all(found.map(viaApi))));
   else for (let i = 0; i < found.length; i += LUMA_PAGES.concurrency) checked.push(...(await Promise.all(found.slice(i, i + LUMA_PAGES.concurrency).map(viaPage))));
+  if (route === "page" && !n.blocked && n.looked > 0) noteCleanRead();
   const events = checked.filter((e): e is ViaExaEvent => e !== null && new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
   const why =
     reason ??

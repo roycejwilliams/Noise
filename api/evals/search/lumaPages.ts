@@ -252,5 +252,35 @@ const page = (o: Ev = {}) => ({ html: html(o), status: 200, error: null });
   check("still public, open and ahead: it goes", ro.ok === true, ro);
 }
 
+// ================================================================ the pace doesn't replace the back-off (Royce, 2026-11-11)
+// Every real page read is paced (eventDetails.ts lumaPace, one a second); a refusal still stops the route and pauses it, doubling on a
+// repeat, with no retry loop; while paused, the next search reads no page and pays for no Exa search.
+{
+  const { readFileSync } = await import("fs");
+  const ed = readFileSync(new URL("../../src/services/eventDetails.ts", import.meta.url), "utf8");
+  check("pace: every real Luma page read waits its turn", /if \(fetchImpl === fetch\) await lumaPace\(\);/.test(ed));
+  const t0 = Date.parse("2026-11-11T17:06:00Z");
+  let clock = t0;
+  let exa = 0;
+  const seen: string[] = [];
+  const refusing = (): any => ({ ...via({ found: ["r1", "r2", "r3"] }), exa: async () => (exa++, { pages: ["r1", "r2", "r3"].map((x) => ({ url: `https://lu.ma/${x}`, title: x, published: null, text: "" })), cost: 0.022, error: null }), page: async (slug: string) => (seen.push(slug), classify(slug === "discover" ? { html: CAL, status: 200, error: null } : { html: null, status: 429, error: "HTTP 429" })), now: () => new Date(clock) });
+  V.clearLumaViaExaCache();
+  V.resetLumaPages();
+  await V.lumaEventsViaExa("founder dinner", "San Francisco", { userId: null, source: "sweep", inRange: () => true, dates: "November 11 to November 25, 2026", deps: refusing() });
+  const first = V.lumaPagesBlocked(clock);
+  check("a 429 on a page: the route stops and pauses 30 minutes (no retry)", !!first && first.until - clock === 30 * 60_000 && seen.filter((x) => x !== "discover").length <= 5, { first, seen });
+  const exaBefore = exa, readsBefore = seen.length;
+  clock = t0 + 10 * 60_000;
+  V.clearLumaViaExaCache();
+  const paused = await V.lumaEventsViaExa("tech meetup", "San Francisco", { userId: null, source: "sweep", inRange: () => true, dates: "November 11 to November 25, 2026", deps: refusing() });
+  check("while paused: the next search reads no page and pays for no Exa search", exa === exaBefore && seen.length === readsBefore && paused!.report.sourceDown === true, { exa, seen: seen.length, rep: paused!.report });
+  clock = t0 + 31 * 60_000;
+  V.clearLumaViaExaCache();
+  await V.lumaEventsViaExa("tech meetup", "San Francisco", { userId: null, source: "sweep", inRange: () => true, dates: "November 11 to November 25, 2026", deps: refusing() });
+  const second = V.lumaPagesBlocked(clock);
+  check("refused again after the pause: the pause doubles (60 minutes)", !!second && second.until - second.at === 60 * 60_000 && second.streak === 2, second);
+  V.resetLumaPages();
+}
+
 console.log(`lumaPages: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
