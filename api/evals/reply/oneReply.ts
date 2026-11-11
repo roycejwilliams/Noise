@@ -176,6 +176,56 @@ check("pure: nothing sent yet, a send is always allowed", T.anotherSendAllowed({
   check("real tools: the first goes, the second is held as nothing new", a.ok === true && b.note === T.ONE_REPLY_NOTE && would.length === 1 && t.state.sentMessages.length === 1, { would, b });
 }
 
+// #448 sends a past find's link inside the same sendReply call, before the text. A link that went with a text that failed is not the
+// text gone: the text stays unsaid, and its retry isn't held as a duplicate.
+{
+  const state = { sent: false, sentMessages: [] as string[], partialUnsent: null as string | null, laneNotes: [] as string[], workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0, replyCount: 0 };
+  const went: string[] = [];
+  let textFails = false;
+  const tools: Record<string, any> = {
+    sendReply: {
+      execute: async ({ message, link }: { message: string; link?: string }) => {
+        if (link) state.sentMessages.push(link); // the link goes first, as its own text (flushLinks)
+        if (textFails) return { ok: false, error: "That message didn't go out." };
+        went.push(message); state.sentMessages.push(message); state.sent = true; state.replyCount += 1;
+        return { ok: true };
+      },
+    },
+  };
+  T.wrapSendsForOneReply(tools, state, () => true, false);
+  await tools.sendReply.execute({ message: "On it." });
+  const TEXT = "The Cellar on Fell, the small natural-wine bar near Hayes.";
+  textFails = true;
+  const failedTry = await tools.sendReply.execute({ message: TEXT, link: "https://example.test/the-cellar-on-fell" });
+  check("link sent + text failed: the text isn't marked sent", failedTry.ok === false && !went.includes(TEXT) && state.replyCount === 1 && state.sentMessages.includes("https://example.test/the-cellar-on-fell"), { failedTry, went });
+  textFails = false;
+  const retry = await tools.sendReply.execute({ message: TEXT });
+  check("  and its retry goes (not held as a duplicate)", retry.ok === true && retry.note !== T.ONE_REPLY_NOTE && went[went.length - 1] === TEXT && state.extraSendsRefused === 0, { retry, went, refused: state.extraSendsRefused });
+  const again = await tools.sendReply.execute({ message: TEXT });
+  check("  once it went, the same text again is held as a duplicate", again.note === T.ONE_REPLY_NOTE && went.filter((m) => m === TEXT).length === 1, { again, went });
+}
+{
+  // Through the real sendReply (not a dry run; the database is unreachable and its writes are non-fatal): the reply went, then the
+  // plain text's past-find link goes first and its text fails; the same text again goes.
+  const FACT = `Cue sent them "The Cellar on Fell" on Nov 7; the link it sent: https://example.test/the-cellar-on-fell`;
+  const TEXT = "The Cellar on Fell, the small natural-wine bar near Hayes.";
+  const delivered: string[] = [];
+  let failNext = false;
+  const t = T.createConversationTools({ userId: "u", phoneNumber: "+10000000009", resolvedContent: "what was the wine bar you sent?", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false, answerOwed: true, turn: { referents: [{ name: "The Cellar on Fell", url: "https://example.test/the-cellar-on-fell" }] }, sendCoReply: async ({ message }: { message: string }) => { if (failNext && !message.startsWith("https://")) { failNext = false; return false; } delivered.push(message); return true; }, facts: { add: () => {}, text: () => FACT } } as any);
+  const errs = console.error;
+  console.error = () => {};
+  try {
+    const first = await (t.tools as any).sendReply.execute({ message: "Let me pull that up." }, { toolCallId: "1", messages: [] });
+    failNext = true;
+    const failed = await (t.tools as any).sendReply.execute({ message: TEXT }, { toolCallId: "plain-text-reply", messages: [] });
+    check("real tools: the link went first and the text failed: not marked sent", first.ok === true && failed.ok === false && delivered.includes("https://example.test/the-cellar-on-fell") && !t.state.sentMessages.includes(TEXT) && !delivered.includes(TEXT), { first, failed, delivered });
+    const retry = await (t.tools as any).sendReply.execute({ message: TEXT }, { toolCallId: "plain-text-reply", messages: [] });
+    check("real tools: the retry of that text goes", retry.ok === true && retry.note !== T.ONE_REPLY_NOTE && delivered[delivered.length - 1] === TEXT && delivered.filter((m) => m.startsWith("https://")).length === 1, { retry, delivered });
+  } finally {
+    console.error = errs;
+  }
+}
+
 // Wiring: the real tool set is wrapped before the guard, and the turn rule says the same thing.
 const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
 check("the real tool set is wrapped for one reply, outermost (after the tool guard)", /guardTools\(tools, \{[^\n]*\}\);\n(?:\s*\/\/[^\n]*\n)+\s*wrapSendsForOneReply\(tools as Record<string, any>, state, \(\) => !!ctx\.answerOwed, ctx\.dryRun, \(\) => askedForSomething\(ctx\.resolvedContent\)\);\n\s*return \{ tools: orderForCache\(tools\)/.test(ct));
