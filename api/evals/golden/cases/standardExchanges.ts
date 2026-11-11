@@ -14,6 +14,7 @@ import "../../lib/requireMeter.js";
 import { AWAITING_RECORDING, result, type GoldenCase, type GoldenStatus } from "../types.js";
 import { DAY, NONE, judge, reply, type Kind, type Line, type Reply } from "./checkins.js";
 import type { StubEvent } from "../../../src/agent/loopTools.js";
+import { ASSUMES_WENT, EVENT_UNCONFIRMED, TIPS_LATER, inventedClaim } from "../standardMatchers.js";
 
 const PENDING: GoldenStatus = {
   live: false,
@@ -115,7 +116,7 @@ export const CASES: GoldenCase[] = [
       const r = await reply({ ...JORDAN, exchange, facts: [...JORDAN_FACTS, ...THREE_FACTS], message });
       const misses = slips(r);
       const t = delivered(r);
-      if (/\b(?:not|isn't|wasn't|hasn't been|un)\s*confirmed\b|\bcan(?:'t|not) confirm\b|\bcouldn't confirm\b/i.test(t)) misses.push("calls it not confirmed, then gives the details on file anyway");
+      if (EVENT_UNCONFIRMED.test(t)) misses.push(`calls the event not confirmed, then gives the details on file anyway ("${t.match(EVENT_UNCONFIRMED)![0]}")`);
       if (/\bI(?:'ll| will) (?:keep an eye|keep looking|look out|let you know|circle back|follow up|check back|send (?:you )?more|dig)/i.test(t)) misses.push("a follow-up promise in place of the answer");
       if (GOAL_ECHO.test(t)) misses.push(`pastes their goal back ("${t.match(GOAL_ECHO)![0]}")`);
       if (!/6:30|tonight|Mission|brewery|talks?|120/i.test(t)) misses.push("no details from what's on file");
@@ -154,8 +155,8 @@ export const CASES: GoldenCase[] = [
       const r = await reply({ firstName: "Jordan", now: DAY, exchange: [], searching: { asks: [], goals: ["a founding engineer for their developer-tools startup"], held: [] }, facts: JORDAN_FACTS, message, stubEvents: [SUPPER] });
       const misses = slips(r);
       const t = delivered(r);
-      const INVENTED = /\b(?:engineers?|technical (?:folks|people|founders)|CTOs?|candidates|investors|VCs?) (?:will be|tend to|usually|often|show up|come|attend)|\b(?:intimate|curated|small tables|no pitching|hand-?picked|structured)\b|\bwho(?:'s| is) hiring\b/i;
-      if (INVENTED.test(t)) misses.push(`claims what the page doesn't say ("${t.match(INVENTED)![0]}")`);
+      const claim = inventedClaim(t);
+      if (claim) misses.push(`claims what the page doesn't say ("${claim}")`);
       const j = await judge(t, `The member asked: "${message}". Cue's search found one page: "${SUPPER.name}" (${SUPPER.url}), Wed Oct 21, 7pm, SoMa; it says only "15-20 founders, dinner and conversation"; nothing about format, who the founders are, their stage, whether anyone is hiring, or cost.`, `Does Cue either make a narrowed claim (what the page does say, and plainly that the deciding thing for an engineer hunt, who is in the room, isn't on it) or decline to recommend it, WITHOUT inventing a benefit (engineers attending, intimacy, curation, hiring talk) or overselling it as a fit? ${WHOLE} Answer yes only if all of that holds.`);
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return done(misses, [r]);
@@ -207,8 +208,7 @@ export const CASES: GoldenCase[] = [
       const message = "You said the same thing twice";
       const r = await reply({ ...JORDAN, exchange, facts: [...JORDAN_FACTS, ...THREE_FACTS], message, kind: "feedback" });
       const misses = slips(r);
-      const t = delivered(r).toLowerCase();
-      if (/\btwelve\b|\b12\b/.test(t) && /\bhiring\b/.test(t)) misses.push("the same reason again (twelve founders, who's hiring)");
+      // Whether it's the same reason reworded is the judge's call: "twelve founders, but nothing says any are hiring engineers" is a new angle.
       const j = await judge(delivered(r), `Thread:\n${transcript(exchange, [{ message, r }])}\nOn file: ${THREE_FACTS.slice(1).map((f) => f[1]).join(" ")} The member is a founder hiring a founding engineer; pitch-heavy events wear them out.`, `After the member pointed out the repeat, does Cue own it in a few words at most and then give a genuinely DIFFERENT angle (a new reason from the details on file, an honest limit of the dinner, or reconsidering the pick, for example the reading club's room of ML engineers), not the same twelve-founders-who's-hiring point reworded, and without explaining how it works? ${WHOLE} Answer yes only if all of that holds.`);
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return done(misses, [r]);
@@ -279,8 +279,7 @@ export const CASES: GoldenCase[] = [
       const r = await reply({ firstName: "Ari", now: DAY, exchange, searching: NONE, sent: [{ name: MAKERS.name, sentAt, endsOn: "2026-10-12" }], facts: [["did_before", `Cue sent them "${MAKERS.name}" (${MAKERS.url}) on Sat Oct 10 at 11am, with: "Mission Makers Night, Monday 7pm: hardware and design folks showing what they're building." They never replied to it or said whether they'd go. It was Mon Oct 12 at 7pm.`]], message, withExchange: { sent: [MAKERS] } });
       const misses = slips(r);
       const t = delivered(r);
-      const ASSUMES = /\bhow(?:'d| was| did)\b[^?\n]{0,40}\b(?:makers|night|event|it)\b|\bdid you (?:enjoy|like|love)\b|\bglad you (?:went|made it)\b|\bwhile you were (?:there|at)\b/i;
-      if (ASSUMES.test(t)) misses.push(`assumes they went ("${t.match(ASSUMES)![0]}")`);
+      if (ASSUMES_WENT.test(t)) misses.push(`assumes they went ("${t.match(ASSUMES_WENT)![0]}")`);
       const j = await judge(t, `Cue sent the member an event (Mission Makers Night, Mon Oct 12 at 7pm) on Saturday; they never replied or said they'd go. Now, Tuesday: "${message}".`, `Does Cue meet what they said WITHOUT assuming they went to the event (no "how was it", no "glad you made it", no asking what they thought of it)? Mentioning the event at most as a neutral "did you end up going" is fine, and not mentioning it is fine. ${WHOLE} Answer yes only if all of that holds.`);
       if (!j.yes) misses.push(`judge: ${j.reason}`);
       return done(misses, [r]);
@@ -301,7 +300,7 @@ export const CASES: GoldenCase[] = [
       const r = await reply({ firstName: "Sam", now: DAY, exchange, searching: NONE, facts: [["known", "Solo founder of an AI developer-tools startup; hiring a founding engineer; demoed to angel investors today at 1pm."]], message, withMoment: true });
       const misses = slips(r);
       const t = delivered(r);
-      if (/\bI(?:'ll| will) (?:send|put together|pull together|write up|get you|follow up)\b|\b(?:later|tomorrow|before thursday)\b[^.?\n]{0,30}\btips\b/i.test(t)) misses.push("promises the tips later instead of giving them");
+      if (TIPS_LATER.test(t)) misses.push("promises the tips later instead of giving them");
       if (words(t) < 30) misses.push(`${words(t)} words: no room for concrete help`);
       const j = await judge(t, `Earlier: Cue wished them luck on a demo for angels at 1pm. Now: "${message}".`, `Does Cue first receive how they feel in a line (specific to the demo and being empty, not a stock phrase, no therapy question), and then give concrete, usable advice for a first coffee with an engineering candidate (things to ask, show or say), all in this turn, not promised for later? ${WHOLE} Answer yes only if all of that holds.`);
       if (!j.yes) misses.push(`judge: ${j.reason}`);
