@@ -116,5 +116,25 @@ check("needQuality seeds the real path's facts (running work, sent records)", /r
   check("dry-run listOpenAsks reports the fixture's asks; without them, nothing (as before)", open.asks?.[0]?.text === "ways to meet backend engineers in SF" && none.asks?.length === 0, { open, none });
 }
 
+// Fix 4 (2026-11-10 paid run): a past find they ask for again, named with no link, gets the once-a-turn redraft toward its link.
+{
+  const FG = await import("../../src/agent/findGuards.js");
+  const wine = [{ name: "The Cellar on Fell", url: "https://example.test/the-cellar-on-fell" }];
+  const named = "The Cellar on Fell, the small natural-wine bar near Hayes.";
+  check("a re-asked past find with no link: flagged", FG.unlinkedPastFinds(named, "what was the wine bar you sent?", wine, []).length === 1);
+  check("already linked (in the draft or gone this turn): not flagged", FG.unlinkedPastFinds(`${named} https://example.test/the-cellar-on-fell`, "what was the wine bar you sent?", wine, []).length === 0 && FG.unlinkedPastFinds(named, "what was the wine bar you sent?", wine, ["https://example.test/the-cellar-on-fell"]).length === 0);
+  check("a past find not referenced this turn: not flagged", FG.unlinkedPastFinds(named, "what was the wine bar you sent?", [], []).length === 0);
+  check("a member saying the link was wrong: never pushed again", FG.unlinkedPastFinds("You're right, that link to The Cellar on Fell was wrong.", "that link to the cellar was wrong", wine, []).length === 0);
+  check("the redraft note names the find and its link, and asks for shareLinks", /Sent before: "The Cellar on Fell" \(https:\/\/example\.test\/the-cellar-on-fell\)/.test(FG.findsRedraftNote("unlinked_sent", wine as any, [])) && /shareLinks/.test(FG.findsRedraftNote("unlinked_sent", wine as any, [])));
+  const T = await import("../../src/agent/conversationTools.js");
+  const quiet = console.log;
+  console.log = () => {};
+  const t = T.createConversationTools({ userId: "u", phoneNumber: "+10000000000", resolvedContent: "what was the wine bar you sent?", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, dryRunReferents: wine, redraftLeft: () => true, sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any);
+  const first = await (t.tools as any).sendReply.execute({ message: named }, { toolCallId: "1", messages: [] });
+  const second = await (t.tools as any).sendReply.execute({ message: named }, { toolCallId: "2", messages: [] });
+  console.log = quiet;
+  check("through the real send: the first draft gets the redraft note, once; the next goes", first.ok === false && /Sent before/.test(first.error ?? "") && second.ok === true, { first, second });
+}
+
 console.log(`\nneed-matched replies: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

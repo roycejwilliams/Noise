@@ -36,7 +36,7 @@ import { googleTools } from "../services/googleTools.js";
 import { registrationTools, realRegistrationEnv } from "./registrationTools.js";
 import { registrationLive } from "../services/eventRegistration/approvals.js";
 import { loopTools, newLoopState, type LoopState } from "./loopTools.js";
-import { FIND_READS_PER_TURN, findsRedraftNote, ignoresFinds, isPost, realFindUseRead, turnFinds, unlinkedFinds } from "./findGuards.js";
+import { FIND_READS_PER_TURN, findsRedraftNote, ignoresFinds, isPost, realFindUseRead, turnFinds, unlinkedFinds, unlinkedPastFinds } from "./findGuards.js";
 import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
 import { track } from "../services/shutdown.js";
 import { carryLaneNotes, LANE_WORDS, laneNote, laneStoreFor, lookoutRestatesTask, moveLane, noteLabel, offersMove, ruleFor } from "../services/laneMoves.js";
@@ -62,6 +62,8 @@ export type ConversationToolContext = {
   // Tests only (evals/reply/needQuality.ts): what a dry run's listOpenAsks reports open, so a fixture's running search is visible the
   // way the real read would show it. Never set outside a dry run.
   dryRunOpenAsks?: { text: string; type: "seeking" | "offering" }[];
+  // Tests only: the past finds a dry run's message refers to (the real path reads turn.referents, services/turnContext.ts).
+  dryRunReferents?: { name: string; url: string | null }[];
   // Set by loopTools for this turn: a delivered text (what anythingForMe sent) is the turn's whole answer.
   onLinkDelivered?: () => void;
   // An answer that was meant to ride with a link but didn't go (none are made now): owed, so the one reply tha
@@ -597,6 +599,19 @@ export function createConversationTools(ctx: ConversationToolContext) {
               await recordDecision({ layer: 3, decision: "reply.finds_guard", userId: ctx.userId, outcome: "skip", action: kind, proposal: { draft: draft.slice(0, 300), finds: finds.length, shared: turnLoop.shared.length } }).catch(() => {});
             }
             return stillOwed(), { ok: false, error: findsRedraftNote(kind, finds, turnLoop.shared) };
+          }
+        }
+        // A past find they're asking for again, named with no link (Fix 4, 2026-11-10): the same once-a-turn redraft, toward its link.
+        if (canRedraft && !state.findsNudged) {
+          const referents = ctx.turn?.referents ?? (ctx.dryRun ? ctx.dryRunReferents ?? [] : []);
+          const past = referents.length ? unlinkedPastFinds(draft, ctx.resolvedContent ?? "", referents.map((x: any) => ({ name: String(x.name ?? ""), url: x.url ?? null })), [...state.sentMessages, ...state.pendingLinks, ...(turnLoop?.shared ?? [])]) : [];
+          if (past.length) {
+            state.findsNudged = true;
+            if (!ctx.dryRun) {
+              const { recordDecision } = await import("../harness/core.js");
+              await recordDecision({ layer: 3, decision: "reply.finds_guard", userId: ctx.userId, outcome: "skip", action: "unlinked_sent", proposal: { draft: draft.slice(0, 300), referents: past.length } }).catch(() => {});
+            }
+            return stillOwed(), { ok: false, error: findsRedraftNote("unlinked_sent", past as any, []) };
           }
         }
         // A note to itself ("(no further message needed)") is never the reply while nothing has answered them yet (10-17: it was, and
