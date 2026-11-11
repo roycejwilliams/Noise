@@ -261,7 +261,7 @@ export function checkNoRepeat(facts: MatchFacts): GateCheck {
 export function checkAvailable(match: TierMatch): GateCheck {
   return match.details?.soldOut
     ? { name: "available", pass: false, reason: "sold out" }
-    : { name: "available", pass: true, reason: match.details?.requiresApproval ? "needs host approval" : undefined };
+    : { name: "available", pass: true, reason: match.details?.waitlist ? "waitlist only" : match.details?.requiresApproval ? "needs host approval" : undefined };
 }
 
 export function evaluateMatch(match: TierMatch, facts: MatchFacts): { ok: boolean; checks: GateCheck[] } {

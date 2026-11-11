@@ -144,7 +144,9 @@ export function describeMatch(m: any): string | null {
 
   if (d) {
     if (d.soldOut) parts.push("SOLD OUT");
-    if (typeof d.spotsRemaining === "number") parts.push(`${d.spotsRemaining} spots left`);
+    // Waitlist only (eventDetails.ts): never a spots count beside it.
+    if (d.waitlist) parts.push("waitlist only (no open spots)");
+    else if (typeof d.spotsRemaining === "number") parts.push(`${d.spotsRemaining} spots left`);
     if (d.requiresApproval) parts.push("needs host approval");
     if (d.startAt) parts.push(`starts ${String(d.startAt).replace("T", " ").slice(0, 16)}${d.endAt ? `, ends ${String(d.endAt).replace("T", " ").slice(11, 16)}` : ""}`);
     if (d.online) parts.push("online");

@@ -338,7 +338,9 @@ function lumaFields(d: EventDetails): Partial<Record<FieldName, Field>> {
   put("host", d.hosts.join(", ") || null);
   put("cost", d.price);
   f.online = { value: d.online ? "online" : "in person", quote: null, verified: true };
-  if (d.soldOut !== null) f.sold_out = { value: d.soldOut ? "yes" : "no", quote: null, verified: true };
+  // A waitlist is never "not sold out" (that reads as spots): it's said as waitlist only (eventDetails.ts).
+  if (d.waitlist) f.sold_out = { value: "waitlist only (no open spots)", quote: null, verified: true };
+  else if (d.soldOut !== null) f.sold_out = { value: d.soldOut ? "yes" : "no", quote: null, verified: true };
   return f;
 }
 

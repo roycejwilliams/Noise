@@ -24,7 +24,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DateTime } from "luxon";
 import type { TierMatch } from "./tieredRecommendation.js";
-import type { EventDetails } from "./eventDetails.js";
+import { WAITLIST_SHORT, type EventDetails } from "./eventDetails.js";
 import { datesOnPage, dayIn, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
 import { START_LEAD_MINUTES, eventStartProblem, matchStartProblem } from "./eventStart.js";
@@ -309,7 +309,8 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     if (match.tier !== 1 && typeof d.visibility === "string" && d.visibility !== "public")
       return { ok: false, exit: true, state: "expired", why: `its page says it's ${d.visibility}, not public, when Cue read it on ${today}` };
     if (d.soldOut === true) return { ok: false, exit: true, state: "expired", why: `sold out when Cue read its page on ${today}` };
-    if (d.spotsRemaining === 0) return { ok: false, exit: true, state: "expired", why: `no spots left when Cue read its page on ${today}` };
+    // No spots and no waitlist: gone. A waitlist (full, with one to join) stays, said as waitlist only (Royce, 2026-11-10).
+    if (d.spotsRemaining === 0 && !d.waitlist) return { ok: false, exit: true, state: "expired", why: `no spots left when Cue read its page on ${today}` };
     // Over: past its end when it has one (a festival that started yesterday still runs), else past its start.
     const over = d.endAt ? d.endAt : d.startAt;
     if (over && new Date(over).getTime() <= now.getTime()) return { ok: false, exit: true, state: "expired", why: `it was already ${d.endAt ? "over" : "under way"} (${over}) when Cue read its page` };
@@ -321,7 +322,8 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     const old = match.details ?? null;
     const changed: string[] = [];
     if (old?.startAt && d.startAt && old.startAt !== d.startAt) changed.push(`start moved from ${old.startAt} to ${d.startAt}`);
-    if (old && old.spotsRemaining !== d.spotsRemaining && d.spotsRemaining !== null) changed.push(`spots ${old.spotsRemaining ?? "unknown"} -> ${d.spotsRemaining}`);
+    if (d.waitlist && !old?.waitlist) changed.push(`now ${WAITLIST_SHORT}`);
+    else if (old && old.spotsRemaining !== d.spotsRemaining && d.spotsRemaining !== null && !d.waitlist) changed.push(`spots ${old.spotsRemaining ?? "unknown"} -> ${d.spotsRemaining}`);
     if (old?.price && d.price && old.price !== d.price) changed.push(`price ${old.price} -> ${d.price}`);
     const next: any = { ...match, details: d, checkedAt };
     const newDay = d.startAt ? dayIn(d.startAt, d.timezone ?? zone) : null;
@@ -507,8 +509,18 @@ export function captionNumbersBacked(caption: string, facts: string): { ok: bool
   const scarce = t.match(SCARCITY);
   if (scarce && !SPOTS_ON_RECORD.test(facts)) problems.push(`"${scarce[0]}" with no spots count on its page`);
   if (/\bsold out\b/i.test(t) && !/\bsold out\b/i.test(facts)) problems.push(`says "sold out", and its page doesn't`);
+  // A waitlist-only event (eventDetails.ts WAITLIST_FACT): no caption says or hints there are spots, or that Cue gets them off it.
+  if (WAITLIST_ON_RECORD.test(facts)) {
+    const open = t.match(OPEN_SPOTS) ?? t.match(SCARCITY);
+    if (open) problems.push(`says "${open[0]}", and its page says waitlist only (no open spots)`);
+    const off = t.match(OFF_THE_WAITLIST);
+    if (off) problems.push(`says "${off[0]}", and Cue can only add them to the waitlist`);
+  }
   return { ok: problems.length === 0, problems };
 }
+const WAITLIST_ON_RECORD = /\bwait ?list only\b/i;
+const OPEN_SPOTS = /\b(?:spots?|seats?|tickets?|places?|room|space)\s+(?:are\s+|is\s+)?(?:still\s+)?(?:open|left|available|remaining)\b|\b(?:still|plenty of|some)\s+(?:room|space|spots?|seats?|tickets?)\b|\bopen\s+(?:spots?|seats?)\b|\b(?:registration|rsvps?|signups?)\s+(?:is\s+|are\s+|'s\s+)?(?:still\s+)?open\b|\bopen for (?:registration|signups?|rsvps?)\b|\byou can (?:still )?(?:register|get in|grab a (?:spot|seat|ticket)|rsvp|sign up)\b|\b(?:not|isn't|is not) (?:full|sold out)\b/i;
+const OFF_THE_WAITLIST = /\b(?:get|move|bump|pull)\s+(?:you|them)\s+off\s+(?:the\s+)?wait ?list\b|\b(?:get|guarantee)\s+(?:you|them)\s+(?:a\s+)?(?:spot|seat|in)\b/i;
 
 // ---------------------------------------------------------------- B5: a task's on-file find
 
@@ -528,7 +540,7 @@ export function onFileFacts(m: TierMatch, checkedAt: string): string[] {
     d?.startAt ? `starts ${String(d.startAt).replace("T", " ").slice(0, 16)}` : null,
     d?.venue ?? null,
     d?.price ? (d.price === "free" ? "free" : `price ${d.price}`) : null,
-    d?.soldOut ? "sold out" : typeof d?.spotsRemaining === "number" ? `${d.spotsRemaining} spots left` : null,
+    d?.soldOut ? "sold out" : d?.waitlist ? WAITLIST_SHORT : typeof d?.spotsRemaining === "number" ? `${d.spotsRemaining} spots left` : null,
     `checked ${checkedAt.slice(0, 16).replace("T", " ")} UTC`,
   ].filter((x): x is string => !!x);
 }
@@ -558,7 +570,7 @@ export function sourceLine(match: TierMatch | null | undefined, now = new Date()
   if (Number.isNaN(age) || age > RECHECK_FRESH_MS) return null;
   const d = match.details;
   if (d) {
-    const bits = [d.startAt ? `starts ${d.startAt}` : null, d.soldOut ? "sold out" : typeof d.spotsRemaining === "number" ? `${d.spotsRemaining} spots left` : null, d.price ? `price ${d.price}` : null].filter(Boolean);
+    const bits = [d.startAt ? `starts ${d.startAt}` : null, d.soldOut ? "sold out" : d.waitlist ? WAITLIST_SHORT : typeof d.spotsRemaining === "number" ? `${d.spotsRemaining} spots left` : null, d.price ? `price ${d.price}` : null].filter(Boolean);
     return `Its event page, read just now: ${bits.join(", ") || "still listed"}.`;
   }
   const page = String(match.pageNow ?? match.opportunity?.postText ?? ("evidence" in match ? match.evidence ?? "" : "")).replace(/\s+/g, " ").slice(0, 600);
