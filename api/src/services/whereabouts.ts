@@ -23,10 +23,15 @@ const plusDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`)
 export type Trip = { place: string; quote: string; from: string; until: string };
 // Pure: the model's whereabouts held to their words: the quote copied from their message, the place in the quote, dates as given (an end
 // before the start, or past TRIP_MAX_DAYS, is no trip); no end: TRIP_DEFAULT_DAYS from its start.
+// Their quote must say they're there (final review: "Investors in NYC keep asking for decks" was kept as an NYC trip).
+const BEING_THERE = /\b(?:i'?m|i am|we'?re|we are|i'?ll be|we'?ll be|i will be|we will be)\b[^.?!]{0,30}\b(?:in|at)\b|\b(?:visiting|heading (?:to|out to|down to|up to)|flying (?:to|into)|driving (?:to|up to|down to)|staying in|off to|back in|landed in|arrived in|traveling to|travelling to)\b/i;
+const IN_FOR_NOW = /\bin [A-Z][\w.]*(?: [A-Z][\w.]*)? (?:this week|this weekend|today|tonight|tomorrow|till|until|through|thru|for the week|for a few days)\b/;
 export function tripFrom(raw: unknown, message: string, today: string): Trip | null {
   const w = (raw ?? {}) as { place?: unknown; quote?: unknown; from?: unknown; until?: unknown };
   const got = backedPlace(w.place, w.quote, [message]);
   if (!got) return null;
+  const q = got.quote.replace(/[\u2018\u2019]/g, "'");
+  if (!BEING_THERE.test(q) && !IN_FOR_NOW.test(q)) return null;
   const from = typeof w.from === "string" && day(w.from) && w.from >= today ? w.from : today;
   const until = typeof w.until === "string" && day(w.until) ? w.until : plusDays(from, TRIP_DEFAULT_DAYS);
   if (until < from || Date.parse(until) - Date.parse(from) > TRIP_MAX_DAYS * 86_400_000) return null;
@@ -71,7 +76,9 @@ export async function liveTrip(userId: string, today: string, db: Db = pool): Pr
 // Pure: a trip row as a current place, only inside its window.
 export function tripRowCurrent(r: { place: string | null; quote: string | null; read_at: Date | string; window_start: Date | string | null; window_end: Date | string | null } | null, today: string): CurrentPlace | null {
   if (!r?.place || !r.quote || !r.window_end) return null;
-  const d = (x: Date | string | null) => (x == null ? null : x instanceof Date ? x.toISOString().slice(0, 10) : String(x).slice(0, 10));
+  // A DATE column comes back as a Date at local midnight (node-postgres): its own calendar day, never through UTC (final review).
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const d = (x: Date | string | null) => (x == null ? null : x instanceof Date ? `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}` : String(x).slice(0, 10));
   const start = d(r.window_start) ?? "0000-01-01";
   const end = d(r.window_end)!;
   if (today < start || today > end) return null;
