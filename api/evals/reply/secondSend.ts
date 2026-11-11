@@ -169,6 +169,18 @@ for (const [name, c] of [["matching walkthrough", MATCHING], ["vent + ask", VENT
   check("a multi-line list with one exact repeated sentence: only that line goes, line breaks kept", f3.dropped && f3.text === "Here's the list:\nPay the deposit by Friday.\nConfirm the move-in date with the landlord.", f3);
   check("decimals and links aren't split", T.sentencesOf("It's 2.5 miles, see https://example.test/a.b for the map.").length === 1);
 }
+// A second text that only offers again, after one that offered (2026-11-11, golden std-old-rec-not-new): held. New content after an offer goes.
+{
+  const r = real("Anything new worth my time this week?");
+  await r.send("Nothing's running on that right now. Want me to start on it?", "1");
+  await r.send("If you want, I can start looking, whether that's events worth going to or something toward the founding engineer search.", "2");
+  check("a reworded second offer after an offer is held", r.t.state.sentMessages.length === 1, r.t.state.sentMessages);
+  const r2 = real("Which one should I go to?");
+  await r2.send("The reading club Thursday. Want me to send the link again?", "1");
+  await r2.send("It's free and RSVP is on the page; the dinner is $40 and the host picks the table.", "2");
+  check("new content after an offer still goes", r2.t.state.sentMessages.length === 2, r2.t.state.sentMessages);
+  check("reOffers: every sentence an offer, after an offer", T.reOffers("Happy to dig in. Say the word.", ["Want me to look?"]) && !T.reOffers("Happy to dig in.", ["Thursday at 7."]) && !T.reOffers("It's free. Want me to RSVP?", ["Want me to look?"]));
+}
 // Pure.
 check("asked: a question or a request", T.askedForSomething(VENT_ASK.message) && T.askedForSomething(MATCHING.message) && !T.askedForSomething(COMPLETE.message) && !T.askedForSomething(PRIYA.message));
 check("repeatsSent: same, contained, or nearly all the same words", T.repeatsSent("Hi there.", ["Hi there. How are you?"]) && !T.repeatsSent(MATCHING.second, [MATCHING.first]));
