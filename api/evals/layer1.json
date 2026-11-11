@@ -307,6 +307,7 @@
     "evals/brain/binding.ts",
     "evals/checkins/rules.ts",
     "evals/reply/usesItsFinds.ts",
+    "evals/reply/readFacts.ts",
     "evals/reply/shareGuide.ts",
     "evals/reply/oneReply.ts",
     "evals/reply/secondSend.ts",
