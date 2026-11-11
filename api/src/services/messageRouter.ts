@@ -117,7 +117,7 @@ export function describeOpenItem(kind: OpenItemKind, detail: string | null, opts
     case "walkin_ask":
       return "They checked in at an event and Cue asked what they're hoping to find there / who they'd want to meet";
     case "offer_reaction":
-      return `Cue sent them "${detail ?? "something"}" (with its details) and they haven't reacted to it yet. Only answer this if their message clearly reacts to it: interested ("ooh I'll check it out", "that looks good"), not_interested ("not for me", "I'll pass", "not really my thing"), or already_did_it (they say outright that they signed up, registered, applied, or went; a question about it, like what to bring or where it is, is not). A bare thanks, an emoji, or talking about something else isn't a reaction`;
+      return `Cue sent them "${detail ?? "something"}" (with its details) and they haven't reacted to it yet. Only answer this if their message clearly reacts to it: interested ("ooh I'll check it out", "that looks good"), not_interested ("not for me", "I'll pass", "not really my thing"), or already_did_it (they say outright that they signed up, registered, applied, went, or are going, a plan to go like "going tonight!"; a question about it, like what to bring or where it is, is not). A bare thanks, an emoji, or talking about something else isn't a reaction`;
   }
 }
 
