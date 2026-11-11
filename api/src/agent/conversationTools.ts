@@ -96,6 +96,11 @@ export type ConversationToolContext = {
   stubEvents?: import("./loopTools.js").StubEvent[];
   // Tests only: the meaning read the find guards use (agent/findGuards.ts realFindUseRead otherwise).
   findUseRead?: import("./findGuards.js").FindUseRead;
+  // Tests only: the late line's wait and its draft (agent/loopTools.ts LATE_LINE_AFTER_MS, draftLateLine otherwise).
+  lateLineAfterMs?: number;
+  lateLineDraft?: (theirWords: string) => Promise<string | null>;
+  // No late line this run (a retry after the delay note: something already went to them on this turn, agent/conversationReply.ts).
+  lateLineOff?: boolean;
   // A live call (services/callTools.ts): nothing but a link is texted mid-call.
   onCall?: boolean;
   // The live call's key: a task started on it is that call's job for that need (services/coTasks.ts dispatchKeyFor).
@@ -455,7 +460,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, pastLinkedFirst: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, pastLinkedFirst: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0, turnOver: false };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
@@ -2465,6 +2470,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
+  // The reply loop is done (agent/conversationReply.ts, right after the model run): no late line after this, its timer cleared.
+  const endTurn = () => {
+    state.turnOver = true;
+    if (turnLoop?.lateTimer) clearTimeout(turnLoop.lateTimer);
+  };
   guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx), changed: (t) => ctx.facts?.changed?.(t) });
   // One reply, unless something new came in (2026-10-28 before/after run: a job-offer reply sent "That's huge, Priya. Congratulations."
   // then a second text, "Congratulations. That it's the first one in years...", and golden nothing-at-all records the same shape: a
@@ -2474,5 +2484,5 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // answer meant to ride with a link. Parallel calls in one step count: the first claims the turn's reply before it awaits anything.
   // Outermost, after the guard, so a held second text never reaches the guard's log as a send.
   wrapSendsForOneReply(tools as Record<string, any>, state, () => !!ctx.answerOwed, ctx.dryRun, () => askedForSomething(ctx.resolvedContent));
-  return { tools: orderForCache(tools), state, flushLinks, loop: () => turnLoop };
+  return { tools: orderForCache(tools), state, flushLinks, loop: () => turnLoop, endTurn };
 }

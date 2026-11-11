@@ -307,7 +307,9 @@ export async function runConversationReplyAgent(
   let cutFirstDone = false;
   // Steps finished, so a guard knows whether a redraft can still follow (conversationTools.ts sendReply redraftLeft).
   let stepsDone = 0;
-  const { tools, state, flushLinks } = createConversationTools(tapToolContext({
+  const { tools, state, flushLinks, endTurn } = createConversationTools(tapToolContext({
+    // A retry after the delay note: something already went to them on this turn, so no late line.
+    lateLineOff: (opts.attempt ?? 1) > 1,
     redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
     exchange: input.facts.exchange ?? null,
     turnScope: input.facts.turnScope ?? null,
@@ -599,6 +601,9 @@ ${TOOL_TURN_RULES(input.isVoice)}
       const { recordDecision } = await import("../harness/core.js");
       await recordDecision({ layer: 3, decision: "reply.timeout", userId: input.userId, outcome: "skip", action: state.sent ? "after_send" : "before_send", proposal: { message: input.resolvedContent.slice(0, 200), capMs: REPLY_CALL_TIMEOUT_MS } }).catch(() => {});
     }
+  } finally {
+    // The model run is over, however it ended (a crash included: review of #459): no late line can go after this (agent/loopTools.ts).
+    endTurn();
   }
 
   // Unlike a plain generateText completion (which always returns text), a
@@ -660,7 +665,10 @@ ${TOOL_TURN_RULES(input.isVoice)}
     } else {
       // Only counted when it really went out (2026-09-17 code review: a
       // refused send used to be marked sent, so nobody noticed the silence).
-      const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice });
+      state.sendsInFlight += 1;
+      const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice }).finally(() => {
+        state.sendsInFlight -= 1;
+      });
       if (sent !== false) {
         state.sent = true;
         state.lastReplyText = fallback;
