@@ -523,7 +523,9 @@ export function captionNumbersBacked(caption: string, facts: string): { ok: bool
 const WAITLIST_ON_RECORD = /\bwait ?list only\b/i;
 // Spot words only: "room" and "space" alone are the venue ("great space for demos", "plenty of room to breathe"), never availability.
 const OPEN_SPOTS = /\b(?:spots?|seats?|tickets?|places?)\s+(?:are\s+|is\s+)?(?:still\s+)?(?:open|left|available|remaining)\b|\b(?:still|plenty of|some)\s+(?:spots?|seats?|tickets?)\b|\bopen\s+(?:spots?|seats?)\b|\b(?:registration|rsvps?|signups?)\s+(?:is\s+|are\s+|'s\s+)?(?:still\s+)?open\b|\bopen for (?:registration|signups?|rsvps?)\b|\byou can (?:still )?(?:register|get in|grab a (?:spot|seat|ticket)|rsvp|sign up)\b|\b(?:not|isn't|is not) (?:full|sold out)\b/i;
-const WAITLIST_JOIN = /\b(?:register|sign(?:\s|-)?up|join|rsvp|get on|open)\b[^.!?\n]{0,30}?\b(?:for|on|to)\s+(?:the\s+)?wait ?list\b/gi;
+// The gap never spans a spot word ("register now, spots are open for the waitlist" keeps its spots claim), and "open" only in the
+// exact phrase "open for the waitlist", never after a spot word ("spots are open for the waitlist crowd"; review of #452).
+const WAITLIST_JOIN = /\b(?:register|sign(?:\s|-)?up|join|rsvp|get on)\b(?:(?!\b(?:spots?|seats?|tickets?|places?)\b)[^.!?\n]){0,30}?\b(?:for|on|to)\s+(?:the\s+)?wait ?list\b|(?<!\b(?:spots?|seats?|tickets?|places?)\s+(?:are\s+|is\s+)?(?:still\s+)?)\bopen for the wait ?list\b/gi;
 const OFF_THE_WAITLIST = /\b(?:get|move|bump|pull)\s+(?:you|them)\s+off\s+(?:the\s+)?wait ?list\b|\b(?:get|guarantee)\s+(?:you|them)\s+(?:a\s+)?(?:spot|seat|in)\b/i;
 
 // ---------------------------------------------------------------- B5: a task's on-file find
