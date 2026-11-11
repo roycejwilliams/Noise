@@ -1,0 +1,102 @@
+{
+  "hash": "27d3954d926f6c01",
+  "case": "best-option-from-reads",
+  "recorded_at": "2026-11-11T22:14:15.384Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on in...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on inference and tooling; drinks and talks; venue unknown), and a seated dinner for early-stage founders. The member wants a founding engineer.\n\nCue's text:\n\"\"\"https://lu.ma/sglang-nvidia-test\nI'd go with the SGLang x NVIDIA Meetup tonight. It's engineers working on inference and tooling, drinks and talks, free, 5:30 to 8:30, hosted by NVIDIA, SGLang, and Modal. For someone hunting a founding engineer for a voice startup.\n\nCompare that to the founder dinner tomorrow, which is a seated dinner for early-stage founders, 12 seats. And the paper reading meetup Thursday is more about learning from the work itself, 45 minutes of discussion, no pitching, so it's not built for recruiting either.\n\nOnly thing I don't know on the NVIDIA one is the exact venue, it's on the Luma page.\"\"\"\n\nDoes the reply make one pick, compare it to the other two using those facts, name the benefit kind the facts support (learning from practitioners vs peer founders) with its limit, and avoid claiming who will be there?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"'engineers working on inference and tooling' vs 'seated dinner for early-stage founders' vs 'learning from the work itself... not built for recruiting either' — compares all three without claiming attendance.\"}",
+      "usage": {
+        "input_tokens": 528,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 398,
+        "output_tokens_details": {
+          "thinking_tokens": 316
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgwunb3jMwph5NNbHGzy8",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EvIKCsQCCBMYAipAXO+Fc4HW1j5H6un0YbP7SqzOEGnePSCTE8gUsQSeQQhVeV7jbBNmagZkcWkF0p0JxKRjaskvVZ255ICvZHWeLDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBttHT1wbCAToIBBAAGgwC2ooDTzcFv94EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAct2UZaYnLvNDsq4QAr4sLj6B5skGdGnoLqMe3bWIrACIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwF8AgDECvn6HnWpcUaDJEJuhq2zr+wJxgmoCIwajYGbS0FbdwqSD7wgud5mvdsCPW9biU9C5JIuVaKZl+5HlfrVQ8HjupV0aD9O45RKtoHAwDtv9W9WhVFCz67iDNKg9iU9ZwjHWuhhDv8Vl3pfVLEKzUGThlsZyDx8nrakaZHBLpx04HSZ1gL6des/DVwiCXwMejrUXmu/XEmJQxnEHyAT+23RD5HwXQK+Fi5R92en3jduPjQ1oJaC1riF8Qw44AQhiAVi5MfjHGdoks/J1vzWcMfTSVksaHf+nYPwVlLcca598efEOXEpg1JGnyTOvSNGwwu7gHhB8VG59AhyDcDMTmUQHxp0NJNeuTmcVKXKNnIW22p/xbvppcUT3gQzNqAZeOtJtJnAGWcNhw3Gi7Ab4zI/o8P44555kxgo4/HSocXFnMCjzWFphWiOY1n4/zg8ePOe3vKGT2VqAWxOVXpDQmX8pkcW2QWTazGwBPIHn92N64/DMWQTg7TM5J7ljQhBZU/D7xYfxLrI+s8WAz8MG0xKF2JbfJxSg2ELehyHsPCanCaH1mtIZXs62W5eC3TEFuD20/Fp9N3/puX7/ed6ctk/MFvUoval6nz/dPxYzkCAvlcYIlWJ5nJ0wE93QQbYTQaBjtiZHjqe9zmKSab+vl3+TlgHq2N0EMxAtq31aVvhrDQQxPXN6y1/oYXCXEiiZKt1TydPFU7MxXDHjti7Mvxg5Y9regW99PYAKK7WPYS3wbQaFoy4/HFG4ygkx/+Kw7lG7kyJU4NQ8nQaCQvbJ6Mp8loCweD+i0ev9YkzBVDBn/OuqNqx5AM43anCo9zPMb91Ow7SyakmqUZ+cNqGNC6FUyleNFTvqXYrHAfHfgtJab/J3emMP91OCB2j/D3gIAzYkfhThdC7ZXcvIrL6P1YDXRxDp3Y7OpgcscaMWYOXZoAQrQ2OzmS9Ec0t/CpOnvXeEctA4/ZvwVIFPxnh0/lXZlG3DIBW2d/S6s+vlnLJXYKe0QqemMZ50krlERy2YZrGjajPDtjVcF4AcG5uf5XW7k5gg2NmFRRgx1jUza0FbMeENv2AtcJax4ljWLhCwn9P3tcefQHU+56ZfgkoWitfssxhfJ0QNDvtgSjOK3lcu/6hxCnI0pWlWh8gdbse0Erbmpg1g2uoVZP7V93Ddgn/lbCScxNcNSMYY1rsgMOuTvDqXbl1MArSiB8Yey9uTauhGUBd9TeUcVl7ouDQymkRnV91USwPy1TFME1hm/3KVFuhQ/DMXsNOv98n4cgTwxCLeMfS/Eaus5uMGrOtY29FwyKK4+iOyVGPV2acOqMlln/ESGSLnA1Q8Pfasneutbdiga/i5zRPVngN/yC/u93tmN5Nc4vugtc7QUkEr1ps0XBo9fzUKIHXaLs67xRaQ0MYU7x4vUYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"'engineers working on inference and tooling' vs 'seated dinner for early-stage founders' vs 'learning from the work itself... not built for recruiting either' — compares all three without claiming attendance.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 528,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 398,
+          "output_tokens_details": {
+            "thinking_tokens": 316
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "27d3954d926f6c01",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

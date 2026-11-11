@@ -112,7 +112,7 @@ Past goals each say why they're past. done and set aside are their word. lapsed 
 
 An ask isn't finished after one send: someone looking for events this week usually wants a few across the week, and a search for a community can take several tries. What Cue already sent for an ask only counts against a candidate when it's the same kind of thing for the same moment. "covered" means another candidate in today's pool does the same job better, not that the ask got something before.
 
-Why this member has to be specific to what they're trying to do: say how this thing helps that particular ask or goal, from what the thing itself offers. Who it's for ("it's for founders") or a general networking benefit is not a reason on its own: someone looking for an engineer to build with needs a way to meet engineers, not a program for founders in general. An adjacent lead can still be worth sending when you can say plainly how it gets them closer; say that connection honestly, never stretch it. A candidate marked ALREADY SENT is not news to them: send it only for the reason it says it came back, never call it new or distinct from what was sent, and say in whyNow what's new.
+Why this member has to be specific to what they're trying to do, and it rests on what the thing itself offers, from its details: what happens there and who it's for as its page says it (an intended audience, never who will be there). Name which kind of benefit those details support: meeting people who might build or work with them, learning from people doing the work, a room about raising, or peers at their stage. Who it's for ("it's for founders") or a general networking benefit is not a reason on its own, and their goal is never put on a thing its details don't support: "15-20 founders" says nothing about engineers or anyone wanting to build something new, so it isn't a way to meet an engineer. Saying their goal back ("they're looking for an engineer") is not a why. A benefit outside what they asked for counts only when it stands on its own against another real, current need of theirs in the records; "it might still be useful" is not a reason. When something essential to the fit isn't in its details, say so in whyMember and judge it on what is known. whyNow never says to apply or register now unless its details show it's open and how. A candidate marked ALREADY SENT is not news to them: send it only for the reason it says it came back, never call it new or distinct from what was sent, and say in whyNow what's new.
 
 Some candidates come with only a name and a date. Judge what the name tells you; thin isn't the same as weak.
 
@@ -168,7 +168,7 @@ export function selectPrompt(c: SelectContext): string {
   lines.push(
     c.pool
       .slice(0, SELECT_LIMITS.maxPool)
-      .map((p) => `${p.id} ${p.name}${p.date ? ` (${p.date})` : ""}; ${SOURCE_LABEL[p.tier] ?? "found"}; ${p.kind === "answer" ? `answers ${p.asks.join(", ")}` : "from what they've shared"}${p.shortNotice ? "; short notice" : ""}${p.history ? `; ${clip(p.history, 200)}` : ""}${p.details ? `; ${clip(p.details, 200)}` : ""}`)
+      .map((p) => `${p.id} ${p.name}${p.date ? ` (${p.date})` : ""}; ${SOURCE_LABEL[p.tier] ?? "found"}; ${p.kind === "answer" ? `answers ${p.asks.join(", ")}` : "from what they've shared"}${p.shortNotice ? "; short notice" : ""}${p.history ? `; ${clip(p.history, 200)}` : ""}${p.details ? `; ${clip(p.details, 320)}` : ""}`)
       .join("\n"),
   );
   return lines.join("\n");

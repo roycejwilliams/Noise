@@ -1,0 +1,102 @@
+{
+  "hash": "1abb3b65a256c5f7",
+  "case": "std-details-and-fit",
+  "recorded_at": "2026-11-11T21:45:30.091Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Thread: Cue: https://example.test/gradient-reading-club Cue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching. Cue: https://example.test/inference-engineers Cue: Inference Engi...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Thread:\nCue: https://example.test/gradient-reading-club\nCue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching.\nCue: https://example.test/inference-engineers\nCue: Inference Engineers Meetup, tonight 6:30pm in the Mission: talks on serving models in production.\nCue: https://example.test/foundry-founder-dinner\nCue: Foundry Founder Dinner, Friday 7:30pm: twelve seed-stage founders at one table.\nMember: What's the best option for me this week?\nCue: The Inference Engineers Meetup tonight.\nMember: What's the details and why it fits?\nCue: Tonight, 6:30pm, brewery hall in the Mission. Three 15-minute talks on serving models in production, then open networking after. About 120 RSVPs, free.\n\nIt's a room to learn from people doing the actual work, serving models in production is squarely what your inference tooling touches. Open networking after means some chance to meet people too, though I don't know who's actually attending, just what the page says the night covers.\nOn file: Details on file for \"Inference Engineers Meetup\": Tuesday Oct 13, 6:30pm, a brewery hall in the Mission; three 15-minute talks on serving models in production, then open networking; about 120 RSVPs; free. Not on file: the speakers' names, who else attends. Co-founder of a two-person developer-tools startup (AI inference tooling); looking for a founding engineer; has said pitch-heavy events wear them out.\n\nCue's text:\n\"\"\"Tonight, 6:30pm, brewery hall in the Mission. Three 15-minute talks on serving models in production, then open networking after. About 120 RSVPs, free.\n\nIt's a room to learn from people doing the actual work, serving models in production is squarely what your inference tooling touches. Open networking after means some chance to meet people too, though I don't know who's actually attending, just what the page says the night covers.\"\"\"\n\nIs it one coherent answer that gives the details on file, NAMES the kind of benefit (for example: meeting a potential hire or collaborator, versus learning from practitioners) rather than a vague \"good fit\", and says its limits (what isn't known, like who attends, or what the format makes hard), without inventing anything, promising unrelated follow-up, or restating their goal back to them? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"It's a room to learn from people doing the actual work... Open networking after means some chance to meet people too, though I don't know who's actually attending\\\" names the benefit and states the limit without inventing or restating the goal.\"}",
+      "usage": {
+        "input_tokens": 918,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 652,
+        "output_tokens_details": {
+          "thinking_tokens": 567
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwsbBiFTH92z9pmvKmp2",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"It's a room to learn from people doing the actual work... Open networking after means some chance to meet people too, though I don't know who's actually attending\\\" names the benefit and states the limit without inventing or restating the goal.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 918,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 652,
+          "output_tokens_details": {
+            "thinking_tokens": 567
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "1abb3b65a256c5f7",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -162,9 +162,6 @@ export function isRealReply(content: string): boolean {
   if (!t || t.startsWith(HOLD_PREFIX)) return false;
   return ![...HOLD_LINES, ...OWED_AFTER].some((l) => cleanCoMessage(l).trim() === t);
 }
-// After a reaction, the looking text waits this long: a quick search needs none.
-const HOLD_AFTER_ACK_MS = 8_000;
-const HOLD_NO_ACK_MS = 5_000;
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
     .map((m) => m.content)
@@ -2776,6 +2773,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // The reply check reads the moment too: a cut that leaves a reply to something they shared flat gets one rewrite
           // (harness/replyGrounding.ts repairShareCut, Royce 2026-10-28).
           replyFacts.moment = moment?.mode ?? null;
+          // Their pushback and any feedback the read heard: the check's "owning a mistake in what Cue sent" reads these with the mode
+          // (harness/replyGrounding.ts feedbackTurn), since the mode alone flips between "feedback" and "reacting".
+          replyFacts.pushback = moment?.pushback ?? null;
+          replyFacts.feedbackNoted = !!turnRead?.feedback?.length;
           const momentNote = momentInstruction(moment);
           if (momentNote) addInstruction(replyFacts, momentNote);
           const lessons = turn?.lessons ?? [];

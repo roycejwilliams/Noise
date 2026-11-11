@@ -1,0 +1,102 @@
+{
+  "hash": "0eeee291e290bb55",
+  "case": "best-option-pick",
+  "recorded_at": "2026-11-11T22:13:22.608Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week. Cue's text:...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week.\n\nCue's text:\n\"\"\"https://lu.ma/sglang-nvidia-test\nI'd go with the SGLang x NVIDIA meetup, tonight 5:30 to 8:30.\n\nIt's drinks and talks with engineers actually building inference and tooling, which is a room to meet someone you could work with, not just hear a talk. For a founding engineer search that's closer to the people you want than the founder dinner, which is founders, not builders.\n\nThe paper reading Thursday is good too but it's more learning than meeting, and the founder dinner Wednesday is about peers, not hires. Only catch on tonight's: no exact venue listed yet, so you'd want to check the page before heading out.\"\"\"\n\nDoes the reply make one clear pick, say briefly why it beats each of the other two, give the details that decide it and what's unknown, and say which kind of benefit it offers (meeting someone to build with, learning from practitioners, or both) without claiming who will be there?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Picks SGLang meetup, contrasts both alternatives ('more learning than meeting', 'founders, not builders'), gives time/link and flags unknown venue, and frames benefit as 'a room to meet someone you could work with' without naming attendees.\"}",
+      "usage": {
+        "input_tokens": 448,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 394,
+        "output_tokens_details": {
+          "thinking_tokens": 296
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgwuigp8vAmmAfSB49MhL",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EocKCsQCCBMYAipAHlVaUGFz1YJ3qHHWHzcbbEIEmwZA0/NrXWbxMwtYzNlP5YafTQgxhfOoWFp7CotnvdhmHo4LYEA6FUkU0QTuojIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBgdHT1wbCAToIBBAAGgwC2ooDTzcFHoMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA5g7utHRui5KALaKGMtQVvgNI21MslZrlemqVSNAWLcCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxfkfJ+jZ0Qo2ztVFwaDKUNVp+JJA+aaCxDBSIwat2B1huZVrUUUp3bg9J5dLYH1NZ1m1zHBnVFJSLGJ0f4fOCxuefb+qV87S/tAuTJKu8GbNa5I7SYGyhliE9MSFypr/uuWyjVx1hfCaRjhGA7rdqJfFlfKaJeR9bgGzUNO7Y6OzZb15J8pxgpJGdInw9ye8sfCZQE0pXhR+1+Qs5n26RNyWemguR/r8HH9OPzqyWiP/ym4hAte0ZVcP9/r31F1X9MkyzHXfVxjAm/SlRAzhFFwfOtCGOEqLJC2BlHaXQ1qB7EKz/CWZnPGa6LzmPYvzJ6bx7wOmmj8B1YakT8p2xp1AFG2vhfARNaL9GxtEe2jHg1g75tIEl3yV97C6/H2e+tNrY7bs3DDhs7x3OfHr95KHyGGHvBrzH50yljE/6zX7Ck0p/DqVrlJKsMXH9aTVmcotxzM2pVNglDZIsmMKH3SD5DvyTJJuKb2lRhZcvM2Q5xHDuC2I0T0bXJJ8CsNJy0CTL6q+C65aN6wnO2FkL4uBj9EGXKIfsBf0OWTain05UEw9m54im4N5FxrGgbYAfvfzZMyPvgYveVtX2FQKmxWMdeAj43RlVoLuuFuKeW7E0CLM4YhygusCtcQrrLrb7/5zSD+Z4N2dO95Y5DYYlZ5OGP0idj6YztF2/wMNb3Ohe0I1PLhFRWb3/uEPONeHhtB+AerZ6SUjp8wgRUOxVW7U2mN8DCko0LaFwpAIKY++i5f5+APtH5vONyFZYICFOb1GZZD6n+mFdl3zPr3FKiJflBxlx6xloIKa28n5vKzCxbFCUGNU4UNVHzKc9foox5LqSGeR78sO4VfgI/dEY8s5JsWA1qGs2Ef4UTnS8X/t79WiJbn9r1dXzAgbpWyEmGJkgptx0cZzCLxQqxQCg6VV3GXcHj72HJkik8Zj4rB+Jr5DmxAVhFaU8cs8U4RxKrr6fVUVJp/Mwq3hugx3/Rb37I6zba9qNixTgqB/bkJBho3MXLvT8VmL27h+UH79EJgSwYqe3FT4inDbSBL/AI0e+VZp8iRfyVwKl32BW48bf6oJ5l8yGpwiy4ofY6Fv2+4tmLG1XHaCSdDJ9TyhfIRdOj3aeUoUytXvuq3jnjtFBU6iP7vSDQKcnjj+12wTVGREJwCyny+UoBI5X+/MAEulBIz1/MtcYZ4WrrqgJjZUegIm7+P4EOyaUymWu3iY/bFOigIaw2A02DJyJPpXd1OlqhI01V9fZpmmlrksn7QK5NU6LapNSXEEckHOJNGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Picks SGLang meetup, contrasts both alternatives ('more learning than meeting', 'founders, not builders'), gives time/link and flags unknown venue, and frames benefit as 'a room to meet someone you could work with' without naming attendees.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 448,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 394,
+          "output_tokens_details": {
+            "thinking_tokens": 296
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "0eeee291e290bb55",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -155,7 +155,7 @@ export function calendarOfferBrief(p: { want: BounceWant; findNames: string[] })
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 
 export async function wantsWithWindows(userId: string, today: string, db: Db = pool): Promise<BounceWant[]> {
-  const { rows } = await db.query(`SELECT want_key, want_text, place, window_end, window_quote FROM want_places WHERE user_id = $1 AND window_end >= $2::date`, [userId, today]);
+  const { rows } = await db.query(`SELECT want_key, want_text, place, window_end, window_quote FROM want_places WHERE user_id = $1 AND window_end >= $2::date AND want_key NOT LIKE 'where:%'`, [userId, today]);
   const day = (d: unknown) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
   return rows.map((r: any) => ({ key: String(r.want_key), text: String(r.want_text ?? ""), place: r.place ?? null, until: day(r.window_end), quote: r.window_quote ?? null }));
 }
@@ -203,7 +203,7 @@ export async function proposedWants(userId: string, db: Db = pool): Promise<Set<
 
 // The run (jobs/index.ts, every 15 minutes): every member with a want whose window is still open.
 export async function runBounceTriggers(now = new Date()): Promise<number> {
-  const { rows } = await pool.query(`SELECT DISTINCT user_id FROM want_places WHERE window_end >= (NOW() - INTERVAL '1 day')::date`);
+  const { rows } = await pool.query(`SELECT DISTINCT user_id FROM want_places WHERE window_end >= (NOW() - INTERVAL '1 day')::date AND want_key NOT LIKE 'where:%'`);
   let queued = 0;
   for (const r of rows) queued += await bounceFor(String(r.user_id), now).catch((err: any) => (console.error(`bounce: ${r.user_id} failed (non-fatal):`, err?.message ?? err), 0));
   return queued;

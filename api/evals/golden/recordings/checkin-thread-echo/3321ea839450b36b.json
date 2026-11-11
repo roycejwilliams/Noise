@@ -1,0 +1,102 @@
+{
+  "hash": "3321ea839450b36b",
+  "case": "checkin-thread-echo",
+  "recorded_at": "2026-11-11T21:40:26.258Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"That's great news, congrats on locking the room.\n\nNext up I'd nail down the headcount, since that drives everything else, menu, seating, final price with the venue.\n\nThen get invites out this week if you haven't, the earlier people have Nov 14 on their calendar the better your numbers firm up.\n\nAfter that it's confirming with the venue on food and drink, whether they handle it or you're bringing in a caterer, and any AV or music if the night needs it.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 275,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 39,
+        "output_tokens_details": {
+          "thinking_tokens": 36
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgwsDGmEVh84SMWvNCdgw",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS2wUKEAgTGAI4AUIIdGhpbmtpbmcSDNw2dpgSQBWQbIcUExoMlSWWXsbDdmT03g61IjCELyJgJVY0M/vybgaaAY/4mwpX5tUZBonCCvoA/T+MeEXBzU75WBbOcIym3Al195Aq+ATT/CaUK6W0Aa1j4yhC6iA9+o652ZUMsyAKcifFz95GRrK2zs6ylcH+EkZOedLNeWSsDY2SSt7xDRJn0kNKikj7+k/Phatec65/6YfKTKYodSmKYLzLN9jdrIpW/9x9ANZAC7eRjWKjIz+ePhkEFDyg0BxbW0LlXVnhYin6KSTjbtSr8gIbdByouDri/qbxKV+atBuK4Q3jQR9MiBuryd6Hz3l3QTyjWO0yas7MfrEMJnhGXHuhHVqGlUzu4LEEquYMAcywlhgTxV9E5QRcAzGG259G09sTR7iwif7TfmsoKi/wly5lgc/gDgpJFMANU/ajcml3/V0QZaUyhB/tUoK7DB0ALLY/AxnYQqdgXK/COon+ToTUsEPEIl+jXQABTqVNM6w4EqxMi0Rpt+m82sSwqgcXv6jPwiOTV4Iuq/xZlJTfS00y6s7u7/T3sNedQdpgQNudYrP9xxyrlFHT9XdTfP6wRu0S52x5kO6M+mIXisSnYsHdfBuHR0gmWRS8XEFu4BUK/l/0Ob8ehj4cs8KGkt0xbAUvIPSeE4vqcE1q4GQa2iD0BsFSdHkLRqCp7fJY1haK1HtTGi4LwtnJwfQUzEd8MsrgE9a5bhTF6itDc1S0RCRr9F2vs194vBtBvSzavin+shdFGKpdCJCj8ni2ahYMBU0WnB58uaClENfw50cqJxi0yGhn7OGD0+BHVAzKjzbv28AZgWz8/7XniP0TfocDA3f/z71izlVOMxfwl5EEmHoe59cSrtmI8qLG33LATPXKy2qZpzO2gd/qsQ05gAxLTpZIoE+MopB/HFIPWqUzRhxF6mnccdigzqe0WumOrelDxl6m/xgB"
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 275,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 39,
+          "output_tokens_details": {
+            "thinking_tokens": 36
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "3321ea839450b36b",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

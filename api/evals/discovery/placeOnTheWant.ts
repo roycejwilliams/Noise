@@ -159,7 +159,7 @@ check("the line goes for a place they didn't name in the want, once", W.noteDue(
 check("no line when the want said where, when they corrected it, or when it's their home city", W.noteDue({ place: "SF", source: "their_words", notedAt: null }) === null && W.noteDue({ place: "Oakland", source: "corrected", notedAt: null }) === null && W.noteDue({ place: null, source: "none", notedAt: null }) === null);
 {
   const pr = src("harness/proactive.ts");
-  check("the line rides the bundle beside its find (before the closing question if its caption can't be found), and is marked said only once delivered", /const at = i >= 0 \? i \+ 1 : composed\.messages\.length - \(composed\.closing \? 1 : 0\);/.test(pr) && /placeNote && result\.delivered\.includes\(placeNote\.line\)/.test(pr) && /W\.markNoted\(userId, placeNote!\.key\)/.test(pr));
+  check("the place note now rides in Cue's own caption (2026-11-11): given to the composer per find, marked said only once delivered", /whereFor\(userId, x\)/.test(pr) && /const whereSaid = /.test(pr) && /W\.markNoted\(userId, whereSaid\.key\)/.test(pr) && !/placeNote\.line/.test(pr));
 }
 
 // ---------------------------------------------------------------- 5. visible, correctable, removable
@@ -258,7 +258,7 @@ check("no line when the want said where, when they corrected it, or when it's th
   check("SF and San Francisco are the same place (no note, no second search for their own city)", W.samePlace("SF", "San Francisco") && W.samePlace("NYC", "New York, NY") && W.noteDue({ place: "SF", source: "told", notedAt: null }, "San Francisco") === null);
   const SH = await import("../../src/services/sweepShadow.js");
   check("the picker is told a find was searched where its want is, after its own facts (not their far-off home)", /SOLD OUT.*searched in SF, where this want of theirs is/.test(SH.describeMatch({ name: "x", details: { soldOut: true }, searchedIn: { key: "goal:a", place: "SF", source: "their_words" } }) ?? "") && !/searched in/.test(SH.describeMatch({ name: "x", searchedIn: { key: null, place: "Sacramento", source: "home" } }) ?? ""));
-  check("the note sits right after its own find's caption", /const i = after \? composed\.messages\.lastIndexOf\(after\) : -1;/.test(src("harness/proactive.ts")) && /W\.noteDue\(row, person\.city \?\? null\)/.test(src("harness/proactive.ts")));
+  check("the note is the composer's, checked: a caption that doesn't say where it looked goes back", /doesn't say where Cue looked/.test(src("harness/bundleComposer.ts")) && /W\.whereNoteFor\(s, row, home\)/.test(src("harness/proactive.ts")));
   check("what they told Co is read without Co's own notes on their line", /replace\(\/\\s\*\\\[\[\^\\\]\]\*\\\]\/g, ""\)/.test(src("services/wantPlace.ts")));
 }
 

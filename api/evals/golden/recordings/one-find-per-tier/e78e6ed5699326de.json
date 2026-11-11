@@ -1,0 +1,286 @@
+{
+  "hash": "e78e6ed5699326de",
+  "case": "one-find-per-tier",
+  "recorded_at": "2026-11-11T20:38:43.829Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-sonnet-5",
+    "grader": false,
+    "max_tokens": 16000,
+    "system": "You're Cue. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today. The bar is: they'd reply \"wow\". Not \"seems relevant\", not \"fits a keyword in their ask\". It has to be clearly for ...",
+    "messages": 1,
+    "last": "user: Member: Ellis, San Francisco. Today: Tuesday 2026-10-13 (their time, America/Los_Angeles). Discovery texts left this week: 4 (things they asked for don't use these). What they've asked Cue for (open): A1 (since 2026-10-12): climate founders dinners or a hike crew in SF Where they say they are headed...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 16000,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Member: Ellis, San Francisco. Today: Tuesday 2026-10-13 (their time, America/Los_Angeles).\nDiscovery texts left this week: 4 (things they asked for don't use these).\n\nWhat they've asked Cue for (open):\nA1 (since 2026-10-12): climate founders dinners or a hike crew in SF\n\nWhere they say they are headed (the LENS: judge every candidate against this as well as the asks; never cite it as the reason, the reason is an ask, a text, or what they did):\n- meet other climate founders who actually see each other\n\nTheir recent texts with Cue (oldest first):\nT1 Oct 12 09:20 They: I run product at a small climate startup and barely know anyone here yet. Dinners, a hike crew, that kind of thing.\nT2 Oct 12 09:21 Cue: Got it. I'll look for small rooms with climate people in them.\n\nWhat Cue sent them first, last 30 days, and what happened:\n(nothing)\n\nMember rules (for judging what goes; the send step still holds timing and caps):\nWhat's true:\n- Everything you say about them, other people, events, places, times, or what you've done comes from what you know about them or what was said in this conversation. If it isn't there, you don't have it: say so plainly, once, and say what you can do.\n- Your own read on something is an impression, so say it like one. Two events only clash if you have both start times and they overlap. Nobody knows who'll be at an event Cue isn't running.\n- When they've corrected something, only the corrected version exists. Never bring back the old one.\n- Something in what you know that's marked OLD is a question, not a fact: ask whether it's still true before you build on it.\n- What you did for them comes from what you actually sent or said. Never claim more.\n- Never say something is broken, down, sold out, failed or didn't work unless something in front of you says so. If you left a thing out, just leave it out.\n- You have no body. You can't be in a room, hold a drink, shake a hand or turn up anywhere in person. Be playful about it if the moment is light: wink at what you actually are, the voice in their phone, with them that way. Personality yes, small lies no.\nOther members: one member's details, plans, matches or answers never reach another member's conversation, and neither does whether someone is a member at all. People in their own life you talk about freely.\n\nTHIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Noise event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate \"rank\": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and \"forThem\": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or \"not a wow\" only moves it down its kind; it never empties a kind.\n\nThe pool (4):\nC1 Cue Supper: Climate Builders (2026-10-16); a Noise event; answers A1; a Cue dinner for 12, climate founders and operators, Thursday 7pm, Mission\nC2 Climate Tech Hike: Lands End (2026-10-18); an event; answers A1; a 15-person Saturday morning hike for people working in climate\nC3 Climate Founders Drinks (300+ RSVPs) (2026-10-15); an event; from what they've shared; a large open mixer, 300+ RSVPs, name tags\nC4 On Deck Climate Fellowship, winter cohort (2026-11-15); an opening (program, place or opportunity); from what they've shared; a part-time fellowship for climate operators; applications open, close Nov 15",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "medium",
+        "format": {
+          "schema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "set": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "verdicts": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cites": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "forThem": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "lastDay": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rank": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "taste": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "until": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "verdict": {
+                      "enum": [
+                        "send",
+                        "hold",
+                        "reject"
+                      ],
+                      "type": "string"
+                    },
+                    "why": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "whyMember": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "whyNow": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "wow": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "verdict",
+                    "rank",
+                    "forThem",
+                    "whyMember",
+                    "cites",
+                    "whyNow",
+                    "wow",
+                    "lastDay",
+                    "taste",
+                    "why",
+                    "until",
+                    "reason"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "set",
+              "verdicts"
+            ],
+            "type": "object"
+          },
+          "type": "json_schema"
+        }
+      },
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "You're Cue. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today.\n\nThe bar is: they'd reply \"wow\". Not \"seems relevant\", not \"fits a keyword in their ask\". It has to be clearly for them (something they said, a goal they're working on, a person or place they care about) and clearly for now (a date that's coming, a deadline, something that just changed, or exactly what they asked for this week). If you can't say both, it doesn't go today.\n\nFor every candidate, give one verdict:\n- \"send\": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Cue sent before, O# how they reacted), why now, and \"wow\": true only if you'd genuinely expect that reaction. If it's time-bound (an event's day, a deadline, a weekend), give \"lastDay\": the last day (YYYY-MM-DD) it's still worth sending; null if it will still be there next week.\n- \"hold\": good for them, but the thing itself isn't ready yet (it opens later, or it's too far out to act on), or it would crowd a stronger send today. Say when it would be right, as a date (YYYY-MM-DD) if you can. You judge whether it fits them and its timing, never their attention: don't hold something because they seem busy, focused elsewhere or in a mood. They decide what they're too busy for. Something open now with a deadline, or applications open, is never held for that.\n- \"reject\": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate in today's pool does the same job better; cite its C# in \"cites\"), closed (it rests on something finished: an ask that's closed, or a past goal that's done or set aside), already_known (they mentioned it, are going, already have it, or said no), ruled_out (their own words rule out this thing or this kind of thing; cite the ask or text, A# or T#, where they said it), other. Add one line why.\n\nA ruled_out reject cites their own words (A# or T#) that rule it out, at the scope they said it: a no to one thing (\"not this one\", \"pass\") rules out that thing only, never its kind; a kind is ruled out only when their words name the kind (\"no more founder residencies\"). No reply is not a no. A closed or already_known reject is a claim about a record, so it cites that record by id in \"cites\": a closed ask (A#), a past goal that's done or set aside (G#), something Cue sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.\n\nPast goals each say why they're past. done and set aside are their word. lapsed is Cue's own bookkeeping (a window that passed, a recheck they didn't answer), not theirs, and is never the reason something is closed. A closed one-off question (find me a couple of these) doesn't close an aim one of their active goals still carries either.\n\nAn ask isn't finished after one send: someone looking for events this week usually wants a few across the week, and a search for a community can take several tries. What Cue already sent for an ask only counts against a candidate when it's the same kind of thing for the same moment. \"covered\" means another candidate in today's pool does the same job better, not that the ask got something before.\n\nWhy this member has to be specific to what they're trying to do, and it rests on what the thing itself offers, from its details: what happens there and who it's for as its page says it (an intended audience, never who will be there). Name which kind of benefit those details support: meeting people who might build or work with them, learning from people doing the work, a room about raising, or peers at their stage. Who it's for (\"it's for founders\") or a general networking benefit is not a reason on its own, and their goal is never put on a thing its details don't support: \"15-20 founders\" says nothing about engineers or anyone wanting to build something new, so it isn't a way to meet an engineer. Saying their goal back (\"they're looking for an engineer\") is not a why. A benefit outside what they asked for counts only when it stands on its own against another real, current need of theirs in the records; \"it might still be useful\" is not a reason. When something essential to the fit isn't in its details, say so in whyMember and judge it on what is known. whyNow never says to apply or register now unless its details show it's open and how. A candidate marked ALREADY SENT is not news to them: send it only for the reason it says it came back, never call it new or distinct from what was sent, and say in whyNow what's new.\n\nSome candidates come with only a name and a date. Judge what the name tells you; thin isn't the same as weak.\n\nThings they asked for and things you'd bring up yourself clear the same bar. When both clear it and compete for today's sends, what they asked for goes first; what you noticed for them fills what's left. Send at most 3, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.\n\nWhen you send more than one, add \"set\": one line on why these go together today (what they share for this member, or how they differ), in plain words; it's what Cue's message opens with. Leave it out for one send or none.\n\nReturn ONLY JSON:\n{\"set\":\"...\",\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"whyMember\":\"...\",\"cites\":[\"A2\",\"T5\"],\"whyNow\":\"...\",\"wow\":true,\"lastDay\":\"2026-10-08\",\"taste\":\"matches\"},{\"id\":\"C2\",\"verdict\":\"hold\",\"why\":\"...\",\"until\":\"2026-10-08\"},{\"id\":\"C3\",\"verdict\":\"reject\",\"reason\":\"weak_fit\",\"why\":\"...\"},{\"id\":\"C4\",\"verdict\":\"reject\",\"reason\":\"already_known\",\"cites\":[\"S3\"],\"why\":\"...\"}]}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"set\":\"Three ways to meet climate founders directly from what you asked for — a small dinner, a hike crew, and a longer-term cohort of climate operators.\",\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A 12-person dinner of climate founders and operators Thursday in the Mission — the small room you asked for.\",\"whyMember\":\"You told Cue you barely know anyone here and specifically asked for dinners with climate people; this is exactly that, kept small enough to actually meet people.\",\"cites\":[\"A1\",\"T1\"],\"whyNow\":\"Happens this Thursday, Oct 16 — needs a reply this week to get a seat.\",\"wow\":true,\"lastDay\":\"2026-10-16\",\"taste\":\"matches\",\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C2\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A 15-person Saturday hike for people working in climate — small enough to actually talk.\",\"whyMember\":\"You asked for a hike crew alongside dinners; this is a small climate-industry hike, the other half of what you asked for.\",\"cites\":[\"A1\",\"T1\"],\"whyNow\":\"It's this Saturday, Oct 18 — the window to join is now.\",\"wow\":true,\"lastDay\":\"2026-10-18\",\"taste\":\"matches\",\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C3\",\"verdict\":\"reject\",\"rank\":2,\"forThem\":null,\"whyMember\":null,\"cites\":null,\"whyNow\":null,\"wow\":null,\"lastDay\":null,\"taste\":null,\"why\":\"300+ RSVPs with name tags is the opposite of the small room you described wanting — you said you barely know anyone and want real connection, not a big open mixer.\",\"until\":null,\"reason\":\"weak_fit\"},{\"id\":\"C4\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A part-time fellowship for climate operators — a longer-term way to build real relationships with other people working in climate, not just a one-off event.\",\"whyMember\":\"You run product at a climate startup and are looking to actually know other climate people here; a cohort of climate operators is a standing room for that, beyond single nights out.\",\"cites\":[\"A1\",\"T1\"],\"whyNow\":\"Applications for the winter cohort are open now and close Nov 15.\",\"wow\":true,\"lastDay\":\"2026-11-15\",\"taste\":\"matches\",\"why\":null,\"until\":null,\"reason\":null}]}",
+      "usage": {
+        "input_tokens": 1287,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 3143,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 2271,
+        "output_tokens_details": {
+          "thinking_tokens": 1473
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwnUWRN4FiAZ4NqnU9BR",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"set\":\"Three ways to meet climate founders directly from what you asked for — a small dinner, a hike crew, and a longer-term cohort of climate operators.\",\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A 12-person dinner of climate founders and operators Thursday in the Mission — the small room you asked for.\",\"whyMember\":\"You told Cue you barely know anyone here and specifically asked for dinners with climate people; this is exactly that, kept small enough to actually meet people.\",\"cites\":[\"A1\",\"T1\"],\"whyNow\":\"Happens this Thursday, Oct 16 — needs a reply this week to get a seat.\",\"wow\":true,\"lastDay\":\"2026-10-16\",\"taste\":\"matches\",\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C2\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A 15-person Saturday hike for people working in climate — small enough to actually talk.\",\"whyMember\":\"You asked for a hike crew alongside dinners; this is a small climate-industry hike, the other half of what you asked for.\",\"cites\":[\"A1\",\"T1\"],\"whyNow\":\"It's this Saturday, Oct 18 — the window to join is now.\",\"wow\":true,\"lastDay\":\"2026-10-18\",\"taste\":\"matches\",\"why\":null,\"until\":null,\"reason\":null},{\"id\":\"C3\",\"verdict\":\"reject\",\"rank\":2,\"forThem\":null,\"whyMember\":null,\"cites\":null,\"whyNow\":null,\"wow\":null,\"lastDay\":null,\"taste\":null,\"why\":\"300+ RSVPs with name tags is the opposite of the small room you described wanting — you said you barely know anyone and want real connection, not a big open mixer.\",\"until\":null,\"reason\":\"weak_fit\"},{\"id\":\"C4\",\"verdict\":\"send\",\"rank\":1,\"forThem\":\"A part-time fellowship for climate operators — a longer-term way to build real relationships with other people working in climate, not just a one-off event.\",\"whyMember\":\"You run product at a climate startup and are looking to actually know other climate people here; a cohort of climate operators is a standing room for that, beyond single nights out.\",\"cites\":[\"A1\",\"T1\"],\"whyNow\":\"Applications for the winter cohort are open now and close Nov 15.\",\"wow\":true,\"lastDay\":\"2026-11-15\",\"taste\":\"matches\",\"why\":null,\"until\":null,\"reason\":null}]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1287,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 3143,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 2271,
+          "output_tokens_details": {
+            "thinking_tokens": 1473
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "e78e6ed5699326de",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

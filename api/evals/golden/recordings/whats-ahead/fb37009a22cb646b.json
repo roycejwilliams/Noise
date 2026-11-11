@@ -1,7 +1,7 @@
 {
   "hash": "fb37009a22cb646b",
   "case": "whats-ahead",
-  "recorded_at": "2026-11-11T00:26:09.743Z",
+  "recorded_at": "2026-11-11T21:38:31.571Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They're asking Cue to surface anything worth looking forward to this week\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": true, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"mode\": \"asking\", \"topic\": \"what's coming up this week\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"says_okay\": false, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"scope\": {\"verdict\": \"in\", \"connection\": \"finding events/people worth meeting this week\"}, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "{\"reason\":\"They're asking Cue what's coming up this week, a general request for anything worth looking forward to.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"medium\",\"asked_for\":[],\"in_progress\":[],\"sent_recently\":[],\"mode\":\"asking\",\"topic\":\"what's coming up this week\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":{\"verdict\":\"in\",\"connection\":null},\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}",
       "usage": {
         "input_tokens": 5554,
         "cache_creation_input_tokens": 0,
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 357,
+        "output_tokens": 401,
         "output_tokens_details": {
-          "thinking_tokens": 32
+          "thinking_tokens": 74
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,18 +57,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgvC39rBzJJhRJFiChVsY",
+        "id": "msg_011Cgws4ajijt6PoNbG2vf9A",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EoUECsQCCBMYAipAb5GkAYf+LJapmd9wSbSFi7EJ5rIYMzHlOb9klnvqUF5WVDQP7OAy5R6ctjzD/KFGu9pnpz8oScJtLKTqyzkRXjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBn+zO1wbCAToIBBAAGgwC2ooDTzcFlEYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAjAm3a8/zwcyiDCIOs/5uWDUxFZpYj8LuWPL3Ma+xwpyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyVuXsize61cF4eFjkaDH3dssyRPxBZbSL9OiIwOQFMbU+wvQdI7R8YUeoKk487/rxHSibRTFxPR1lhPf1BRIzirQL4PuoExf5/To53Km7FZcISUKew+xCK3CWLWp99niK7n0RI63BVVX6csEcEddW6e4YUWs0wFqsqpqus9FGw5PV3NdidLzlShWYRSAS5G3sflMidY5xaoHDb89pc2m+86dVJcKF1mpkTsAI7ffHF0dYZRF9mPTtEj/jmXBgB"
+            "signature": "Ev8ECsQCCBMYAipAiWz/8UNkXrXNlIQijGksqA//7UGPt20/1HyWnWglXRfXZuWn03xOH1dd3w3MlLxFSbmLw2c/VNWtK32SDA4q+DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB1cDT1wbCAToIBBAAGgwC2ooDTzcFlEYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAjAm3a8/zwcyiDCIOs/5uWDUxFZpYj8LuWPL3Ma+xwpyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzcVEApSsBbgFvOh20aDOnFP7wrrcXC+VIQpiIwJ1AyT76f44rF9Kw7s82Tixb/iOitkCTrHPQZdL1Wpig4Psn0NyKBgZfx/p6qDbLuKucBbFKApkAZIxgSCbsdsFC/yJL0OI5z848HxzG2Xu9fbchZlK2lPchcXjSfJirq5qanEojJ0JGnoAbAlmscpiY3vPo+Rw1IuoG2qsHYXJwjARBt5bwNx6sX/VH1bfAmSADsUjSiboVv2Gt0mAfiQxMbMmfG70xreCFu2JucQy8t7/Qza9JP1cDo+svrDaSEjEPbdbVFLfBHvGGdp0TONZ0hdenYcyTnvMx+uZmTZ4c77QwIxKLevPJsEMwyXtrYUDp3IXd636ihw6OLVi9J0ocnICjssFQmmTS9Zae4ewS0nqCaQobZAxwtGAE="
           },
           {
             "type": "text",
-            "text": "{\"reason\": \"They're asking Cue to surface anything worth looking forward to this week\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": true, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"mode\": \"asking\", \"topic\": \"what's coming up this week\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"says_okay\": false, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"scope\": {\"verdict\": \"in\", \"connection\": \"finding events/people worth meeting this week\"}, \"message_kind\": \"ask\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "{\"reason\":\"They're asking Cue what's coming up this week, a general request for anything worth looking forward to.\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"medium\",\"asked_for\":[],\"in_progress\":[],\"sent_recently\":[],\"mode\":\"asking\",\"topic\":\"what's coming up this week\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":{\"verdict\":\"in\",\"connection\":null},\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -83,9 +83,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 357,
+          "output_tokens": 401,
           "output_tokens_details": {
-            "thinking_tokens": 32
+            "thinking_tokens": 74
           },
           "service_tier": "standard",
           "inference_geo": "global",

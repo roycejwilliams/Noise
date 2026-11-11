@@ -43,7 +43,7 @@ check("ack takes one fitting emoji (a plane for a landing), never words, several
   check("the closing tapback is any single emoji under the ack's rules, never the last one again", /reaction: z\.string\(\)/.test(ct) && /parseAck\(picked\)/.test(ct) && /sameReaction\(ctx\.lastReaction, reaction\)/.test(ct) && /sendReaction\(ctx\.messageHandle, reactionFor\(reaction\)(?:, \{ answerFor: ctx\.phoneNumber \})?\)/.test(ct));
   const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
   check("the reply knows Cue's last reaction (this turn's ack first)", /const lastReaction = ackSent \?\? \(await tapbacksP/.test(sb) && /\blastReaction,/.test(sb));
-  check("searches no longer add a 👀 of their own", !/sendReaction\(ownHandle, "👀"\)/.test(sb) && /HOLD_NO_ACK_MS/.test(sb));
+  check("searches no longer add a 👀 of their own", !/sendReaction\(ownHandle, "👀"\)/.test(sb));
   check("the read sees its recent reactions, and the backstop checks the same history before sending", /readTurn\(routeInput, t, coveragePriorContext\(profile\), \{ reactions: h \? describeTapbacks\(h\) : null(?:, record: exchangeBase)? \}\)/.test(sb) && /ackAllowed\(ackEmoji, h\)/.test(sb) && /sendReaction\(ackHandle, reactionFor\(ackEmoji\)\)/.test(sb));
   const rt = fs.readFileSync(new URL("../../src/services/readTurn.ts", import.meta.url), "utf8");
   check("the read is told reactions are communication: most get none, follow-ups get none, register first, never a heart on bad news, vary", /most messages get null/.test(rt) && /a follow-up to something they just asked/.test(rt) && /Read the emotional register first/.test(rt) && /never "❤️" or "😂"/.test(rt) && /Vary it/.test(rt));

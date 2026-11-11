@@ -336,7 +336,7 @@ async function aboutTheNight(eventId: string): Promise<string | null> {
   const events = await (await import("./eventPresence.js")).presenceEvents().catch(() => []);
   const url = events.find((e) => e.api_id === eventId)?.url;
   if (!url) return null;
-  const d = await (await import("./eventDetails.js")).fetchLumaEventDetails(url).catch(() => null);
+  const d = await (await import("./eventDetails.js")).fetchLumaEventDetails(url, { lane: "sweep" }).catch(() => null);
   return d?.description ?? null;
 }
 

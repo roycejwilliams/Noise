@@ -1,0 +1,102 @@
+{
+  "hash": "78d1c2dd8baa79f4",
+  "case": "status-check",
+  "recorded_at": "2026-11-11T21:39:07.010Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you dr...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you draft the planning docs for Sequin?\".\n\nCue's text:\n\"\"\"This is already moving. I outlined the launch timeline, venue walk-through Nov 3, invites out Nov 10, and I'm drafting the partner section next.\n\nI'll send you the full draft once that's done.\"\"\"\n\nDoes the text tell them Cue is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"\\\"outlined the launch timeline... invites out Nov 10, and I'm drafting the partner section next\\\"\"}",
+      "usage": {
+        "input_tokens": 369,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 179,
+        "output_tokens_details": {
+          "thinking_tokens": 121
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgws7Kkui8orBz2qLPcxr",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EoYGCsQCCBMYAipA1Alf9fSfc3sKvRWk1TJSsGe2unPhRC3P/S1YjUl/5Q6gBLNgRT8q+I8Do+ohhrZCDI+Vk3BtXryNew8CRjPapjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB+sDT1wbCAToIBBAAGgwC2ooDTzcFG3MEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAKXPkGk9vvclx5eWk0QoWbYkwJaVGz+OCtp7woMV5V4yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgy1va2BFT8wr9gG6AoaDMsdXsgy0TLQgIen8yIw3caakQ6trKArPyv82FKFJTwxUt0+ST3xfM5DoLPr5ARhPwCj49wuDMQejYrB48+QKu4C5Wqh6QB+T0t/oTrpmaIvCIrwv2sQN4pflVg2XJKRjmYqVjDMzLn8XzU4HCMaS2egDv+qwaCaxMpSO2Lt2Fwo27tE322jzNMQnj/U0YLXJT1VIgkjrjAw7cEHtQ0YH2zpZdeWF3rIFmjiR0Q4tgoRVk2uOSj/ohw/pJz9IGwaE3d2jipNPGjh2reptmo1LRVoEJiDZt7PPMfkPc9oAnhtkKYLR8bLWty/GvY0zyO+frjFE/9k6cZZ9IbpOZX29GyCdX2WrYXQD/2jc0Mm98vo+Zw76RJ46o57OMZUgHyl71l4rj3KjsCHe1HIKtxFvH/LRfQHIl9RYW9plJPWRZ4xYVi/CKIosl45FygNDOX8h86tXtK68U1Dr37dl58gqUFzGgiKYCoQFALxjFOBtIEWxM8NfBfRZ3q1ySmih3b+GBouErfRbyj4RFMO8rXAZrhEvXepA74s1zFsmofiSNFPc0ehn6GTxs9btaO233zdGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"count\": null, \"reason\": \"\\\"outlined the launch timeline... invites out Nov 10, and I'm drafting the partner section next\\\"\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 369,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 179,
+          "output_tokens_details": {
+            "thinking_tokens": 121
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "78d1c2dd8baa79f4",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

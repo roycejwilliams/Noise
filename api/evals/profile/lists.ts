@@ -169,9 +169,12 @@ const cityCases: [boolean, string][] = [
   [!cityChangeAllowed("San Francisco", "NYC", "assistant: I'm in your corner, we'll figure it out\nuser: thanks"), "only Cue's own line said it, not the person's"],
   [!cityChangeAllowed("San Francisco", "Austin", "user: we moved fast on the offer"), "'moved fast' isn't a move"],
   [!cityChangeAllowed("San Francisco", "Austin", "user: I am heading to a meeting, can we talk later"), "'heading to a meeting' isn't a place"],
-  [cityChangeAllowed("San Francisco", "NYC", "user: im in nyc now"), "missing apostrophe still counts"],
-  [cityChangeAllowed("San Francisco", "SF", "user: im in sf"), "a lowercase abbreviation still counts"],
-  [cityChangeAllowed("San Francisco", "NYC", "user: I’m in NYC these days"), "a curly apostrophe still counts"],
+  // 2026-11-11 (Royce): a move needs move words; "I'm in X" alone is a trip (services/whereabouts.ts), never a new home.
+  [cityChangeAllowed("San Francisco", "NYC", "user: im based in nyc now"), "missing apostrophe still counts"],
+  [cityChangeAllowed("San Francisco", "SF", "user: i live in sf"), "a lowercase abbreviation still counts"],
+  [cityChangeAllowed("San Francisco", "NYC", "user: I’m based in NYC these days"), "a curly apostrophe still counts"],
+  [!cityChangeAllowed("San Francisco", "NYC", "user: im in nyc now"), "'I'm in X' alone is a trip, not a move"],
+  [!cityChangeAllowed("San Francisco", "NYC", "user: I’m in NYC these days"), "'in X these days' alone is a trip, not a move"],
 ];
 for (const [ok, label] of cityCases) {
   check(`city: ${label}`, ok);

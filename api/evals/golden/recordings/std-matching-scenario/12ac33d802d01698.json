@@ -1,0 +1,102 @@
+{
+  "hash": "12ac33d802d01698",
+  "case": "std-matching-scenario",
+  "recorded_at": "2026-11-11T21:46:53.478Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Here's a made up walk through, start to finish. Say a member, call him Theo, tells me he's building in climate and wants to meet seed investors who write first checks. Another member, call her Dana, tells me separately she's an angel who does exactly that. Both end up on the list for the same Noise dinner.\n\nOnce I know they're both going, I reach out to each privately. I tell Theo there's someone at the dinner worth meeting and why, based on what he told me. Same to Dana. Neither hears what the other said about them, just that I think it's worth a conversation.\n\nIf they both say yes, I send one email to both, introducing them and saying why I thought to connect them. If either says no, it goes no further and the other never finds out it was floated.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 363,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 136,
+        "output_tokens_details": {
+          "thinking_tokens": 133
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cgwsho1CSw6vKjJakxZQp",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSpQgKEAgTGAI4AUIIdGhpbmtpbmcSDFlVOWXZnrq1kqZ8MhoM8LR0J6KrEEMwpCxIIjBVaLjlSsvEL91+N4FXjaKQwwE4QkYdgV6FH4EXdef3YP9iv5ZGK90j1B8jT0VYkp4qwgenZD11P2wc9yIaXQupneb1ag7KgXrTHf17A35Tb7H3179ozoI0dpjgaU3FGrBGgxhcnUdYqPpwYkKNw5wJAO2/S9BIw2K8DkAWtf5B+UZbKLTce8MJgiBW9DZWY8ooBdfxL6KRhv4lT9go8qTDV1dZKq/y9iD3ULQ3Z/zvoW+svFfmt4wDKkWut7cKrtvaWgsXNijzTqzTxrLCNKSaa0HSwj3Xt4Xr4ieslxcN7MIXDojS63Broxo76MCjerqZf8LGjCbXA98QkPBLkANZl7nQ8t6UuTxHlWaX0A0tpZx7KA3Zdn6w8A0UVYR0y4XiIkwsjPDurHxSmHSbTqrGUZPZSIyiFNK8vwD3NT30gRs69Wb4ESRx/iaRls3bSHq6P52b41sSyIU83ySdgS9oIs4GLuTjjLnCJ4PLQvY27TuZpV48TPEm+xqdskz0H3t265un0c8ZAhQ43JrtLGPoY2zhw3PfeFkVUY0UrI10P8Z4lmL/tWUlblNe64CMsqop5SrZTnxvylRw/oTg4i/vxatB/L4bOt3JNj2Ipsfq5IhVDzZWgxF99LtI8F+mT+bNuEJaat3q/a0w2mfRLgLPTeVq2MSDxxH0JDiTyuAQBOZ9H9BETsNHXiS9E3MjrPuosY8NJlrvUjEaT3Oh1ZSbCJBKsDzTlhJPY/YSaq+HJd68Lnri6PM86FsOjAHfWrwE8vW2k+Cs+NeCDtI+hA/wwb14CPYfwu9QP7q5YqpsJYjIJDbJLlAut5sAh+ftHAShcf7E+45q0742J4dDVKkzk8cpGumi4ciWd6D/wvWRNb8dKGgzJdl7UBSJ2FvUX4TanWFO6hNAOlHYPm7lksdNKa+ThJZuK3VYvqChAs3os8IHBKTEVccU5rXADF0UoHL0E1daHDyEubB2gBI3LNeL04leDsberEOMLVMg2OLZW9o9rUW9Yt1eJyj/xgsF/01k909x8q2ZK0Qr57f0mzBQJtcCSTgwAA4/6Ro3nAJ36vKE6WJGTXPsAS8YAfNJXnR/Z8tNNi5OHrZOefXLlw5BtCiGWTmt7sl28N91PC8AYKIAw/0YG/RLqDcy4qRQTRDZmSVGIoKk3nwUorQs571WV1GIlYN1yUov4sX+c8m/TpERoqnTQAwtXw5A6BEdHtjZ4Rnpk8l+T+UWAbJ+tvatje2Wfm1bzqSewZz/2flDX9izRTWJSWyL5Eo7CcQayBXorhuUSHeYw5uLWPAIzweuYMkwdRUUCym207DQ1Ye2Bo0PsfbRMjHGQkZLnd9zFyLscrZP6xgB"
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 363,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 136,
+          "output_tokens_details": {
+            "thinking_tokens": 133
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "12ac33d802d01698",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

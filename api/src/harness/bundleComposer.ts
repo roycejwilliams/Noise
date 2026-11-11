@@ -26,14 +26,38 @@ import { AUDIENCE_RULE, OFFER_HONESTY, REVEAL_MAX_CHARS, ROUNDUP_NOTE, VERIFIED_
 export { ROUNDUP_NOTE, VERIFIED_CLAIM };
 import { checkDraft, DRAFT_MODEL, renderFacts, type Candidate } from "./proactive.js";
 
-export const BUNDLE_LIMITS = { openingChars: 280, closingChars: 140, captionChars: REVEAL_MAX_CHARS, calls: 3 } as const;
+// A caption carries what the thing is, the benefit its facts support and the limit that matters (Royce, 2026-11-11), so it may run to
+// three sentences; the single reveal keeps its own limit (REVEAL_MAX_CHARS).
+export const BUNDLE_LIMITS = { openingChars: 280, closingChars: 140, captionChars: REVEAL_MAX_CHARS + 120, captionSentences: 3, calls: 3 } as const;
 
 // The pick's own reading of one find (services/sweepSelect.ts): why it's for this member, and why now. Null for a find that didn't come
 // through the pick.
 export type PickWhy = { whyMember: string; whyNow: string } | null;
 // tierPick: the best of its tier for them this morning (services/sweepSelect.ts tierPicks): never skipped for fit (composeBundle).
 // againWhy: why a resend comes back (harness/matchGate.ts repeatRule): never answered or talked about in a month, or what changed.
-export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; againWhy?: string | null; tierPick?: boolean };
+// where: say where it searched, once (services/wantPlace.ts whereNoteFor).
+export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; againWhy?: string | null; tierPick?: boolean; where?: import("../services/wantPlace.js").WhereNote | null };
+
+// Pure: whether the composed message actually says where it looked (the caption, for an inferred place) or asks keep-or-switch (the
+// closing, after a move): only then is the search marked as told (proactive.ts).
+export function whereWent(c: Pick<Composed, "included" | "perItem" | "closing">): import("../services/wantPlace.js").WhereNote | null {
+  const idx = c.included.findIndex((b) => b.where);
+  if (idx < 0) return null;
+  const w = c.included[idx].where!;
+  if (w.kind === "inferred") {
+    const caption = c.perItem[idx]?.messages[c.perItem[idx].messages.length - 1] ?? "";
+    return placeSaid(caption, w.place) ? w : null;
+  }
+  return c.closing && placeSaid(c.closing, w.place) && placeSaid(c.closing, w.home) ? w : null;
+}
+
+// Pure: the note a thing carries about where Cue searched for it (Royce, 2026-11-11). Cue phrases it; the note only says what's true.
+export function whereNote(w: import("../services/wantPlace.js").WhereNote | null | undefined): string {
+  if (!w) return "";
+  return w.kind === "inferred"
+    ? ` (they didn't name a place for this search, so Cue looked around ${w.place}: say that once, as a short clause in your caption, and that they can tell you if they meant somewhere else)`
+    : ` (they moved to ${w.home} since setting this search to ${w.place}, the place they named: your closing is one short question asking whether to keep it on ${w.place} or switch it to ${w.home})`;
+}
 export type ComposeInput = {
   firstName: string;
   items: BundleItem[];
@@ -137,8 +161,8 @@ export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: 
   const many = i.items.length > 1;
   const items = i.items
     .map((b, n) => {
-      const pick = b.pick ? `\nwhy Cue's daily pick chose it for them: ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now: ${b.pick.whyNow}` : ""}` : "";
-      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? againNote(b.againWhy) : ""}${b.item.roundup ? ROUNDUP_NOTE : ""}\n${renderFacts(b.item.facts)}${pick}`;
+      const pick = b.pick ? `\nCue's daily pick's read (a lead to check against its facts, never a fact and never words to repeat): ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now, as the pick saw it: ${b.pick.whyNow}` : ""}` : "";
+      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? againNote(b.againWhy) : ""}${b.item.roundup ? ROUNDUP_NOTE : ""}${whereNote(b.where)}\n${renderFacts(b.item.facts)}${pick}`;
     })
     .join("\n\n");
   return `${CO_VOICE}
@@ -146,15 +170,19 @@ export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: 
 ${CO_TEXT_CHANNEL} You're texting ${i.firstName}. Cue is reaching out first with ${many ? `${i.items.length} things, each its own link and description` : "one thing"}.
 
 HOW IT GOES OUT
-- No opening line: nothing before the first thing. Each thing stands on its own, its link then its description (Royce, 2026-10-13: "each tier found should get a link then a description. Never clump them up together").\n- Then, for each thing in order: its link (sent for you, as its own message) and your caption under it. Each caption names the thing and when it is, and says the one reason it fits them, in plain words. ${CO_WHY}
+- No opening line: nothing before the first thing. Each thing stands on its own, its link then its description (Royce, 2026-10-13: "each tier found should get a link then a description. Never clump them up together").\n- Then, for each thing in order: its link (sent for you, as its own message) and your caption under it. Each caption names the thing and when it is, says what it actually is from its facts (what happens there, who it's for as its page says it), and the one benefit those facts support for something they're in the middle of now, with the limit that matters. ${CO_WHY}
 - Each caption describes its own thing only, in its own words: what it is and why it fits them. Never mention, compare with or group it with the other things, and never repeat another caption's reason.
-${many ? "- After the last thing, end with your own line (it goes in \"opening\"): you know them, what they're going through and how they've been, so say what these mean for them now, however you'd say it. Your call, in Cue's voice. Ground it in what you actually know about them below; never invent a feeling or a situation, and never name what someone is unless they told you. (Royce, 2026-10-13: tie it back to \"knowing the user ... we want to be that help\"; \"it doesn't need to be scripted. Cue should have a mind of its own but still be on brand\".)\n" : ""}- Then one closing question that comes out of what you just said${many ? " about this set (which one, or whether any of them)" : ""}. Short, natural, yours: never a stock line.
-- A caption is at most ${BUNDLE_LIMITS.captionChars - 40} characters and never ends with a question; the opening at most ${BUNDLE_LIMITS.openingChars}; the closing at most ${BUNDLE_LIMITS.closingChars}. Don't mention links.
+${many ? "- After the last thing, end with your own line (it goes in \"opening\"): you know them, what they're going through and how they've been, so say what these mean for them now, however you'd say it. Your call, in Cue's voice. Ground it in what you actually know about them below; never invent a feeling or a situation, and never name what someone is unless they told you. (Royce, 2026-10-13: tie it back to \"knowing the user ... we want to be that help\"; \"it doesn't need to be scripted. Cue should have a mind of its own but still be on brand\".)\n" : ""}- A closing question only when it's genuinely useful: a real choice between these that needs their say, or something their answer would change. Otherwise the captions and links are the whole message and "closing" is null. Never a generic check ("Does this one interest you?", "Thoughts?", "Any of these catch your eye?"). (Royce, 2026-11-11.)
+- A caption is at most ${BUNDLE_LIMITS.captionChars - 40} characters and ${BUNDLE_LIMITS.captionSentences} sentences, and never ends with a question; the opening at most ${BUNDLE_LIMITS.openingChars}; the closing at most ${BUNDLE_LIMITS.closingChars}. Don't mention links.
+- Keep three things apart: what its page says (said as the page's), your read of what that could do for them (said as a read: "the page says X; that could mean Y"), and what isn't known. A quote can be misread: never state your read as what the page says. When something essential to the fit isn't in its facts, narrow what you say, or skip it.
+- Never "apply now", "worth applying now" or any push to sign up unless its facts show a way to apply or register that was read and a state or deadline that makes now matter. Logistics they need to decide (day and time, area, cost, approval or registration state) when its facts give them; never a street address, never a guess.
+- If two things have similar names, tell them apart by what they are, when and where.
+- A suggestion for how to use it only when its format makes it useful (a small discussion where they'll be asked what they're building); most of the time what it is, why it's worth their time, and the link are the whole thing.
 - ${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY}
 - A thing they didn't ask for is something you noticed for them: never say or imply they asked for it.
 - Only the facts listed for a thing back what you say about it. Days, dates, prices, counts: only as written there.
 - If one of them doesn't actually fit them, skip it (say why) rather than stretch, unless it's marked the best of its kind this morning: that one goes, captioned from its own facts. The member rules further down are never a reason to skip; fit is.
-- The closing asks which one, or whether any, interests them. It never offers to do something ("want me to...", "should I..."): what they want next is theirs to say.
+- A closing, when there is one, never offers to do something ("want me to...", "should I..."): what they want next is theirs to say.
 
 THE THINGS (CONFIRMED_FACTS for each: the only facts you may state about it)
 ${items}
@@ -163,7 +191,7 @@ THE THREAD (your recent texts with them, oldest first, their time)
 ${i.thread.trim() || "(nothing recent)"}
 ${i.threadLive && i.mayWait !== false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes: a conversation may be live. Never land these on top of something unrelated. If the thread is about something else and not finished, answer with {"wait": "why"}. If it's about this, or it's clearly done, go ahead and say in "connects" how this follows from it.\n` : ""}${i.threadLive && i.mayWait === false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes, and this can't wait any longer. If the thread is about something else, acknowledge it lightly in a few words in your first caption, and say in "connects" how you did.\n` : ""}${o.problems?.length ? `\nYOUR LAST VERSION (not sent)\n${o.last ?? ""}\nIt broke: ${o.problems.join(" | ")}. Write the whole message again with those fixed, keeping what worked.\n` : ""}
 Answer only with JSON:
-{${many ? '"opening": "the tie-back line", ' : '"opening": null, '}"items": [{"n": 1, "caption": "..."}, {"n": 2, "skip": "why it doesn't fit"}], "closing": "...?"${i.threadLive ? ', "connects": "how this follows from the thread"' : ""}}
+{${many ? '"opening": "the tie-back line", ' : '"opening": null, '}"items": [{"n": 1, "caption": "..."}, {"n": 2, "skip": "why it doesn't fit"}], "closing": "...?" or null${i.threadLive ? ', "connects": "how this follows from the thread"' : ""}}
 or {"wait": "why"}`;
 }
 
@@ -207,9 +235,68 @@ export function sameReason(a: string, b: string, namesA: string, namesB: string)
 }
 const STOCK = new Set([...OFFER_FOLLOWUP_MANY, ...OFFER_FOLLOWUP_ONE].map((s) => s.toLowerCase()));
 
+// A caption saying the thing is a list (a roundup shared as one).
+export const SAYS_LIST = /\b(?:a list|lists|listing|roundup|round-up|rundown|write-?up|rounds up|a post (?:listing|covering|that lists)|a guide to|covers (?:several|a few|\w+) (?:events|places|programs|things|options)|several (?:events|places|programs|options))\b/i;
+// A push to apply or sign up now.
+export const URGENT_APPLY = /\b(?:apply|register|sign(?:ing)? up|rsvp|request (?:a spot|to join)|grab (?:a|your) spot)\b[^.?!]{0,30}\b(?:now|today|asap|soon|early|while (?:it'?s|you can|there'?s))\b|\bworth (?:applying|registering|signing up)\b|\b(?:apply|register) (?:now|today|asap)\b/i;
+// Their goal given back as the reason ("you're hunting an engineer", "that's the fit:").
+// People a member looks for (the goal-paste check tests these only, never places or anything else; investors and VCs are left out: a page
+// saying "VCs" for a caption's "investors" isn't worth a rewrite). Review of #456.
+const PEOPLE = "engineers?|engineering|developers?|devs?|designers?|co-?founders?|cofounders?|founders?|builders?|hackers?|researchers?|scientists?|operators?|marketers?|mentors?|advisors?|collaborators?|teammates?|partners?|ctos?|ceos?|product managers?|pms?|recruiters?|hires?|talent|technical (?:people|folks|founders?)";
+export const GOAL_RESTATED = new RegExp(`\\byou(?:'re| are) (?:hunting|looking|searching|on the hunt|trying to find)(?: for)? (?:(?:an?|another|more|the|some|your next)\\s+)?(?:[\\w-]+\\s+)?(?:${PEOPLE})\\b`, "i");
+// Going said as settled ("since you're going", "see you there"): a find offered is never a plan of theirs (#445: registered, planned and
+// went are different).
+export const PRESUMED_GOING = /\b(?:since|now that|as) you(?:'re| are) (?:going|attending|registered|signed up)\b|\bsee you there\b|\bwhen you go\b|\byou(?:'re| are) (?:already )?(?:going|registered|confirmed|on the list) (?:to|for)\b/i;
+// A closing that only checks interest.
+export const GENERIC_CLOSING = /^(?:so,?\s*)?(?:does|do|would|could|will)\s+(?:this|that|it|these|either|any(?: of (?:these|them|those))?|one of these)(?:\s+one)?\s+(?:interest|appeal to|sound (?:good|interesting|fun|like you)|work for|catch your eye|grab|speak to|land with)\b[^?]{0,20}\?$|^(?:interested|thoughts|any interest|worth a look|sound good)\?$/i;
+const BENEFIT_VERB = /\b(?:meet|find|connect with|run into|cross paths with|hire|recruit|land|bump into)\b([^.;!?]{0,70})/gi;
+const stem1 = (w: string) => { const x = w.replace(/(?:ings?|ers?|ies|es|s)$/, ""); return x.length >= 4 ? x : w; };
+const stem = (w: string) => stem1(stem1(w));
+const PEOPLE_WORD = new RegExp(`^(?:${PEOPLE})$`, "i");
+// Pure: the words a caption says they could meet or find there that come from their own record and not the thing's. "the kind of room
+// where you could meet an engineer" is caught when "engineer" is in what they told Cue and nowhere in the thing's own facts.
+export function goalPasted(caption: string, record: string, theirs: string): string[] {
+  if (!record.trim() || !theirs.trim()) return [];
+  const words = (t: string) => new Set((t.toLowerCase().match(/[a-z]{4,}/g) ?? []).map(stem));
+  const own = words(record), them = words(theirs);
+  const out = new Set<string>();
+  for (const m of caption.matchAll(BENEFIT_VERB)) {
+    // A limit said plainly ("not a way to find an engineer") is the honest version, never a paste.
+    const before = caption.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0).split(/[.;!?]/).pop() ?? "";
+    if (NEGATED.test(before)) continue;
+    const span = m[1].split(/,|\bnot\b|\bbut\b/i)[0];
+    for (const w of span.toLowerCase().match(/[a-z]{4,}/g) ?? []) {
+      const s = stem(w);
+      if (PEOPLE_WORD.test(w) && !GENERIC_PEOPLE.has(s) && them.has(s) && !own.has(s)) out.add(w);
+    }
+  }
+  return [...out];
+}
+const NEGATED = /\b(?:not|no|never|isn'?t|doesn'?t|don'?t|won'?t|can'?t|nor|rather than|instead of)\b/i;
+// Words for people in general: never a goal pasted on ("someone solid", "people", "folks").
+const GENERIC_PEOPLE = new Set("someone people folk person other others friend new good solid real just like-minded alongside meet find connect hire recruit land bump cross paths".split(" ").map(stem));
+
+// Pure: the caption names the place (its first word, or a short form: "SF" for San Francisco, "NYC" for New York).
+const SHORT_FORMS: Record<string, string[]> = { "san francisco": ["sf", "san fran", "the city"], "new york": ["nyc", "ny", "new york city", "manhattan", "brooklyn"], "los angeles": ["la", "l.a."], sacramento: ["sac"], washington: ["dc", "d.c."] };
+// Any comma part of the place counts, and a part's main word ("Mission District, San Francisco" is said by "the Mission"; "Bay Area" by
+// "around the Bay"). A regional name for a city ("East Bay" for Oakland) isn't known here: that check never fails a bundle (composeBundle
+// drops it after the first redraft).
+const AREA_WORDS = new Set(["district", "area", "county", "city", "region", "neighborhood", "valley"]);
+export function placeSaid(text: string, place: string): boolean {
+  const t = ` ${text.toLowerCase().replace(/[^a-z0-9. ]+/g, " ").replace(/\s+/g, " ")} `;
+  const parts = place.toLowerCase().split(",").map((x) => x.trim()).filter(Boolean);
+  const forms = parts.flatMap((p) => {
+    const main = p.split(/\s+/).filter((w) => !AREA_WORDS.has(w));
+    return [p, ...(main.length && main.join(" ") !== p ? [main.join(" ")] : []), ...(SHORT_FORMS[p] ?? []), ...Object.entries(SHORT_FORMS).filter(([, v]) => v.includes(p)).map(([k]) => k)];
+  });
+  return forms.some((f) => f.length >= 2 && [" ", ".", ",", "?", "'"].some((end) => t.includes(` ${f}${end}`)));
+}
+
 export type Checked = { captions: Map<number, string>; problems: { at: "opening" | "closing" | number | "bundle"; why: string }[] };
 // Pure: every part of the draft against its rules. Caption numbers are 1-based, matching THE THINGS.
-export function checkComposed(d: Draft, i: ComposeInput): Checked {
+// o.lenient: past the first redraft, the where-it-looked checks no longer hold the bundle (a missing clause never fails it; the search
+// just isn't marked as told, so it's said on a later find).
+export function checkComposed(d: Draft, i: ComposeInput, o: { lenient?: boolean } = {}): Checked {
   const problems: Checked["problems"] = [];
   const captions = new Map<number, string>();
   const allFacts = Object.assign({}, ...i.items.map((b) => b.item.facts));
@@ -219,7 +306,9 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if (!got || (!got.caption && !got.skip)) return problems.push({ at: n, why: `thing ${n} (${b.item.name}) has no caption` });
     if (got.skip) return;
     const c = tidy(got.caption!);
-    const fails = checkDraft(c, { ...b.item.rules, maxChars: Math.min(b.item.rules.maxChars ?? BUNDLE_LIMITS.captionChars, BUNDLE_LIMITS.captionChars) }).filter((k) => !k.pass);
+    // A stricter limit on the item itself still holds (review of #456); the reveal's default gives way to the bundle's.
+    const itemMax = b.item.rules.maxChars;
+    const fails = checkDraft(c, { ...b.item.rules, maxChars: itemMax && itemMax < REVEAL_MAX_CHARS ? itemMax : BUNDLE_LIMITS.captionChars, maxSentences: Math.max(b.item.rules.maxSentences ?? 0, BUNDLE_LIMITS.captionSentences) }).filter((k) => !k.pass);
     for (const f of fails) problems.push({ at: n, why: `thing ${n}'s caption: ${f.name}${f.reason ? ` (${f.reason})` : ""}` });
     if (stripClosingQuestion(c) !== c) problems.push({ at: n, why: `thing ${n}'s caption ends with a question; the closing asks` });
     if (/https?:\/\//i.test(c)) problems.push({ at: n, why: `thing ${n}'s caption has a link in it; the link goes on its own` });
@@ -229,6 +318,14 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     // A resend is never news (Royce, 2026-11-10): its caption and the reason it came back must agree. A rewrite, never a veto.
     if (b.again && NEW_CLAIM.test(c)) problems.push({ at: n, why: `thing ${n} was sent to them before; its caption calls it new or different from what was sent` });
     if (b.item.roundup && VERIFIED_CLAIM.test(c)) problems.push({ at: n, why: `thing ${n} is a post listing several places; its caption says something about a listed program's terms, availability or deadline that nobody checked` });
+    // Royce, 2026-11-11: a roundup is said as one; no "apply now" without a checked way in; their goal is never put on the thing.
+    if (b.item.roundup && !SAYS_LIST.test(c)) problems.push({ at: n, why: `thing ${n} is a post listing several things; its caption must say it's a list and what it covers, not describe it as one event` });
+    if (URGENT_APPLY.test(c) && !b.item.applyRoute) problems.push({ at: n, why: `thing ${n}'s caption pushes them to apply or sign up now, and no way in with a state that makes now matter was read; say how it works from its facts, or leave that out` });
+    const pasted = goalPasted(c, b.item.record ?? "", [i.memberBlock ?? "", b.item.grounding].join("\n"));
+    if (pasted.length) problems.push({ at: n, why: `thing ${n}'s caption says they could meet or find ${pasted.map((w) => `"${w}"`).join(", ")} there, and its facts never mention that: say what its page supports (who it's for, what happens), and the limit` });
+    if (!o.lenient && b.where?.kind === "inferred" && !placeSaid(c, b.where.place)) problems.push({ at: n, why: `thing ${n}'s caption doesn't say where Cue looked (around ${b.where.place}, since they didn't name a place); add it as a short clause` });
+    if (PRESUMED_GOING.test(c)) problems.push({ at: n, why: `thing ${n}'s caption presumes they're going; nothing says they are (a request or a registration isn't going): say it as "if you go"` });
+    if (GOAL_RESTATED.test(c)) problems.push({ at: n, why: `thing ${n}'s caption gives their goal back as the reason; say what the thing offers toward it, from its facts` });
     captions.set(n, c);
   });
   // The reason doesn't repeat (C1).
@@ -258,15 +355,19 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if (/\?\s*$/.test(o) || /https?:\/\//i.test(o)) problems.push({ at: "opening", why: "the opening is a question or has a link" });
     else framing(o, "opening", BUNDLE_LIMITS.openingChars);
   }
+  // A moved search's question is the closing, and names both places.
+  const moved = i.items.map((b) => b.where).find((w) => w?.kind === "moved") as Extract<import("../services/wantPlace.js").WhereNote, { kind: "moved" }> | undefined;
+  if (!o.lenient && moved && (!d.closing || !placeSaid(d.closing, moved.place) || !placeSaid(d.closing, moved.home))) problems.push({ at: "closing", why: `they moved to ${moved.home}: the closing asks once whether to keep this search on ${moved.place} or switch it to ${moved.home}` });
   if (d.closing) {
     const q = tidy(d.closing);
     if (!/\?\s*$/.test(q) || (q.match(/\?/g) ?? []).length > 1) problems.push({ at: "closing", why: "the closing must be one question" });
     else if (/\b(?:want me to|should i|shall i|i can (?:grab|save|book|hold|send|get)|let me (?:grab|save|book|hold))\b/i.test(q)) problems.push({ at: "closing", why: "the closing offers to do something; it asks which one, or whether any, interests them" });
     else if (q.length > BUNDLE_LIMITS.closingChars) problems.push({ at: "closing", why: `the closing is ${q.length} characters (max ${BUNDLE_LIMITS.closingChars})` });
-    else if (STOCK.has(q.toLowerCase())) problems.push({ at: "closing", why: "the closing is a stock line; write it from what you said" });
+    else if (STOCK.has(q.toLowerCase()) || GENERIC_CLOSING.test(q)) problems.push({ at: "closing", why: "the closing is a generic check; ask only when there's a real choice that needs their say, otherwise leave it out" });
     else if (!repeatQuestionCheck(q, i.recent).pass) problems.push({ at: "closing", why: "the closing repeats a question they already answered" });
     else framing(q, "closing", BUNDLE_LIMITS.closingChars);
-  } else problems.push({ at: "closing", why: "no closing question" });
+  }
+  // No closing is a complete message (Royce, 2026-11-11: a question only when it's genuinely useful).
   return { captions, problems };
 }
 
@@ -341,7 +442,7 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
       last = raw.slice(0, 800);
       continue;
     }
-    const checked = checkComposed(d, now);
+    const checked = checkComposed(d, now, { lenient: calls >= 2 });
     const blocking = checked.problems.filter((p) => p.at !== "opening" && p.at !== "closing");
     const finalCall = calls >= BUNDLE_LIMITS.calls;
     if (blocking.length || (!finalCall && checked.problems.length)) {

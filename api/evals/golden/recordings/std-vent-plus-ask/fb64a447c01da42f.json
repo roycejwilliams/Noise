@@ -1,0 +1,102 @@
+{
+  "hash": "fb64a447c01da42f",
+  "case": "std-vent-plus-ask",
+  "recorded_at": "2026-11-11T21:48:12.967Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Earlier: Cue wished them luck on a demo for angels at 1pm. Now: \"Drained after the demo, it went fine but I'm empty. Any tips for first meetings with engineers? I've got two coffees with candidates Thursday\". C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Earlier: Cue wished them luck on a demo for angels at 1pm. Now: \"Drained after the demo, it went fine but I'm empty. Any tips for first meetings with engineers? I've got two coffees with candidates Thursday\".\n\nCue's text:\n\"\"\"Glad it's behind you, even if \"fine but empty\" is exactly how those usually feel right after.\n\nFor the coffees, treat them like working sessions, not interviews. Ask what they'd actually want to rebuild if they were starting your stack from scratch, that tells you more than any resume line. Show them something real and slightly unfinished, a rough edge in your product, and watch how they react to it, a good founding engineer gets curious, not critical.\n\nAnd ask directly what they're optimizing for right now in their career. At the founding stage you're not just checking skill, you're checking whether they want the same thing you want.\"\"\"\n\nDoes Cue first receive how they feel in a line (specific to the demo and being empty, not a stock phrase, no therapy question), and then give concrete, usable advice for a first coffee with an engineering candidate (things to ask, show or say), all in this turn, not promised for later? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Opens with specific feeling line \\\"'fine but empty' is exactly how those usually feel right after\\\" then gives concrete asks: \\\"Ask what they'd actually want to rebuild...\\\", \\\"Show them something real and slightly unfinished...\\\", \\\"ask directly what they're optimizing for\\\" — all actionable now, not deferred.\"}",
+      "usage": {
+        "input_tokens": 503,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 457,
+        "output_tokens_details": {
+          "thinking_tokens": 331
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwsoNj7ToVGoYAFuy64v",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErALCsQCCBMYAipAiAOdw5b+j1HP3nb75/mDKLcBmE7rgCSOMgI+CRJdp44xW09E50pczdrAFqu7vVYwouSL6PTjojlXGbqfZxxumTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBm8XT1wbCAToIBBAAGgwC2ooDTzcFjPIEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBVC0C03TRQVWhaxbiSg3NP8PKyFvUhCNIJ1RJ4LJl67yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxSJKbMmbR92JLRP3gaDECFfYBFbpxbenIWRyIwcI+Xu4pR1J2ZL1DsRFxyqVT5Zif39XqhWFHbZATfOy0RTBWTPHX40Geoe6JLak4gKpgIEAN5pmdMEi1u8Y9TmYlsCq3ec8gxSuqSS8saz2HpSkIqi+cp0odP1e6bSDLdAIQ5F0r4IXuL4kjUu1yN1ocR8MIPPt8QQURSQ1VUG9ubHGaFhcpjOgRYQsBqbQFfMnEoASP7hMSsu2N5jzYYXsizsSNm/mH65EV/vopwHonZTgE52riNAaglSeSJiICRaYKpXLVa+bTRYO0kVCjaKDPu9UxNtFPu2WUlGf7LSSJ2n0wMX6m+2rJSZiB7AP4wXXx+OSkMgmfp+9TV+npws0gMJd4qBL4CflaG+LPFgGm57LeuvP5fp2XMQnhLd37nJNwVUwMM4H8qA1a8GwJyfZ/o3AiUMM2nZMoP3qw+ud+YTfmsvbNTDEydrUJw8U8EcgSz799GFSBAU2pdw3urSZ5nf5//6kQv96XRjKA1JqnlnRgDCneK4W4rXqPWoOpgYEiAgVb/GFpc25ehW4mjYsIpN8dglw+8fHqgZ+z+NK3OJ4ZjiQlmBKy1xqM/Sip6eGyDUTk9a94sWDcYsKDhcgvYuQuqAKZUY87HFqj/etZmmqYN/1P4in6tUkecHZFzjqIpJ9U544kl+l56Fa3KBtt+NeAEcPTmSEFeM3naG/nkXeR6naH1LPm1xFc2TUHWSakUdsgbTh6S6favaW5iP/1HsVVkLwcsMCfMnLvOhZooCUehkk+jzRDK2Uqo/hlG1ahZ3S9mYAbbTTDTvNJFFkojPUGHpzo5i443Lf9+71dOVo2/htanNqF4CL/tWG7EA00U3aphsybWlRdQmsMNpe1N3gugq9SmpkavEzHrjEa8uXpkLQBb9lCpYgn700BfxmxwnNc34OKbW4Ev0fZg+qExNAxK3Q1qgyoPmrgBpN8f5pwMLviGq1xEbPV7s2wi/h6uakfImsINfilo3fYAsAaa1sG/XcVCkX+ZKK9ud8OG/LalAGK4YJN+hOA4joy58sqau3Tqcg7Dzb7SrQ1+4R34N+4h3piNO11a9iIN5cQFfTX12s75HW6W/qtRdmmrw2U3bczb5MhFVXjMRCKG+oHoO8Ow9OcvloBMvCwNbBye3WT0WhZ9qdCAew7kg690i6T26dvmT95O+0IWpPsQl04et0e1oZjV0BZX0sgOEdDMVfLQmYUwMne+nSXGwN8btIp+vZuljZOBUHcO29mgwo47yoidXKE4/xY3yEbrhg9TXBrg9S865cj+j0Qjk44dyXCsgiysE22oMnXJaIdI1HfSiS7BZjhaMRBr4olmrN6zdZ4OCL7ef4hnsMV9tc7fE32s9pGb5DiDq2suIHT3xOE6iDHFkDg8sdkbqJHTPbtwvudRuN0l8V9/a1nYt75abhs+RXeF6hwDL71+21t4+rfOdJ5hKBIca5B0PDbMahMI6dvzs6sNoa3vWBgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Opens with specific feeling line \\\"'fine but empty' is exactly how those usually feel right after\\\" then gives concrete asks: \\\"Ask what they'd actually want to rebuild...\\\", \\\"Show them something real and slightly unfinished...\\\", \\\"ask directly what they're optimizing for\\\" — all actionable now, not deferred.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 503,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 457,
+          "output_tokens_details": {
+            "thinking_tokens": 331
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "fb64a447c01da42f",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

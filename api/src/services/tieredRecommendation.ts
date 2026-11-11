@@ -68,7 +68,8 @@ import { skipsPaidSearch } from "./testMemberSpend.js";
 // its url is then its own page, resolved at send, and roundupUrl the post. The post proves a mention, never current terms or fit.
 // pageIsAbout: the page it resolved to is about it, not its own (its host doesn't carry its name or acronym).
 // sendAsRoundup: no page of its own read; the post goes as what it is, a list of several places (services/sendCheck.ts roundupShare).
-type MatchExtras = { foundInRoundup?: string; roundupUrl?: string; pageIsAbout?: boolean; sendAsRoundup?: boolean; startAt?: string; searchedIn?: import("./eventSurfacingSweep.js").SearchedIn; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
+// read: the one read of what it is and what its facts support, made at the send-time read (services/opportunityRead.ts).
+type MatchExtras = { foundInRoundup?: string; roundupUrl?: string; pageIsAbout?: boolean; sendAsRoundup?: boolean; startAt?: string; searchedIn?: import("./eventSurfacingSweep.js").SearchedIn; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string; read?: import("./opportunityRead.js").OpportunityRead };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
@@ -140,7 +141,8 @@ async function cachedCalendarEvents(): Promise<CoCalendarEvent[]> {
   const resolved = await Promise.all(
     (await listCalendarEvents()).map(async (e): Promise<CoCalendarEvent | null> => {
       if (e.city) return e;
-      const page = e.url ? await fetchLumaEventDetails(e.url).catch(() => null) : null;
+      // A Noise event's place, read in the background whoever asks (cached for every later reader): the sweep's lane.
+      const page = e.url ? await fetchLumaEventDetails(e.url, { lane: "sweep" }).catch(() => null) : null;
       const place = resolveCoEventPlace(e.city, page, process.env.CO_HOME_CITY, !!e.url);
       if (place.source === "unresolved") {
         unresolved++;
@@ -229,14 +231,14 @@ export type EventSources = {
   viaExa: typeof lumaEventsViaExa;
   // Partiful's public listings for the city (services/partiful.ts): null when Partiful has none there (not a failure).
   partiful: (city: string | null, until: Date) => Promise<PartifulEvent[] | null>;
-  page: (url: string) => Promise<EventDetails | null>;
+  page: (url: string, lane?: import("./eventDetails.js").LumaLane) => Promise<EventDetails | null>;
   near: (a: string, b: string) => Promise<boolean>;
   rank: typeof rankEventsByDescription;
   gate: typeof gateMatches;
   record: typeof recordDecision;
   exaOn: () => boolean;
 };
-const realSources: EventSources = { feed: cachedPublicEvents, calendar: cachedCalendarEvents, viaExa: lumaEventsViaExa, partiful: (city, until) => partifulEvents(city, until), page: (url) => fetchLumaEventDetails(url), near: withinRadius, rank: rankEventsByDescription, gate: gateMatches, record: recordDecision, exaOn: () => exaConfigured() };
+const realSources: EventSources = { feed: cachedPublicEvents, calendar: cachedCalendarEvents, viaExa: lumaEventsViaExa, partiful: (city, until) => partifulEvents(city, until), page: (url, lane) => fetchLumaEventDetails(url, { lane }), near: withinRadius, rank: rankEventsByDescription, gate: gateMatches, record: recordDecision, exaOn: () => exaConfigured() };
 // Exa being off (no key) is logged once per start, not on every search: it's a setting, not a failure.
 let toldExaOff = false;
 // What Exa added to one search, for the log and the caller: null when Exa didn't run (no key, or a call: viaExa false).
@@ -320,7 +322,8 @@ export async function eventCandidates(
   // The ranking reads at most 40 (spread across the days), and a city's feed can hold more than that in a window (41 SF events for
   // q5 on 10-17), so Exa's go in first: they were found for this want, and the ranking still orders everything by how well it fits.
   const pool = [...theirs.filter((e) => fromExa.has(e.url)), ...theirs.filter((e) => !fromExa.has(e.url))];
-  const ranking = await src.rank(pool, what, { limit: opts.limit ?? 8, bar: 0, zone, browse: false }).catch(() => ({ ranked: pool.slice(0, opts.limit ?? 8).map((e) => ({ ...e, details: undefined as EventDetails | undefined })) }));
+  const lane = opts.source === "sweep" ? ("sweep" as const) : ("reply" as const);
+  const ranking = await src.rank(pool, what, { limit: opts.limit ?? 8, bar: 0, zone, browse: false, lane }).catch(() => ({ ranked: pool.slice(0, opts.limit ?? 8).map((e) => ({ ...e, details: undefined as EventDetails | undefined })) }));
   const asMatch = (e: any, tier: 1 | 2): TierMatch => ({
     tier,
     kind: tier === 1 ? "co_event" : "public_event",
@@ -345,7 +348,7 @@ export async function eventCandidates(
   const fromApi = new Map<string, EventDetails>([...(exa?.events ?? []).map((e) => [e.url, e.details] as [string, EventDetails]), ...partiful.map((e) => [e.url, e.details] as [string, EventDetails])]);
   const read = await Promise.all(
     raw.map(async (m) => {
-      const details = "url" in m && m.url ? (fromApi.get(m.url) ?? (await src.page(m.url).catch(() => null)) ?? undefined) : undefined;
+      const details = "url" in m && m.url ? (fromApi.get(m.url) ?? (await src.page(m.url, lane).catch(() => null)) ?? undefined) : undefined;
       return { ...m, ...(details?.startAt ? { startAt: details.startAt } : {}), details } as TierMatch;
     }),
   );

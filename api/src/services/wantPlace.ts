@@ -24,7 +24,8 @@ export const PLACE_LIMITS = { placeChars: 40, placeWords: 4, toldLines: 40, told
 
 // "unread": a row the want's window made before its place was read (wantWhen.ts saveWantWhere); placeFor reads it then, as if no row.
 export type PlaceSource = "their_words" | "told" | "corrected" | "none" | "removed" | "unread";
-export type WantPlace = { key: string; place: string | null; source: PlaceSource; quote: string | null; notedAt: Date | null; windowEnd?: string | null };
+// readAt: when its place was read or set.
+export type WantPlace = { key: string; place: string | null; source: PlaceSource; quote: string | null; notedAt: Date | null; windowEnd?: string | null; readAt?: Date | null };
 export type Want = { key: string; text: string; createdAt: Date | null };
 
 export const wantKeyForAsk = (askRowId: string) => `ask:${askRowId}`;
@@ -79,7 +80,22 @@ export type PlaceDeps = {
   endWindow?: (userId: string, key: string) => Promise<void>;
   // Where they asked Cue to search from now on (searchArea.ts), which stands in for their home city for a want with no place.
   area?: (userId: string) => Promise<import("./searchArea.js").SearchArea | null>;
+  // Where they are now, from their own dated words (currentPlaceOf): only a "near me" search (no place in its words or intent) uses it.
+  whereNow?: (userId: string) => Promise<CurrentPlace | null>;
 };
+
+// Where they are now (Royce, 2026-11-11): a place from one of their own lines, the line quoted and dated. It stands in for home only for a
+// search with no place of its own, and only while fresh (CURRENT_PLACE_DAYS) and cited; a stale or uncited one never moves a search.
+// A search with a place of its own (their words, the conversation that started it, a correction) never moves for it: a standing search
+// doesn't follow them on a trip.
+export type CurrentPlace = { place: string; quote: string; at: Date };
+export const CURRENT_PLACE_DAYS = 14;
+// Pure: the current place to use, or null.
+export function currentUsable(c: CurrentPlace | null | undefined, now: Date = new Date()): CurrentPlace | null {
+  if (!c || !c.place?.trim() || !c.quote?.trim() || !(c.at instanceof Date) || Number.isNaN(c.at.getTime())) return null;
+  const age = now.getTime() - c.at.getTime();
+  return age >= 0 && age <= CURRENT_PLACE_DAYS * 86_400_000 ? c : null;
+}
 
 // The place of one want: the stored one, or read now (once) and stored. A read that fails is not stored (read again next time) and
 // gives no place for this search.
@@ -134,6 +150,20 @@ export const samePlace = (a: string | null | undefined, b: string | null | undef
 };
 export function noteDue(p: Pick<WantPlace, "place" | "source" | "notedAt"> | null | undefined, home?: string | null): string | null {
   return p && p.place && p.source === "told" && !p.notedAt && !samePlace(p.place, home) ? PLACE_NOTE(p.place) : null;
+}
+
+// Say where it searched (Royce, 2026-11-11). inferred: the search had no place of its own (home, where they are now, the plan's, or one
+// read from what they told Cue), so the find says once, in Cue's own words, where it looked and that a word fixes it. moved: they moved
+// since this search's stated place was set, so the find asks once whether to keep it or switch to the new home. Once per search: noted_at
+// on its row. Pure.
+export type WhereNote = { key: string; place: string; kind: "inferred" } | { key: string; place: string; kind: "moved"; home: string };
+const INFERRED: readonly string[] = ["home", "current", "plan", "told"];
+const STATED: readonly string[] = ["their_words", "corrected"];
+export function whereNoteFor(s: { key: string | null; place: string | null; source: string } | null | undefined, row: Pick<WantPlace, "notedAt" | "readAt"> | null, home: { place: string; at: Date } | null): WhereNote | null {
+  if (!s?.key || !s.place || !row || row.notedAt) return null;
+  if (INFERRED.includes(s.source)) return { key: s.key, place: s.place, kind: "inferred" };
+  if (STATED.includes(s.source) && home && !samePlace(home.place, s.place) && (!row.readAt || home.at.getTime() > row.readAt.getTime())) return { key: s.key, place: s.place, kind: "moved", home: home.place };
+  return null;
 }
 
 export async function markNoted(userId: string, key: string): Promise<void> {
@@ -201,9 +231,9 @@ export const realPlaceDeps: PlaceDeps = {
     return sinceCache;
   },
   row: async (userId, key) => {
-    const { rows } = await pool.query(`SELECT want_key, place, source, quote, noted_at, window_end FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
+    const { rows } = await pool.query(`SELECT want_key, place, source, quote, noted_at, window_end, read_at FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
     const end = rows[0]?.window_end ? (rows[0].window_end instanceof Date ? rows[0].window_end.toISOString().slice(0, 10) : String(rows[0].window_end).slice(0, 10)) : null;
-    return rows[0] ? { key, place: rows[0].place ?? null, source: String(rows[0].source) as PlaceSource, quote: rows[0].quote ?? null, notedAt: rows[0].noted_at ? new Date(rows[0].noted_at) : null, windowEnd: end } : null;
+    return rows[0] ? { key, place: rows[0].place ?? null, source: String(rows[0].source) as PlaceSource, quote: rows[0].quote ?? null, notedAt: rows[0].noted_at ? new Date(rows[0].noted_at) : null, windowEnd: end, readAt: rows[0].read_at ? new Date(rows[0].read_at) : null } : null;
   },
   today: async (userId) => {
     const { memberZone, localDay } = await import("./memberTime.js");
@@ -246,4 +276,12 @@ export const realPlaceDeps: PlaceDeps = {
   },
   log: recordDecision,
   area: async (userId) => (await import("./searchArea.js")).searchAreaOf(userId),
+  whereNow: async (userId) => currentPlaceOf(userId),
 };
+
+// Their current place: a live trip (services/whereabouts.ts where:trip, their own words with its window), or none. No model read here:
+// the trip was read from their own line when they said it (turnLearning.ts whereabouts).
+export async function currentPlaceOf(userId: string): Promise<CurrentPlace | null> {
+  const [{ liveTrip }, { memberZone, localDay }] = await Promise.all([import("./whereabouts.js"), import("./memberTime.js")]);
+  return liveTrip(userId, localDay(new Date(), await memberZone(userId)));
+}

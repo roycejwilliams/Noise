@@ -603,7 +603,7 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   const r = await T.eventCandidates("founder dinners", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { ...sources(), rank: rankEventsByDescription } });
   globalThis.fetch = realFetch;
   check("through the whole search (real ranking): both Exa events go out, read from the API only, and no page is read anywhere", links(r).length === 2 && pageReads.length === 0 && !hosts.some((h) => /(^|\.)(lu\.ma|luma\.com)$/.test(h)) && apiCalls.filter((c) => c.startsWith("event ")).length === 2, { links: links(r), pageReads, hosts, apiCalls });
-  check("the ranking and the gate take an Exa event's details from the API (pinned)", /\(c as \{ details\?: EventDetails \}\)\.details \? Promise\.resolve/.test(src("services/eventRanking.ts")) && /const details = "url" in m && m\.url \? \(fromApi\.get\(m\.url\) \?\? \(await src\.page\(m\.url\)/.test(src("services/tieredRecommendation.ts")));
+  check("the ranking and the gate take an Exa event's details from the API (pinned)", /\(c as \{ details\?: EventDetails \}\)\.details \? Promise\.resolve/.test(src("services/eventRanking.ts")) && /const details = "url" in m && m\.url \? \(fromApi\.get\(m\.url\) \?\? \(await src\.page\(m\.url, lane\)/.test(src("services/tieredRecommendation.ts")));
   check("the Exa path's checks are Luma's official API, never a page read (pinned)", /lookup: d\.lookup \?\? \(\(slug\) => A\.lookupLumaEntity\(slug\)\)/.test(src("services/lumaViaExa.ts")) && /event: d\.event \?\? \(\(id\) => A\.getPublicLumaEvent\(id\)\)/.test(src("services/lumaViaExa.ts")) && !/fetchLumaEventDetails|readLumaEventPage|parseLumaEventPage/.test(src("services/lumaViaExa.ts")));
 }
 

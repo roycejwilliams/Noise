@@ -125,7 +125,7 @@ check("needQuality seeds the real path's facts (running work, sent records)", /r
   check("already linked (in the draft or gone this turn): not flagged", FG.unlinkedPastFinds(`${named} https://example.test/the-cellar-on-fell`, "what was the wine bar you sent?", wine, []).length === 0 && FG.unlinkedPastFinds(named, "what was the wine bar you sent?", wine, ["https://example.test/the-cellar-on-fell"]).length === 0);
   check("a past find not referenced this turn: not flagged", FG.unlinkedPastFinds(named, "what was the wine bar you sent?", [], []).length === 0);
   check("a member saying the link was wrong: never pushed again", FG.unlinkedPastFinds("You're right, that link to The Cellar on Fell was wrong.", "that link to the cellar was wrong", wine, []).length === 0);
-  check("the redraft note names the find and its link, and asks for shareLinks", /Sent before: "The Cellar on Fell" \(https:\/\/example\.test\/the-cellar-on-fell\)/.test(FG.findsRedraftNote("unlinked_sent", wine as any, [])) && /shareLinks/.test(FG.findsRedraftNote("unlinked_sent", wine as any, [])));
+  check("the redraft note names the find and its link, and asks for shareLink (the real tool)", /Sent before: "The Cellar on Fell" \(https:\/\/example\.test\/the-cellar-on-fell\)/.test(FG.findsRedraftNote("unlinked_sent", wine as any, [])) && /\bshareLink\b/.test(FG.findsRedraftNote("unlinked_sent", wine as any, [])));
   const T = await import("../../src/agent/conversationTools.js");
   const quiet = console.log;
   console.log = () => {};

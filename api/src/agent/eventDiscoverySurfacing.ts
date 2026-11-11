@@ -1,3 +1,4 @@
+import { renderRead } from "../services/opportunityRead.js";
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { formLabel } from "../services/findForm.js";
 import { CO_WHY } from "../services/coVoice.js";
@@ -77,6 +78,8 @@ function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): F
     ...matchFacts(askText, fromProfile, match),
     details: match.details ? renderEventDetails(match.name, match.details) : null,
     ...(match.pageNow ? (match.pageIsAbout ? { a_page_about_it_read_at_send: match.pageNow.slice(0, 1500) } : { its_own_page_read_at_send: match.pageNow.slice(0, 1500) }) : {}),
+    // The one read of what it is and what its facts support (services/opportunityRead.ts), made at the send-time read.
+    ...(match.read ? { what_it_is_read_at_send: renderRead(match.name, match.read).join("\n") } : {}),
     ...(match.sendAsRoundup
       ? { where_it_was_found: ROUNDUP_SHARED_FACT, source_post: match.opportunity?.postText ?? null }
       : roundup
@@ -132,7 +135,22 @@ export const REVEAL_LENGTH = `Keep it under ${REVEAL_MAX_CHARS - 40} characters:
 // One find as the bundle composer (harness/bundleComposer.ts) and the single reveal both see it: its confirmed facts, the rules its
 // caption is checked against, its link, and what a caption may say about who they are (identity grounding). Pure.
 // roundup: it goes as a post listing several places (bundleComposer.ts frames it so).
-export type RevealItem = { facts: Facts; rules: OutputRules; url: string | null; grounding: string; name: string; fromProfile: boolean; shortNotice: boolean; roundup?: boolean };
+// record: the thing's own words only (its name, page, post and structured record; never their ask or a fit read), for the goal check.
+// applyRoute: a way to apply or register was read and its state supports going now (applyRouteOf). supports: the benefit kinds its read
+// supports (services/opportunityRead.ts), absent when it has no read.
+export type RevealItem = { facts: Facts; rules: OutputRules; url: string | null; grounding: string; name: string; fromProfile: boolean; shortNotice: boolean; roundup?: boolean; record?: string; applyRoute?: boolean; supports?: string[] };
+
+// Pure: is there a checked way in, and does its state support "apply now"? Its own page (or event record) was read at send, it isn't a
+// list or a page about it, and the record says it's open: an event record not sold out or waitlisted, or a page that says how to apply.
+// A page that says it is open and how: "registration is open", "apply here", "RSVP by Nov 20", "open for applications" (a bare "registration" or "subject to host approval" says neither).
+const ROUTE_WORDS = /\b(?:registration|applications?|sign-?ups?|rsvps?) (?:is |are )?(?:now )?open\b|\b(?:apply|register|rsvp|sign up|request to join) (?:here|now|today|by|before|at)\b|\bopen (?:for|to) (?:applications|registration|sign-?ups)\b|\bget tickets\b/i;
+export function applyRouteOf(match: TierMatch): boolean {
+  const url = "url" in match && match.url ? match.url : null;
+  if (!url || match.sendAsRoundup || match.pageIsAbout || !match.checkedAt) return false;
+  const d = match.details;
+  if (d) return d.soldOut !== true && d.waitlist !== true && d.cancelled !== true && (!d.registration || d.registration === "open");
+  return !!match.pageNow && ROUTE_WORDS.test(match.pageNow);
+}
 export function revealItem(askText: string, fromProfile: boolean, match: TierMatch, opts: { dots?: string[]; why?: string } = {}): RevealItem {
   const dots = opts.dots ?? [];
   const why = opts.why ?? "";
@@ -154,6 +172,9 @@ export function revealItem(askText: string, fromProfile: boolean, match: TierMat
     fromProfile,
     shortNotice: isShortNotice(match),
     ...(match.sendAsRoundup ? { roundup: true } : {}),
+    record: [match.name, ...(match.details ? renderEventDetails(match.name, match.details) : []), match.opportunity?.postText ?? "", match.pageNow ?? "", ...(match.read ? match.read.facts.map((f) => f.quote ?? f.text) : [])].join("\n"),
+    applyRoute: applyRouteOf(match),
+    ...(match.read ? { supports: match.read.benefits.map((b) => b.kind) } : {}),
   };
 }
 

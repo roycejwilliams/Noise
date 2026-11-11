@@ -9,6 +9,7 @@
 //   voice:      services/coVoice.ts VOICE_PUNCTUATION (no exclamation points, no em dashes)
 import { prepareSource, spokenProblem, SPOKEN_COMMON } from "../../src/services/offerGuard.js";
 import { stockLine, textStockSentence } from "../../src/harness/stockLines.js";
+import { askedForSomething, reOffers, repeatsSent } from "../../src/agent/secondSend.js";
 
 export type TurnKind = "checkin" | "share" | "feedback" | "find" | "reply";
 // One text that went out this turn: Cue's reply (sendReply), a find or link line (shareFinds, shareLink), or the fallback.
@@ -30,6 +31,8 @@ export type HardRuleInput = {
   firstName?: string;
   // The finds this turn carried (their links), for link-then-caption.
   findUrls?: string[];
+  // Their message this turn: whether it asks for something decides if a second reply may go (#444).
+  message?: string;
 };
 
 const norm = (s: string) => s.replace(/[’‘]/g, "'").replace(/[“”]/g, '"');
@@ -118,8 +121,32 @@ function quoteOpenerNames(sentence: string, src: { all: ReturnType<typeof prepar
   }
   return out;
 }
+// Names Cue clearly introduces as made up, in a hypothetical it labels as one (Royce, 2026-11-11: "call them Dana and Priya" in a
+// walkthrough is fine): "call them X and Y", "say X and Y", "let's say X", "imagine X", "a guest named X". They count as given for the
+// whole turn; a name with no such label is still checked ("Dana from the dinner said she'd love to meet you").
+const NAME = "[A-Z][a-z]+";
+const NAME_LIST = `${NAME}(?:(?:,\\s*|,?\\s+and\\s+|\\s+or\\s+)${NAME})*`;
+const INTRODUCES = new RegExp(`\\b(?:[Cc]all(?:ing)? (?:them|him|her|the [a-z]+(?: [a-z]+)?)|(?:[Ss]omeone|[Aa] [a-z]+|[Tt]wo [a-z]+|[Oo]ne [a-z]+) (?:named|called)|(?:[Ll]et'?s say|[Jj]ust say|[Ss]ay)|[Ii]magine|[Ss]uppose|[Pp]icture)\\s+(${NAME_LIST})\\b`, "g");
+const LABELED = /\b(?:say|imagine|suppose|picture|hypothetical|for example|let'?s say|call (?:them|him|her)|named|called)\b/i;
+export function hypotheticalNames(text: string): string[] {
+  if (!LABELED.test(text)) return [];
+  return [...norm(text).matchAll(INTRODUCES)].flatMap((m) => m[1].split(/,\s*|,?\s+and\s+|\s+or\s+/)).filter((w) => !NOT_INTRODUCED.has(w));
+}
+// Capitalized words after "say" that open a clause, not a name ("Say I tell Dana", "say It's").
+const NOT_INTRODUCED = new Set(["I", "It", "Its", "That", "This", "The", "We", "You", "They", "He", "She", "There", "What", "When", "If", "Yes", "No"]);
+// A 24-hour time in what the turn stood on ("starts 2026-10-13T17:30", a read's stored form) backs the same time said the usual way
+// ("5:30", "5:30pm"; audit 2026-11-11, best-option-from-reads: "tonight 5:30 to 8:30" was flagged against 17:30-20:30).
+export function withTwelveHourTimes(given: string): string {
+  const extra = [...given.matchAll(/(?<![\d:])([01]?\d|2[0-3]):([0-5]\d)\b/g)].flatMap((m) => {
+    const h = Number(m[1]);
+    if (h < 13 && h !== 0) return [];
+    const twelve = h === 0 ? 12 : h - 12;
+    return [`${twelve}:${m[2]}`, `${twelve}:${m[2]}${h === 0 ? "am" : "pm"}`];
+  });
+  return extra.length ? `${given}\n${[...new Set(extra)].join(" ")}` : given;
+}
 export function inventedFacts(i: HardRuleInput): string[] {
-  const given = [i.facts, ...i.theirLines, ...i.coLines, i.firstName ?? ""].join("\n");
+  const given = withTwelveHourTimes([i.facts, ...i.theirLines, ...i.coLines, i.firstName ?? "", ...hypotheticalNames(i.text)].join("\n"));
   const src = { all: prepareSource(`${given}\n${SPOKEN_COMMON} ${OWN}`), asked: prepareSource(given) };
   const out: string[] = [];
   // A quote mark opens its own sentence: the capital after it ("Give", "Thanks") is a first word, not a name.
@@ -196,12 +223,24 @@ export function linkThenCaption(sends: Send[], findUrls: string[]): string[] {
   return out;
 }
 
-// ---- 7. One reply a turn: one sendReply text, unless a tool brought something new after it went out (TOOL_TURN_RULES).
+// ---- 7. One reply a turn: one sendReply text, unless a tool brought something new after it went out (TOOL_TURN_RULES), or they asked
+// for something and the next text carries what's new (#444, agent/conversationTools.ts wrapSendsForOneReply: the send path lets it go,
+// and to them it reads like the reply's next paragraph). Then only what the send path would hold is a miss: a text that repeats what
+// went (repeatsSent), a second offer (reOffers), or more continuing texts than it allows (MAX_CONTINUING_SENDS, 2).
 const WORK_TOOLS = new Set(["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "researchBrief", "startTask", "writeDocument", "makePage", "makeDeck", "followUp", "moveLane", "readDocument"]);
-export function repliesPerTurn(sends: Send[], tools: string[]): string[] {
+export function repliesPerTurn(sends: Send[], tools: string[], message?: string): string[] {
   const replies = sends.filter((s) => s.kind === "reply" && s.text.trim());
   if (replies.length <= 1 || tools.some((t) => WORK_TOOLS.has(t))) return [];
-  return [`${replies.length} replies in one turn: ${replies.map((r) => `"${r.text.slice(0, 50)}"`).join(" / ")}`];
+  if (message === undefined || !askedForSomething(message)) return [`${replies.length} replies in one turn: ${replies.map((r) => `"${r.text.slice(0, 50)}"`).join(" / ")}`];
+  const out: string[] = [];
+  replies.forEach((r, i) => {
+    if (!i) return;
+    const said = replies.slice(0, i).map((x) => x.text);
+    if (repeatsSent(r.text, said)) out.push(`a second reply that repeats what went: "${r.text.slice(0, 80)}"`);
+    else if (reOffers(r.text, said)) out.push(`a second offer in one turn: "${r.text.slice(0, 80)}"`);
+  });
+  if (replies.length > 3) out.push(`${replies.length} replies in one turn: more continuing texts than the send path allows`);
+  return out;
 }
 
 // ---- 8. Voice style: no exclamation points, no em dashes (coVoice.ts VOICE_PUNCTUATION; review round 2 of #318).
@@ -222,7 +261,7 @@ export function hardRuleMisses(i: HardRuleInput): string[] {
     ...machinery(prose),
     ...quotesOwnLine(prose, i.coLines, i.theirLines),
     ...linkThenCaption(sends, i.findUrls ?? []),
-    ...repliesPerTurn(sends, i.tools ?? []),
+    ...repliesPerTurn(sends, i.tools ?? [], i.message),
     ...voiceStyle(prose),
   ];
 }

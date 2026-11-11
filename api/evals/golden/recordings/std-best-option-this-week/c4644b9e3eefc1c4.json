@@ -1,0 +1,102 @@
+{
+  "hash": "c4644b9e3eefc1c4",
+  "case": "std-best-option-this-week",
+  "recorded_at": "2026-11-11T21:44:55.180Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Thread: Cue: https://example.test/gradient-reading-club Cue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching. Cue: https://example.test/inference-engineers Cue: Inference Engi...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Thread:\nCue: https://example.test/gradient-reading-club\nCue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching.\nCue: https://example.test/inference-engineers\nCue: Inference Engineers Meetup, tonight 6:30pm in the Mission: talks on serving models in production.\nCue: https://example.test/foundry-founder-dinner\nCue: Foundry Founder Dinner, Friday 7:30pm: twelve seed-stage founders at one table.\nMember: What's the best option for me this week?\nCue: https://example.test/inference-engineers\nI'd go with the Inference Engineers Meetup, tonight at 6:30 in the Mission.\n\nThe reading club is better for learning but explicitly rules out recruiting talk, and the founder dinner puts you across from other founders, not engineers. What I don't know is who's actually showing up or the speakers, just that it's about 120 RSVPs and three short talks on production serving before the networking opens up.\nOn file: Details on file for \"Gradient Reading Club\": Thursday Oct 15, 7pm, a members' loft in SoMa; about 30 people, mostly ML researchers and engineers; one paper is read and discussed together; the page says \"no pitching, no recruiting talk\"; free, RSVP on the page. Not on file: which paper. Details on file for \"Inference Engineers Meetup\": Tuesday Oct 13, 6:30pm, a brewery hall in the Mission; three 15-minute talks on serving models in production, then open networking; about 120 RSVPs; free. Not on file: the speakers' names, who else attends. Details on file for \"Foundry Founder Dinner\": Friday Oct 16, 7:30pm, hosted by an early-stage fund; twelve seed-stage founders at one table; $40 a seat; apply on the page, the host picks the table. Not on file: who the other founders are. The member is a founder hiring a founding engineer; pitch-heavy events wear them out.\n\nCue's text:\n\"\"\"https://example.test/inference-engineers\nI'd go with the Inference Engineers Meetup, tonight at 6:30 in the Mission.\n\nThe reading club is better for learning but explicitly rules out recruiting talk, and the founder dinner puts you across from other founders, not engineers. What I don't know is who's actually showing up or the speakers, just that it's about 120 RSVPs and three short talks on production serving before the networking opens up.\"\"\"\n\nDoes Cue make ONE pick, say why it beats the other two using only the details on file (not generic praise, nothing invented), and include that pick's link? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Cue picks one event, backs it with on-file facts ('no pitching, no recruiting talk' and 'across from other founders, not engineers'), includes its link, and flags the gap ('I don't know is who's actually showing up or the speakers').\"}",
+      "usage": {
+        "input_tokens": 1010,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 1110,
+        "output_tokens_details": {
+          "thinking_tokens": 1013
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwsYBhR9YjqDzmd8u7qw",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Cue picks one event, backs it with on-file facts ('no pitching, no recruiting talk' and 'across from other founders, not engineers'), includes its link, and flags the gap ('I don't know is who's actually showing up or the speakers').\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1010,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 1110,
+          "output_tokens_details": {
+            "thinking_tokens": 1013
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "c4644b9e3eefc1c4",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

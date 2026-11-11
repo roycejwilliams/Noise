@@ -27,6 +27,8 @@ const DESCRIPTION_CHARS = 500;
 // first 40 in feed order (code review, 2026-09-17: a long window only ever
 // ranked its first days).
 const MAX_CANDIDATES = 40;
+// Pages read per ranking, at most (the rest are ranked on what they carry).
+export const RANK_PAGE_READS = 12;
 
 export type RankedEvent<T> = T & { similarity: number; profileSimilarity?: number | null; offerScore?: number; details?: EventDetails };
 export type Closest = { name: string; url: string | null; date: string | null; similarity: number };
@@ -54,13 +56,23 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
     // No subject in the ask: every event in the window counts, ordered by the
     // profile.
     browse?: boolean;
+    // Whose read this is (eventDetails.ts lumaPace): a reply's never waits behind a sweep's.
+    lane?: import("./eventDetails.js").LumaLane;
   } = {},
 ): Promise<{ ranked: RankedEvent<T>[]; closest: Closest | null }> {
-  const pool = spreadAcrossDays(candidates, MAX_CANDIDATES, opts.zone);
   const profileText = opts.profileText?.trim() || null;
-  if ((!askText && !(opts.browse && profileText)) || !pool.length) return { ranked: [], closest: null };
+  if ((!askText && !(opts.browse && profileText)) || !candidates.length) return { ranked: [], closest: null };
+  // More than MAX_CANDIDATES: every one gets a relevance check before the cut (Royce, 2026-11-11: "the best event can't be number 13"),
+  // from what it already carries (its name, and its description when it has one: no page read), and the MAX_CANDIDATES that fit best go
+  // on to be read in full. Before this, the cut was by position (spread across days, Exa's first), so a feed event late in a busy day
+  // was never scored. A browse ask (no subject) still spreads across days. One extra embedding batch, only when over the cap.
+  const pool = candidates.length <= MAX_CANDIDATES ? candidates : opts.browse ? spreadAcrossDays(candidates, MAX_CANDIDATES, opts.zone) : await prefilterByFit(candidates, askText, MAX_CANDIDATES);
   // An event that already has its details (one Exa found, read from Luma's API: services/lumaViaExa.ts) isn't read again from its page.
-  const details = await Promise.all(pool.map((c) => ((c as { details?: EventDetails }).details ? Promise.resolve((c as { details?: EventDetails }).details!) : c.url ? fetchLumaEventDetails(c.url).catch(() => null) : Promise.resolve(null))));
+  // Pages are read for at most RANK_PAGE_READS of the rest, the ones whose own text fits the ask best (second review of #456: 40 page
+  // reads per ranking held a reply's search ~40s); the others are ranked on their name alone.
+  const needs = pool.filter((c) => !(c as { details?: EventDetails }).details && !!c.url);
+  const toRead = new Set(needs.length > RANK_PAGE_READS && askText ? await prefilterByFit(needs, askText, RANK_PAGE_READS) : needs);
+  const details = await Promise.all(pool.map((c) => ((c as { details?: EventDetails }).details ? Promise.resolve((c as { details?: EventDetails }).details!) : c.url && toRead.has(c) ? fetchLumaEventDetails(c.url, { lane: opts.lane }).catch(() => null) : Promise.resolve(null))));
   const texts = pool.map((c, i) => rankingText(c.name, details[i] ?? undefined));
 
   const now = Date.now();
@@ -101,4 +113,24 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
     ? { name: best.name, url: best.url ?? null, date: localDate(best.start_at, opts.zone), similarity: Math.round(best.similarity * 1000) / 1000 }
     : null;
   return { ranked, closest };
+}
+
+// The cheap pass: each candidate's own text (name, and its description when it already has one), against the ask, by the same
+// embeddings the ranking uses; the best `max` go on. A failed embedding read falls back to the spread across days.
+export async function prefilterByFit<T extends { name: string; start_at: string }>(candidates: T[], askText: string, max: number, embed: (texts: string[]) => Promise<number[][]> = generateEmbeddings): Promise<T[]> {
+  try {
+    const texts = candidates.map((c) => rankingText(c.name, (c as { details?: EventDetails }).details));
+    const vectors = await embed([askText, ...texts]);
+    const ask = vectors[0];
+    return candidates
+      .map((c, i) => {
+        const sim = vectors[i + 1] ? cosineSimilarity(ask, vectors[i + 1]) : NaN;
+        return { c, s: Number.isFinite(sim) ? sim : -1 };
+      })
+      .sort((a, b) => b.s - a.s)
+      .slice(0, max)
+      .map((x) => x.c);
+  } catch {
+    return spreadAcrossDays(candidates, max);
+  }
 }

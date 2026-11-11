@@ -29,6 +29,9 @@ export type Mention = { text: string; kind: "name" | "time" };
 const STARTERS = new Set("he she they we you it its this that these those there here everyone everybody everything someone somebody something anyone anybody anything nobody nothing none each every either neither both all most many much more some few several one another other others such which what who whom whose whoever whatever whichever where when why how today tonight tomorrow yesterday now then later soon often sometimes usually always never once mine yours ours theirs his hers my our their me us them myself yourself ourselves themselves himself herself itself lol haha ha hah ooh aw aww yay whoa mhm mm hmm um uh".split(" "));
 // Short month and day names ("Oct 16 is 3 days out", "Thu works").
 const DATE_SHORT = new Set("jan feb mar apr jun jul aug sep sept oct nov dec mon tue tues wed thu thur thurs fri sat sun summer winter spring fall autumn".split(" "));
+// A weekday's short form is the weekday, wherever it sits, like the full name (2026-11-11, golden std-thin-page: "Wed Oct 21" was held
+// as an unbacked name when the page said "Wednesday Oct 21"). Months stay checked: "Jan" and "Mar" are names as often as months.
+const WEEKDAY_SHORT = new Set("mon tue tues wed thu thur thurs fri sat sun".split(" "));
 const NAME_VERBS = new Set("is was has had would will can could should might may must does did knows knew said says thinks thought wants wanted loves loved likes liked runs ran works worked lives lived told tells asked asks went goes got gets came comes made started starts".split(" "));
 export function firstWordName(words: string[]): string | null {
   const w = (words[0] ?? "").replace(/[’]/g, "'");
@@ -65,7 +68,7 @@ export function mentionsIn(sentence: string): Mention[] {
       if (lead) { run.push(lead); if (/[.,!?;:]$/.test(w)) flush(); return; }
       if (!(/^[A-Z]{2,5}s?$/.test(bare) && !NOT_NAMES.has(lower))) return;
     }
-    if (/^[A-Z]/.test(bare) && !NOT_NAMES.has(lower) && !MONTHS_DAYS.has(lower)) {
+    if (/^[A-Z]/.test(bare) && !NOT_NAMES.has(lower) && !MONTHS_DAYS.has(lower) && !WEEKDAY_SHORT.has(lower)) {
       run.push(bare);
       if (/[.,!?;:]$/.test(w)) flush();
       return;
@@ -88,9 +91,26 @@ export function unsourced(sentence: string, source: string | Source): Mention[] 
 }
 
 // A source text, normalized once: the spoken checks run per sentence on the voice's hot path, against the whole call.
-export type Source = { raw: string; hay: string; flat: string; nums: Set<string> };
+export type Source = { raw: string; hay: string; flat: string; nums: Set<string>; times?: Set<string> };
+// Clock times as minutes of the day, every reading of each: "9:45" is 9:45 or 21:45, "19:45" only 19:45, "7pm" 19:00. A time said is
+// backed when one of its readings is one of the source's (review of 8471cdb0: by substring, "9:45" passed against "19:45").
+const CLOCK = /(?<![\d:])(\d{1,2})(?::([0-5]\d))?\s?(a\.?m\.?|p\.?m\.?)?(?![\d:])/gi;
+export function clockReadings(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(CLOCK)) {
+    const h = Number(m[1]);
+    const min = m[2] ?? "00";
+    const ap = (m[3] ?? "").replace(/\./g, "").toLowerCase();
+    if (!m[2] && !ap) continue;
+    if (h > 23 || (ap && (h < 1 || h > 12))) continue;
+    if (ap) out.add(`${(h % 12) + (ap === "pm" ? 12 : 0)}:${min}`);
+    else if (h >= 13 || h === 0) out.add(`${h}:${min}`);
+    else out.add(`${h}:${min}`).add(`${h + 12}:${min}`);
+  }
+  return out;
+}
 // A contraction's tail is not part of the word they said: "RSVP'd" backs "RSVP" (2026-10-12, a document was refused for it).
-export const prepareSource = (source: string): Source => ({ raw: source, hay: norm(`${source}\n${source.replace(/(\w)['’](?:d|ll|re|ve)\b/gi, "$1")}`), flat: squash(source), nums: numbersOf(source, true) });
+export const prepareSource = (source: string): Source => ({ raw: source, hay: norm(`${source}\n${source.replace(/(\w)['’](?:d|ll|re|ve)\b/gi, "$1")}`), flat: squash(source), nums: numbersOf(source, true), times: clockReadings(source) });
 
 // The numbers in a text, as whole numbers ("$3,000" is 3000, "20th" is 20, never the "20" inside "2026"). The extraction is
 // taskWeb numbersBacked's; its substring match is too loose for a whole call's prompt, so a number here has to be a whole one.
@@ -105,7 +125,11 @@ export function numbersOf(text: string, withWords = false): Set<string> {
 const NAME_JOINERS = new Set(["the", "and", "for", "of", "at", "de", "la"]);
 function unbackedMentions(mentions: Mention[], src: Source): Mention[] {
   return mentions.filter((m) => {
-    if (m.kind === "time") return !src.flat.includes(squash(m.text).replace(/m$/, "m"));
+    if (m.kind === "time") {
+      const said = [...clockReadings(m.text)];
+      const known = src.times ?? clockReadings(src.raw);
+      return !(said.length && said.some((t) => known.has(t)));
+    }
     const n = norm(m.text.replace(/['’]s$/i, ""));
     if (src.hay.includes(n)) return false;
     // A plural of a backed word is backed ("PDFs" for "PDF", 2026-10-08 live call: "Should I keep sending PDFs?" was replaced).

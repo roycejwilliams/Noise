@@ -1,0 +1,102 @@
+{
+  "hash": "b9cb487d0f3fa421",
+  "case": "best-option-pick",
+  "recorded_at": "2026-11-11T22:13:18.151Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"I'd go with the SGLang x NVIDIA meetup, tonight 5:30 to 8:30.\n\nIt's drinks and talks with engineers actually building inference and tooling, which is a room to meet someone you could work with, not just hear a talk. For a founding engineer search that's closer to the people you want than the founder dinner, which is founders, not builders.\n\nThe paper reading Thursday is good too but it's more learning than meeting, and the founder dinner Wednesday is about peers, not hires. Only catch on tonight's: no exact venue listed yet, so you'd want to check the page before heading out.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 327,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 42,
+        "output_tokens_details": {
+          "thinking_tokens": 39
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgwuidFKwZk41BD6F9ogK",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS6wUKEAgTGAI4AUIIdGhpbmtpbmcSDOfCkFvp7gGGJ9lj7xoMUZHo59Z+DUSV++GeIjDdxQXgNqNONK9b/onXhzyo1mLgKkc49TQCkZ+StYNVg1zcvUeVlKkesP+ZuZPfGPoqiAXIkNykUPCKkumqgjoPsRfQrS8Y899vMcD5wru0rZaoM0YMRxRfP7zVEnnjEDtTgBKhbImduWw9mA0kOaecfV1X68m0hGng6Jk/yNpdMWVp7uluuBYMO3RhCwTwOyio5+7I0b+b04oSi4LsM9MYcPeA+SgJ0O+QxJlJlEmwCKgF6PhTE1smozGBaYHzZFnVeQpOIn8RQp4QIl7Dr/coAPuD8FEm/YeYzgL6wUaI/V/LWVAvEbfvADzzT4ag2jBVnWgdLQAlJXcVRTecmOxDiiRanCowkpF7urAHeUOo3u3oerTCMiqvz0spyCwBYtm+C8tne6imz+kIJsLTMhV0kyd/QmpPhKDPMll99zKVKs2la7OHeTBOgmOVvbVBQsFAfI7xDSjeRrhVLMwUBE0e3wnIBLtjXuxm1Q4VFJme6O0OUl8hFSerNguH17ztWGuL0Nm+v+biTXO7YpCDOzETxUzijnyww3IxsYxIqWppbLOZIdWToLONSf9qcDNz6f0J2l6nlrOmaFmSQTwcWbX7nVI8zQGSfF5bJ5Chjv3czZqAge1LuSgfKJt8JvwmJcCbbRovNYWgyQC2O/7m/kHMM/XuLL07bBANyh5Eh8KvROXQGB/qNm9e6yTqkjhF+WHTPT57xZpbrkHNqEX3/zNsLnUnus6pxyi0ywR9UIDBVjqd5Wajen5MJtlavVCoWGtalMSFMfQyv+QHBXyeen7o2thpU8GT1Ea84MBm9mZt+iqqO4QDz1wrt3smoIcs57CwTZPxf8D45ge8jSjn1OuQQobmV6Hs340pnGmyRSAtAKeKMWBKLwCmxnW2S+MIyjqzuk/5xpMFCByB8uZ0Kq+5Ljk5epcyxxyAP1EYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 327,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 42,
+          "output_tokens_details": {
+            "thinking_tokens": 39
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "b9cb487d0f3fa421",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

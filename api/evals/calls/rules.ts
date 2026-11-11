@@ -142,8 +142,8 @@ check(
   !cityChangeAllowed("San Francisco", "NYC", "user: also looking at roles in NYC"),
 );
 check(
-  "saying they're there moves them (calls.rules smoke test)",
-  cityChangeAllowed("San Francisco", "NYC", "user: I'm in NYC now"),
+  "saying they moved moves them; 'I'm in NYC' alone is a trip (calls.rules smoke test, 2026-11-11)",
+  cityChangeAllowed("San Francisco", "NYC", "user: I moved to NYC") && !cityChangeAllowed("San Francisco", "NYC", "user: I'm in NYC now"),
 );
 
 // ---- call grounding: only the person's own ask gets saved (finding 13) ----

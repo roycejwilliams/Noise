@@ -137,7 +137,7 @@ const rec = (o: Partial<SentRecord> & { name: string }): SentRecord => ({ url: n
   const prompt = selectPrompt({ firstName: "Jordan", city: null, today: "2026-11-10", weekday: "Tuesday", zone: null, discoveryLeft: 3, feeling: null, asks: [{ id: "A1", since: "2026-11-01", text: "find another engineer to build with" }], texts: [], sent: [], outcomes: [], pool } as any);
   check("the picker's prompt shows it", /ALREADY SENT on 2026-09-22/.test(prompt));
   const sys = readFileSync(new URL("../../src/services/sweepSelect.ts", import.meta.url), "utf8");
-  check("the picker is told: audience alone isn't a reason; adjacent leads explained honestly", /Who it's for \("it's for founders"\) or a general networking benefit is not a reason on its own/.test(sys) && /An adjacent lead can still be worth sending/.test(sys));
+  check("the picker is told: audience alone isn't a reason; a benefit beyond the ask must stand against a real, current need (2026-11-11)", /Who it's for \("it's for founders"\) or a general networking benefit is not a reason on its own/.test(sys) && /A benefit outside what they asked for counts only when it stands on its own against another real, current need/.test(sys));
 }
 
 // ---------------------------------------------------------------- a roundup is not the thing

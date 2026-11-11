@@ -1,3 +1,4 @@
+import { DECISION_ASK, FIT_ASK } from "./findGuards.js";
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import type { TurnContext } from "../services/turnContext.js";
 import type { ReplySnapshot } from "../services/memberSnapshot.js";
@@ -11,7 +12,7 @@ import { CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { CO_CORE, CO_LISTENING } from "../services/coCore.js";
 import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
-import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
+import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, addInstruction, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { dropStockSentences } from "../harness/stockLines.js";
 import { lastCoLine } from "../services/conversationClose.js";
@@ -37,10 +38,30 @@ export function replyLengthLine(message: string): string | null {
   if (words >= 15 || DEPTH_ASK.test(message)) return null;
   return "Their message is short and doesn't ask for detail: answer it directly, as briefly as it needs, and don't turn it into advice, a task or a pitch.";
 }
+// A decision question and a "why it fits" question each get their line in "For this reply" (Royce, 2026-11-11, approved: "go with your
+// suggestions"; from that morning's turn: "best option for me this week?" got a bare pick, and "why it fits?" got the member's own goal
+// said back instead of what the event offers). Code only spots the ask; the model decides the pick and the reasons, from the facts.
+// Only on these asks, so every other turn's prompt is unchanged.
+// The asks themselves live in agent/findGuards.ts (the past-find link guard reads DECISION_ASK too).
+export { DECISION_ASK, FIT_ASK };
+export const DECISION_LINE = "They're asking you to choose. Pick one and own it, in one reply: why it beats the other options you already sent them, naming each in a short clause from its own facts; the details that decide it (when, where, cost, how to get in); what you don't know about it; and send its link again with shareLink before your reply (they asked you to choose, so it isn't a repeat).";
+export const FIT_LINE = "Say which kind of good it is for them, from the event's own facts (who it's for, its format, its hosts): a room to meet someone they could build or work with, a room to learn from people doing the work, or both, said as which. Then its limit: who actually comes isn't known, so say what the page says the night is for, never who will be there. Their own goal comes in only in their words, as why that kind of good matters to them.";
+// Pure on its inputs: adds the lines this message asks for to the turn's instructions, only when Cue has sent them finds to choose
+// among (review of #457: "which of the three is cheapest?" or "should I take the offer?" with no finds sent aren't event decisions).
+// findsSent: the turn's referents or recent sent finds, or a sent find's facts in this reply's facts (services/turnContext.ts).
+export function addAnswerShapeLines(rf: ReplyFacts, message: string, findsSent = rf.facts.some((f) => /^Cue sent them "/.test(f.text))): void {
+  if (!findsSent) return;
+  if (DECISION_ASK.test(message)) addInstruction(rf, DECISION_LINE);
+  if (DECISION_ASK.test(message) || FIT_ASK.test(message)) addInstruction(rf, FIT_LINE);
+}
+
 // Scoped to shares and feedback (Royce 2026-10-29): those moments carry their own depth (connectDots SHARING_GUIDE, FEEDBACK_GUIDE),
 // so the length line never caps them; every other turn keeps it.
 export const UNCAPPED_MOMENTS = new Set(["sharing", "feedback"]);
-export function lengthLineFor(message: string, moment: string | null | undefined, image: boolean): string | null {
+// A decision or why-it-fits ask about finds Cue sent gets no length line either (2026-11-11, std-best-option-this-week: "answer it
+// directly, as briefly as it needs" beside DECISION_LINE's pick, reasons, details, limits and link split the answer into two texts).
+export function lengthLineFor(message: string, moment: string | null | undefined, image: boolean, findsSent = false): string | null {
+  if (findsSent && (DECISION_ASK.test(message) || FIT_ASK.test(message))) return null;
   return image || UNCAPPED_MOMENTS.has(moment ?? "") ? null : replyLengthLine(message);
 }
 
@@ -307,8 +328,13 @@ export async function runConversationReplyAgent(
   let cutFirstDone = false;
   // Steps finished, so a guard knows whether a redraft can still follow (conversationTools.ts sendReply redraftLeft).
   let stepsDone = 0;
-  const { tools, state, flushLinks } = createConversationTools(tapToolContext({
+  let lastCut: import("./cutRedraft.js").CutRead | null = null;
+  const { tools, state, flushLinks, endTurn } = createConversationTools(tapToolContext({
+    // A retry after the delay note: something already went to them on this turn, so no late line.
+    lateLineOff: (opts.attempt ?? 1) > 1,
     redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
+    // The fact check's last result, for the send step's one whole redraft after a cut that took the substance (agent/cutRedraft.ts).
+    lastGrounding: () => lastCut,
     exchange: input.facts.exchange ?? null,
     turnScope: input.facts.turnScope ?? null,
     turnShare: input.facts.turnShare ?? null,
@@ -372,6 +398,7 @@ export async function runConversationReplyAgent(
         { userId: input.userId, record: opts.record !== false && !opts.dryRun },
       );
       grounding.push(result);
+      lastCut = { draft, final: result.final, outcome: result.outcome, notSure: result.notSure, checks: result.checks, keptPromise: result.keptPromise };
       // Always sentence case, however they text (2026-09-16). Never the
       // same question as one of Co's last two texts (2026-09-23).
       // Never a sentence that is only a stock phrase ("I hear you.", "Makes sense."), the same rule a call has (harness/stockLines.ts).
@@ -410,6 +437,11 @@ export async function runConversationReplyAgent(
   if (noSteer) withdrawColdStartSteer(input.facts, noSteer.why);
   const noFirstRead = ruledOut(decision, "first_read");
   if (noFirstRead) withdrawDoorMoment(input.facts, noFirstRead.why);
+
+  // A decision or a why-it-fits ask gets its answer-shape line (addAnswerShapeLines). Texts only: a photo turn answers the photo.
+  // findsSent: they have finds from Cue to choose among (the length line reads it too).
+  const findsSent = !!input.turn?.referents?.length || !!input.turn?.sent?.some((s) => Date.now() - s.sentAt.getTime() < 14 * 86_400_000) || input.facts.facts.some((f) => /^Cue sent them "/.test(f.text));
+  if (!input.imageForVision) addAnswerShapeLines(input.facts, input.resolvedContent, findsSent);
 
   const lastCoMessage = lastCoLine(input.recentConversation);
   // Real context on them: anything in their snapshot's first four sections (what they said, what they're in the middle of, how they
@@ -478,7 +510,7 @@ Only what's real:
 How to reply:
 - Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words.
 - When they ask you to sum something up (a summary, their problem, what's going on with someone or something), the summary is the whole reply, in one short paragraph. When they're struggling, one short line that receives the feeling can come first. Build it from what they've told you, in this thread and before. Say who said or wants what, and each thing only as far along as they said it is: planned is not started, started is not done. No advice, plan or question unless they asked for that too. If they say it's about someone or something else, sum up that.
-- Match what the moment needs, not a length. Read their message with the thread: sharing something, a quick question, asking for an explanation, making a decision, or several at once. A quick question gets the useful answer first and stops. They: "just landed". You: "Welcome back. How was Austin?" A link they asked for is the link with only what they need to use it. Something long, layered or emotional gets real room. Casual talk stays casual: it doesn't need to become advice, a task or an introduction. A vent with a practical ask gets both: receive what they feel, then actually help.
+- Match what the moment needs, not a length. Read their message with the thread: sharing something, a quick question, asking for an explanation, making a decision, or several at once. A quick question gets the useful answer first and stops. They: "just landed". You: "Welcome back. How was Austin?" A link they asked for is the link with only what they need to use it. Something long, layered or emotional gets real room. Casual talk stays casual: it doesn't need to become advice, a task or an introduction. A vent with a practical ask gets both, in that order: one short line that receives what they feel comes first, then the help.
 - Say each thing once. Don't repeat a point, an offer or a question from your last message.
 - The exception is a request for help doing something. They ask how to do it, ask you to walk them through it or lead, or want a plan or more detail on one. Or they're stuck on a real problem and want help. Then give the whole walkthrough in this one reply (Royce, 2026-09-22: it took four asks before Cue committed to a plan). Open straight on the first step, with no line announcing the plan. Give the steps in order, plainly, all in one text, with no numbers or bullets. Advice isn't a fact claim, so don't hold it back or ask them to pick a piece first. If a detail would change a step, say so in a few words and still commit. Stop after the last step. Ask something only when you can't give the right next step without their answer.
 - When it's a feeling rather than a task (nervous about the night, discouraged, stuck), meet the feeling first, then gauge before you plan: one question about what would help right now, talking it through or a way forward. When they want the way forward, walk them through it fully. Shape it around what they're feeling. Never leave them with a one-liner, and never make them ask twice.
@@ -509,7 +541,7 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // for a short reply, the median reply went from 39 to 21 words and one or
   // two sentences from 13 to 20 of 24, with no loss in blind comparison).
   // Never on a share or feedback turn (Royce 2026-10-29): there the moment's guide sets the depth.
-  const lengthLine = lengthLineFor(input.resolvedContent, input.facts.moment, !!input.imageForVision);
+  const lengthLine = lengthLineFor(input.resolvedContent, input.facts.moment, !!input.imageForVision, findsSent);
   const userText = lengthLine ? `${baseUserText} ${lengthLine}` : baseUserText;
 
   // Medium effort (2026-09-26): on 40 real texting cases, blind, medium beat
@@ -599,6 +631,9 @@ ${TOOL_TURN_RULES(input.isVoice)}
       const { recordDecision } = await import("../harness/core.js");
       await recordDecision({ layer: 3, decision: "reply.timeout", userId: input.userId, outcome: "skip", action: state.sent ? "after_send" : "before_send", proposal: { message: input.resolvedContent.slice(0, 200), capMs: REPLY_CALL_TIMEOUT_MS } }).catch(() => {});
     }
+  } finally {
+    // The model run is over, however it ended (a crash included: review of #459): no late line can go after this (agent/loopTools.ts).
+    endTurn();
   }
 
   // Unlike a plain generateText completion (which always returns text), a
@@ -660,7 +695,10 @@ ${TOOL_TURN_RULES(input.isVoice)}
     } else {
       // Only counted when it really went out (2026-09-17 code review: a
       // refused send used to be marked sent, so nobody noticed the silence).
-      const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice });
+      state.sendsInFlight += 1;
+      const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice }).finally(() => {
+        state.sendsInFlight -= 1;
+      });
       if (sent !== false) {
         state.sent = true;
         state.lastReplyText = fallback;

@@ -135,7 +135,7 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "
 // cached block (judgeSystem) and list "Since then" after it.
 // prefRules: how they asked Cue to reply and what not to bring up (services/memberPreferences.ts, applied rules only), for the reply
 // check's rule read (services/prefTopics.ts judgeReplyRules).
-export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; prefRules?: import("../services/memberPreferences.js").ReplyRules | null; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads; exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null; turnScope?: import("./scope.js").ScopeVerdict | null; turnShare?: import("./scope.js").MessageKind | null };
+export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; prefRules?: import("../services/memberPreferences.js").ReplyRules | null; moment?: string | null; pushback?: string | null; feedbackNoted?: boolean; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads; exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null; turnScope?: import("./scope.js").ScopeVerdict | null; turnShare?: import("./scope.js").MessageKind | null };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -997,8 +997,10 @@ const searchedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) =>
 const SAYS_DONE = /\b(?:looked|searched|checked|dug|tried|went through|had a look|ran a search|did a search)\b/i;
 const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to|on it|give me|a (?:minute|sec(?:ond)?|moment)|more soon|soon|hang tight|stand by|tonight|tomorrow|later|back to you|another (?:pass|look|try|round)|more to come|next)\b|\b(?:look|search|digg?|check|hunt|find|try)ing\b|\bI'(?:ll|m)\b|\bI am\b/i;
 export const saysSearchDone = (claim: string): boolean => { const t = claim.replace(/[’‘]/g, "'"); return SAYS_DONE.test(t) && !SAYS_ONGOING.test(t); };
+// Words that say the work goes on ("still digging", "on it"): a sentence with them isn't a bare "nothing is running".
+export const STILL_AT_IT = /\b(?:still|digging|working on|looking into|searching|on it|looking|working)\b/i;
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
-  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
+  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !STILL_AT_IT.test(sentence);
 }
 
 // The honest line that replaces a cut "still working on it" (item 3): said once, never on top of one that already says it.
@@ -1487,7 +1489,7 @@ Claims to find (one type each):
 - past_action: something Cue says it did or sent ("I sent you the link", "I scheduled it", "I emailed you both"), including a yes or no to whether it did ("Still no", "Yep, I did") and passing something along ("noted for the team", "that goes straight to the team", "I passed it on")
 - future_promise: something Cue says it will do later ("I'll send it when I have it", "I'll keep an eye out", "I'll call you then"), or telling them to ask again later as if something will have changed
 - work_status: what Cue says it is doing now, still working on, or is already doing in the background ("I'm working the sponsor search", "digging into Jeremy", "still working the intro search", "looking into it", "searching for that now"), or that nothing is running on something
-- time, place, count, detail: a specific about an event, program, or plan: start time, date, address, neighborhood, headcount, format, host, price; a count includes how many things Cue found, sent, or searched ("those two were the results"). Saying two events clash, or that it's "one or the other", is a time claim. Saying Cue doesn't have a detail ("no start time listed", "I don't have the address") is a detail claim.
+- time, place, count, detail: a specific about an event, program, or plan: start time, date, address, neighborhood, headcount, format, host, price, and who it's for or what happens there as its page states it ("it's for engineers working on inference", "hosted by NVIDIA and SGLang", "talks and demos"); a count includes how many things Cue found, sent, or searched ("those two were the results"). Saying two events clash, or that it's "one or the other", is a time claim. Saying Cue doesn't have a detail ("no start time listed", "I don't have the address") is a detail claim.
 - link: a link, or "it's in the link above"
 - member_life: something about the member's own life as they've told Cue: the people in it, named the way they described them ("your mentor Lena", "your brother", "Ravi, your mentor"), their preferences ("crowded mixers drain you"), their history, their work and projects by name ("your startup ZEBRA-VAULT-941"), where they live
 - other_person: someone outside the member's own life, or what any person said, wants, feels, did or will do beyond what the member told Cue ("she mentioned she'd like to meet you", "Lena would love to help"), or who specifically will be somewhere, or that the people there are theirs ("that's your crowd", "go find the llama_index people", "your cofounder will be there")
@@ -1504,7 +1506,7 @@ Never claims (don't list these):
 - What Cue's own draft, prompt, plan or advice should do for them ("That should give you clean, reusable drafts"): that's advice about Cue's own work, not a prediction about the world.
 - Advice and possibilities: general know-how about how things usually go ("personal invites beat a mass email"); what kind of people events like this tend to draw; where this could take them ("could be a good place to find the dependable builder people you're after"); a plan or schedule Cue proposes for them; a conclusion reasoned from the sources ("if Oct 10 is under 30 days out, the permit may not clear").
 
-Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Cue about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
+Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. An event's stated audience, hosts or format, said as what its page says, is a detail, supported by that event's FACT; saying who will actually be in the room ("a room full of engineers", "you'll meet the SGLang team") stays other_person. Words in a FACT marked "(Cue's read: …)" are Cue's own paraphrase and never support a claim; only the page's quoted words and its listed fields do. A person the member told Cue about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
 
 Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Cue did or didn't do (past_action, including "I never sent that") needs a FACT: Cue's own earlier words aren't evidence of what it did, and if a FACT shows Cue sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. Saying Cue did NOT do something ("it never sent, and that's on me", "that didn't go through") is supported when no FACT shows it happened; mark it supported with no factId. Owning a mistake in something Cue sent ("that link shouldn't have gone out dead") is supported by Cue's own sent line in the conversation: quote that line. Their report of what Cue did never supports a claim that Cue did it. A FACT listed under DONE THIS TURN is something that really happened this turn, what Cue's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. An offer Cue makes in this reply, framed as something it can do if they say yes ("I can text you a nudge on the 27th", "I can sketch name directions"), is supported by a capability FACT that says Cue offered it in this reply; cite that FACT. A promise said as already set ("I'll text you on the 27th") is not an offer and needs a FACT that it will actually happen. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Cue's working notes for them); an open task Cue is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A work_status claim needs a FACT naming that exact work as running now: an open task, a research brief being put together, a look-out, or Cue's daily search for something the running-work FACT lists under it; an open ask that line doesn't list, or Cue's working notes, are not work running on it. When the FACTS say nothing is running for it, a claim that it is running is unsupported, and when the running-work FACT lists it, a claim that nothing is running on it is unsupported too. A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Cue before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. A claim about where something stands must match the stage its source gives: suggested, planned, set up (access given, a sample handed over, an intro sent), under way, and done are different, so "I gave her a sample" never backs "she's trying it" or "she liked it", and "we might run a test" never backs "you're testing it". Their own texts in this conversation are a source for their own life and plans, said back in Cue's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day ("today's meeting" backs "later today" for it, never "tonight"); quote their words. What they've told Cue before (their own words, below) can support member_life; what Cue knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Noise is never part of their own life. Never count something as supported because it's plausible.
 
@@ -1565,9 +1567,13 @@ export function sentLineFor(c: Pick<Claim, "quote">, src: Pick<GroundingSources,
   return coLinesIn(src.recentConversation).find((l) => norm(l).includes(q)) ?? null;
 }
 // On a feedback turn only: each past action whose quote is Cue's own sent line, read for whether it only owns a mistake in that send.
-export async function ownershipReadsFor(claims: Claim[], rf: Pick<ReplyFacts, "moment">, src: Pick<GroundingSources, "recentConversation">, judge: OwnershipJudge = haikuOwnership): Promise<Map<string, boolean>> {
+// Pure: a turn where they're telling Cue something it did was wrong. The moment read's mode alone flips between "feedback" and
+// "reacting" on the same text (2026-11-11, golden feedback-cue-mistake: same request, the re-record read "reacting" and "That's on me, it
+// shouldn't have gone out dead" was cut), so its pushback and the turn read's feedback count too. Owning still needs Cue's own sent line.
+export const feedbackTurn = (rf: Pick<ReplyFacts, "moment" | "pushback" | "feedbackNoted">): boolean => rf.moment === "feedback" || !!rf.pushback || !!rf.feedbackNoted;
+export async function ownershipReadsFor(claims: Claim[], rf: Pick<ReplyFacts, "moment" | "pushback" | "feedbackNoted">, src: Pick<GroundingSources, "recentConversation">, judge: OwnershipJudge = haikuOwnership): Promise<Map<string, boolean>> {
   const out = new Map<string, boolean>();
-  if (rf.moment !== "feedback") return out;
+  if (!feedbackTurn(rf)) return out;
   await Promise.all(claims.filter((c) => c.type === "past_action").map(async (c) => {
     const line = sentLineFor(c, src);
     if (!line) return;
@@ -1584,8 +1590,8 @@ export async function ownershipReadsFor(claims: Claim[], rf: Pick<ReplyFacts, "m
 // Pure: on a feedback turn, a past action that only owns a mistake in what Cue sent (the admission read says so), backed by Cue's own sent
 // line in the thread (review of #310: their report alone backed "I booked the table at Nopa for 8", and an earlier confabulated
 // "Done, I've booked Nopa" backed a repeat). Never their report alone, never a line that asserts something was done.
-export function ownsWhatItSent(c: Pick<Claim, "text" | "quote">, rf: Pick<ReplyFacts, "moment">, src: Pick<GroundingSources, "recentConversation">, ownership: Map<string, boolean>): boolean {
-  return rf.moment === "feedback" && !!sentLineFor(c, src) && ownership.get(c.text) === true;
+export function ownsWhatItSent(c: Pick<Claim, "text" | "quote">, rf: Pick<ReplyFacts, "moment" | "pushback" | "feedbackNoted">, src: Pick<GroundingSources, "recentConversation">, ownership: Map<string, boolean>): boolean {
+  return feedbackTurn(rf) && !!sentLineFor(c, src) && ownership.get(c.text) === true;
 }
 // Pure: the claim cites the world line, quoting its thread part.
 export function citesTheirThread(c: Pick<Claim, "factId" | "quote">, rf: Pick<ReplyFacts, "facts" | "world">): boolean {
@@ -1597,6 +1603,17 @@ export function citesTheirThread(c: Pick<Claim, "factId" | "quote">, rf: Pick<Re
   return t.includes(q) || q.includes(t);
 }
 
+// A message that is only a check-in or a bare greeting ("Hey cue, just checking in", "hey"), never one that goes on to ask something
+// (review of 8471cdb0: "checking in on the venue search" and "Just checking in, is anything running?" were cut).
+const CHECKIN_ONLY = /^\s*(?:(?:hey|hi|hello|yo)(?:\s+(?:there|cue|co))?[\s,!.]*)?(?:just\s+)?(?:checking in|check(?:ing)? in on you)[\s,!.]*$|^\s*(?:hey|hi|hello|yo|morning|evening|good (?:morning|afternoon|evening))\b[\s,!.]*(?:(?:there|cue|co|you)\b[\s,!.]*)?$/i;
+// Their message asks where something stands: then a true "nothing is running" answers them.
+const ASKS_STATUS = /\?|\b(?:running|working on|any (?:update|news|word)|status|where (?:are|is|do) (?:we|things|it)|how(?:'s| is) (?:the|my)|anything (?:going|happening|new))\b/i;
+// Pure: a work_status claim that says nothing runs, on a turn that is only a check-in or small talk and asks nothing about status.
+export function checkinStatusTalk(claim: string, message: string, moment: string | null | undefined): boolean {
+  if (ASKS_STATUS.test(message)) return false;
+  if (moment !== "small_talk" && !CHECKIN_ONLY.test(message)) return false;
+  return /\bnothing\b/i.test(claim) && !STILL_AT_IT.test(claim);
+}
 // A model's "supported" only counts if its citation checks out in code.
 export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources, admissions: Map<string, boolean> = new Map(), ownership: Map<string, boolean> = new Map()): GateCheck[] {
   // A hint (model-written read) is never support, even when cited.
@@ -1669,7 +1686,9 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       const cited = rf.facts.find((f) => f.id === c.factId);
       // The running-work line itself backs what it says: a listed item as running, or "nothing is running" as nothing. The daily
       // search's own fact backs it too, while the running-work line says something is running (it lists the same asks, held or not).
-      const fromState = !!cited && cited.kind === "known" && (RUNNING_LIST.test(cited.text) || (NOTHING_RUNNING.test(cited.text) && SAYS_NOT_RUNNING.test(c.text)));
+      // The daily search's own "isn't looking for anything" fact backs "nothing is running" too, when nothing else runs either (2026-11-11,
+      // golden std-old-rec-not-new: a true "Nothing's on my radar for you right now" cited it and was cut).
+      const fromState = !!cited && ((cited.kind === "known" && (RUNNING_LIST.test(cited.text) || (NOTHING_RUNNING.test(cited.text) && SAYS_NOT_RUNNING.test(c.text)))) || (cited.kind === "unknown" && cited.text.startsWith(NOT_SEARCHING) && nothingRunsAt(rf) && SAYS_NOT_RUNNING.test(c.text)));
       // A held search backs nothing; an ask saved this turn backs itself (nothingRunsAt is false then).
       const fromSearch = !!cited && cited.kind === "ongoing" && /^(?:Co|Cue)'s daily search is (?:now )?looking for/.test(cited.text) && !nothingRunsAt(rf) && !searchHeld(rf);
       // Their world line (services/memberWorld.ts) lists the same running items: it backs work said as running only when the claim names
@@ -1681,6 +1700,12 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
         pass = false;
         reason += nothingRunsAt(rf) ? ` (${NOTHING_RUNNING_REASON})` : " (that work isn't among what the running-work line lists for them)";
       }
+    }
+    // A check-in never reports that nothing is running, however true (the check-in line: "never a line saying nothing is waiting or
+    // running"; 2026-11-11, golden checkin-nothing: "nothing on the fire right now" passed as true status). Small talk is the moment read's.
+    if (pass && c.type === "work_status" && checkinStatusTalk(c.text, src.message ?? "", rf.moment)) {
+      pass = false;
+      reason += " (a check-in never reports Cue's own state)";
     }
     // An offer Co makes in this reply (goal ownership, 2026-10-13) is a capability claim backed by its offer fact (goalOwnership.ts
     // offerFactLines, kind "capability"): the reader's claim type says offer vs. promise, never a phrasing pattern. A promise said as set
@@ -2069,6 +2094,9 @@ export type GroundingResult = {
   latencyMs: number;
   // Just the first check: the added latency on a reply that passes as drafted.
   firstCheckMs: number;
+  // A promise task the check kept rides in final (services/promises.ts, promiseBinding.ts): the send step never swaps that text for a
+  // redraft (agent/cutRedraft.ts), or the task would stand on words never sent.
+  keptPromise?: boolean;
   // Each later stage, when it ran (2026-09-26, to see where rewrites spend time).
   stages?: { redraftMs?: number; secondCheckMs?: number; retryMs?: number };
 };
@@ -2092,6 +2120,12 @@ export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTur
 // What's ahead from Co (services/whatsAhead.ts aheadLine): the honest line never says nothing is planned while it lists something
 // (2026-10-13: "Nothing confirmed on my end for this week" with a Friday check-in on the ledger).
 const AHEAD_LINE = /^What's ahead for them from (?:Co|Cue), as scheduled now:/;
+// Pure: their message asks about what's ahead from Cue (what's coming up, planned or scheduled; whether Cue will follow up or check in).
+// Only then does the honest line carry the ahead line (2026-11-11: "What's the details and why it fits?" was stripped to "Don't have the
+// details confirmed... I'll follow up with you Wed morning on how both... went", a check-in nobody asked about in place of the answer).
+export function asksWhatsAhead(message: string): boolean {
+  return /\b(?:what(?:'s|’s| is| do you have| have you got)?|anything|something)\b[^?.!]{0,40}\b(?:ahead|coming up|planned|scheduled|lined up|on (?:the|my|your) (?:calendar|schedule|radar)|next (?:from you|on your end))\b|\b(?:will|when will|are|when are|did) you (?:follow(?:ing)? up|check(?:ing)? in|text(?:ing)? me|reach(?:ing)? out|get(?:ting)? back)\b|\bwhat(?:'s|’s| is) next\b/i.test(message);
+}
 async function honestNoAnswer(message: string, ahead: string | null = null): Promise<string | null> {
   const { lineInVoice } = await import("../services/voiceLine.js");
   const r = await lineInVoice({
@@ -2696,7 +2730,7 @@ export async function groundReply(
         // cut pass in the same turn falls to the honest line below, so it never loops.
         const shareRetry = !!share && after === "honest" && !shareEnd && !rf.shareRetried;
         if (shareRetry) rf.shareRetried = true;
-        const honestRaw = after === "honest" && !shareEnd && !shareRetry ? await honestNoAnswer(src.message, rf.facts.find((f) => f.kind === "scheduled" && AHEAD_LINE.test(f.text))?.text ?? null).catch(() => null) : null;
+        const honestRaw = after === "honest" && !shareEnd && !shareRetry ? await honestNoAnswer(src.message, asksWhatsAhead(src.message) ? rf.facts.find((f) => f.kind === "scheduled" && AHEAD_LINE.test(f.text))?.text ?? null : null).catch(() => null) : null;
         const honest = honestRaw && (!share || !textStockSentence(honestRaw)) ? honestRaw : null;
         const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" || shareRetry ? "" : shareEnd ?? honest ?? MINIMAL_FALLBACK;
         // A cut "still working on it" ends on the honest line instead (item 3), never on a bare "not sure".
@@ -2759,6 +2793,10 @@ export async function groundReply(
       recordDecision({ layer: 3, decision: "promise.dropped", userId: opts.userId, outcome: "skip", action: `task:${o.id}`, reason: "the bound promise was not in the final text" }).catch(() => {});
     }
   }
+
+  // A promise task this check kept (opened, bound or pulled) rides in what goes out: the send step never trades that text for a redraft.
+  const inFinal = (sentence: string) => norm(result.final).includes(norm(sentence).replace(/[.!?]+$/, ""));
+  result.keptPromise = (promiseTaskId !== null && promiseStays(result.final)) || binding.opened.some((o) => inFinal(o.sentence)) || binding.pulled.some((p) => inFinal(p.sentence));
 
   // Promises and "I can"s held back, as their own typed row (services/guardDrops.ts): counted, no text.
   const overpromised = result.outcome !== "as_drafted" ? result.checks.filter((c) => !c.pass && /^claim_(future_promise|capability)$/.test(c.name)) : [];
