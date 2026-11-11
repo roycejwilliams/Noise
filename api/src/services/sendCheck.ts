@@ -172,11 +172,25 @@ Return ONLY JSON: {"state": "open" | "closed" | "unclear", "quote": "the page's 
 const LIST_LINE = /^\s*(?:[-*•▪◦→>]|\d{1,2}[.)]|\p{Extended_Pictographic})\s*\S/u;
 // A headline that counts things ("Five places to look for founder support", "10 fellowships open now").
 const COUNT_HEADLINE = /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten|top \d{1,2})\s+(?:[\w'-]+\s+){0,3}?(?:places|programs|programmes|ways|resources|things|options|opportunities|accelerators|fellowships|residencies|communities|grants|picks|orgs|organizations|funds|incubators)\b/i;
-// A page that counts the gatherings it covers ("lists three founder events", "5 dinners worth your evening"), read near its top; and how
-// much of a flat page is its title zone.
-const PAGE_COUNT = /\b(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(?:[\w'-]+\s+){0,2}?(?:events|dinners|meetups|gatherings|mixers|salons|nights)\b/i;
-const PAGE_COUNT_CHARS = 1500;
+// A flat page that counts the gatherings it covers ("lists three founder events", "15+ events", "a dozen events", "three workshops"), read
+// near its top; and how much of a flat page is its title zone. Never a duration ("two nights") or a host's history.
+const PAGE_COUNT = /\b(?:\d{1,2}\+?|a dozen|dozen|two|three|four|five|six|seven|eight|nine|ten)\s+(?:[\w'-]+\s+){0,2}?(?:events|dinners|meetups|gatherings|mixers|salons|workshops|talks)\b/gi;
+// "we've hosted 30 dinners", "since 2023", "over 50 events", "one of three dinners in our fall series", "of the three": its own history or series.
+const COUNT_HISTORY_BEFORE = /\b(?:hosted|held|run|ran|thrown|organized|since \d{4}|over|more than|one of|of (?:our|the|its|these)|of)\s*$/i;
+// "12 events a year", "four dinners each season": how often, not what's listed.
+const COUNT_RATE_AFTER = /^\s*(?:a|per|each|every)\s+(?:year|month|week|season|quarter)\b|^\s*annually\b|^\s*(?:in|so far|to date|since)\b/i;
+const PAGE_COUNT_CHARS = 900;
 const PAGE_TITLE_CHARS = 160;
+// A list cue: several different dates on the page ("Wed, Nov 11 … Thu, Nov 12 … Fri, Nov 13").
+const MONTH_DAY = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b/gi;
+// Pure: a flat page that counts several gatherings near its top, not as its own history or rate, and lists several dates.
+export function flatPageCountsEvents(t: string): boolean {
+  const top = t.slice(0, PAGE_COUNT_CHARS);
+  const counted = [...top.matchAll(PAGE_COUNT)].some((m) => !COUNT_HISTORY_BEFORE.test(top.slice(Math.max(0, (m.index ?? 0) - 30), m.index ?? 0)) && !COUNT_RATE_AFTER.test(top.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + 25)));
+  if (!counted) return false;
+  const dates = new Set([...t.matchAll(MONTH_DAY)].map((m) => `${m[1].slice(0, 3).toLowerCase()} ${Number(m[2])}`));
+  return dates.size >= 3;
+}
 const URLS = /https?:\/\/[^\s)"'<>\]]+/gi;
 // links: every candidate, those whose host carries its name or acronym first (named); the rest are only pages about it.
 export type Roundup = { items: number; line: string | null; links: string[]; named?: string[] };
@@ -195,8 +209,10 @@ export function roundupOf(text: string, name: string, o: { page?: boolean } = {}
   if (namesThing(opening, name)) return null;
   const items = lines.filter((l) => LIST_LINE.test(l));
   const named = items.filter((l) => namesThing(l, name));
-  // A page that counts the events it covers near its top ("the calendar lists three founder events this week") is a roundup too.
-  const headline = COUNT_HEADLINE.test(t.slice(0, 300)) || (!!o.page && PAGE_COUNT.test(t.slice(0, PAGE_COUNT_CHARS)));
+  // A flat page that counts the events it covers near its top and lists several dates ("the calendar lists three founder events this
+  // week … Wed, Nov 11 … Thu, Nov 12 … Fri, Nov 13") is a roundup too. Only a flat page: a page with lines keeps the headline rule (a
+  // browser-read page's first line is its menu, so its own history, "we've hosted 30 dinners", must never make it a list).
+  const headline = COUNT_HEADLINE.test(t.slice(0, 300)) || (!!o.page && lines.length <= 2 && flatPageCountsEvents(t));
   const isRoundup = o.page ? headline : (items.length >= 3 && named.length >= 1 && named.length < items.length) || headline;
   if (!isRoundup) return null;
   const line = named[0] ?? lines.find((l) => namesThing(l, name)) ?? null;
