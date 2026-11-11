@@ -117,7 +117,7 @@ async function whatCoSent(userId: string, followupIds: string[]): Promise<SentRe
 }
 
 // The follow-up won't go: its source rows are dropped, with why (the harness records the skip itself).
-async function dropDebriefSources(p: DebriefPayload, reason: string): Promise<void> {
+export async function dropDebriefSources(p: DebriefPayload, reason: string): Promise<void> {
   const why = reason.slice(0, 200);
   if (p.outcomeFollowupIds?.length) await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped', drop_reason = $2 WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds, why]).catch(() => {});
   if (p.checkinFollowupIds?.length) await pool.query(`UPDATE event_checkin_followups SET harness_status = 'dropped', drop_reason = $2 WHERE id = ANY($1::uuid[])`, [p.checkinFollowupIds, why]).catch(() => {});
@@ -162,27 +162,10 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
     // unless their own stated word that they went says otherwise (decided below, once the evidence is read).
     doorMissed = !!(door && !door.came && door.tracked && !(p.walkinCheckinIds ?? []).length);
   }
-  const keys = await debriefItemKeys(p);
   // A stated "went" counts only if it was said after this event started (or, with no date, after this find was sent): an old "I went"
   // to a same-name event (a recurring dinner) is not evidence they went to this one.
   const startedAt = date ? DateTime.fromISO(date, { zone: tz ?? "America/Los_Angeles" }).startOf("day").toJSDate() : new Date(c.createdAt.getTime() - 3 * 86_400_000);
-  const rows = await pool
-    .query(`SELECT item_key, result, provenance, created_at FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [c.userId, keys])
-    .then((r) => (r.rows as { item_key: string; result: string; provenance: string | null; created_at?: Date | string }[]).filter((x) => !((x.result === "helped" || x.result === "didnt_help") && x.created_at && new Date(x.created_at) < startedAt)))
-    .catch(() => []);
-  const reactions = await pool
-    .query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [c.userId, keys])
-    .then((r) => r.rows.map((x: any) => String(x.reaction)))
-    .catch(() => [] as string[]);
-  // The same evidence read as the queue (recommendationOutcome.ts evidenceOf, registeredFor): a registration Cue made for them, by key or
-  // by the find's own link, counts as meaning to go, like a Noise check-in; "already_did_it" is a stated plan (review of #445: the two
-  // reads disagreed, and a row queued on either was dropped here).
-  const RO = await import("../services/recommendationOutcome.js");
-  const links = p.outcomeFollowupIds?.length
-    ? await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[]) AND user_id = $2`, [p.outcomeFollowupIds, c.userId]).then((r) => r.rows.map((x: any) => x.url as string | null)).catch(() => [] as (string | null)[])
-    : [];
-  const viaCue = await RO.registeredFor(c.userId, keys, links).catch(() => false);
-  const evidence = RO.evidenceOf({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 || viaCue });
+  const evidence = await debriefRecordEvidence(c.userId, p, startedAt, came);
   if (doorMissed && evidence.level !== "attended") return skip("the door was tracked and they weren't scanned: the no-show flow covers that night");
   // Their stated word is the only evidence, and the debrief is only about a recommendation: they already told Cue how it went, so a
   // debrief would re-ask it (settleFollowUpForResult closes the row when they say it; this covers one queued before they did).
@@ -204,6 +187,29 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   // "How was the Claude Founder Salon?" went to someone Co had only recommended it to; 2026-10-12 review: word matching read "going
   // to practice my pitch before the launch" as having gone). Otherwise the debrief asks whether they made it.
   return draftDebriefText(firstName, p, people, sent, date, evidence.level === "attended", pointed.told);
+}
+
+// What the record says about one debrief (Royce, 2026-11-04, permanent: never assume a member went), the ONE read the send-time draft
+// (draftDebrief) and the follow-up task's wake (services/followUps.ts debriefWakeGate) share: their outcomes and reactions under this
+// debrief's keys, a registration Cue made for them by key or by the find's own link, a Noise check-in or walk-in, and came (a door scan
+// or arrival the caller read). The same mapping as the queue (recommendationOutcome.ts evidenceOf, registeredFor; review of #445: the
+// reads disagreed). startedAt: a stated "went" counts only if said after this event started.
+export async function debriefRecordEvidence(userId: string, p: DebriefPayload, startedAt: Date, came = false): Promise<import("../services/followUpEvidence.js").Evidence> {
+  const keys = await debriefItemKeys(p);
+  const rows = await pool
+    .query(`SELECT item_key, result, provenance, created_at FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [userId, keys])
+    .then((r) => (r.rows as { item_key: string; result: string; provenance: string | null; created_at?: Date | string }[]).filter((x) => !((x.result === "helped" || x.result === "didnt_help") && x.created_at && new Date(x.created_at) < startedAt)))
+    .catch(() => []);
+  const reactions = await pool
+    .query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [userId, keys])
+    .then((r) => r.rows.map((x: any) => String(x.reaction)))
+    .catch(() => [] as string[]);
+  const RO = await import("../services/recommendationOutcome.js");
+  const links = p.outcomeFollowupIds?.length
+    ? await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[]) AND user_id = $2`, [p.outcomeFollowupIds, userId]).then((r) => r.rows.map((x: any) => x.url as string | null)).catch(() => [] as (string | null)[])
+    : [];
+  const viaCue = await RO.registeredFor(userId, keys, links).catch(() => false);
+  return RO.evidenceOf({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 || viaCue });
 }
 
 // The outcome keys one debrief is about: the event's own key, each recommendation it follows up (its event or name key, and the
