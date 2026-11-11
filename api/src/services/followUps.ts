@@ -363,6 +363,37 @@ export async function handleFollowUpSkip(userId: string, task: CoTask, why: stri
   return "closed";
 }
 
+// Pure: whether a debrief's wake closes it before the decider looks (Royce, 2026-11-04, permanent: never assume a member went; 2026-11-11:
+// two debriefs for events he'd declined or never answered sat open and fed "I'll follow up on how both went" into a reply). Only a
+// debrief built from Cue's sends alone (no Noise check-in or walk-in part: those are read with the door at send time), and only when the
+// record holds no yes, plan, registration or stated word (level "none", the same read the send-time draft uses). Anything else wakes as
+// before, and the draft still reads the record again at send.
+export function debriefWakeCloses(f: { type?: string; payload?: any } | null | undefined, evidence: { level: string } | null): boolean {
+  if (f?.type !== "debrief" || !evidence) return false;
+  const p = f.payload ?? {};
+  if ((p.checkinFollowupIds ?? []).length || (p.walkinCheckinIds ?? []).length) return false;
+  return evidence.level === "none";
+}
+// The wake's read for a debrief: closed with the reason (and its source rows dropped) when nothing says they meant to go. True when it
+// closed. An unreadable record never closes it: the decider and the send-time read go on as before.
+export async function debriefWakeGate(userId: string, task: CoTask): Promise<boolean> {
+  const f = task.followup as Stored | null;
+  if (f?.type !== "debrief") return false;
+  const R = await import("../harness/proactiveRegistry.js");
+  const p = f.payload ?? {};
+  const zone = await memberZone(userId).catch(() => null);
+  const { DateTime } = await import("luxon");
+  const startedAt = p.eventDate ? DateTime.fromISO(String(p.eventDate), { zone: zone ?? "America/Los_Angeles" }).startOf("day").toJSDate() : new Date(new Date(task.createdAt).getTime() - 3 * 86_400_000);
+  const evidence = await R.debriefRecordEvidence(userId, p, startedAt).catch(() => null);
+  if (!debriefWakeCloses(f, evidence)) return false;
+  const why = evidence!.declined ? `declined: ${evidence!.why}` : evidence!.why;
+  const { closeTask } = await import("./coTasks.js");
+  await closeTask(userId, task.id, "dropped", `No follow-up: ${evidence!.declined ? "they said it isn't for them" : "nothing says they went or meant to go"} (${evidence!.why}).`);
+  await R.dropDebriefSources(p, why);
+  await recordDecision({ layer: 7, decision: "task.followup", userId, outcome: "skip", action: "no_evidence", reason: why, proposal: { taskId: task.id, type: f.type, targetKey: f.targetKey } }).catch(() => {});
+  return true;
+}
+
 // Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
 export async function runFollowUpTurn(...a: Parameters<typeof runFollowUpTurnInScope>): ReturnType<typeof runFollowUpTurnInScope> {
   return withMember(a[0].userId, () => runFollowUpTurnInScope(...a));
@@ -383,6 +414,8 @@ async function runFollowUpTurnInScope(task: CoTask): Promise<void> {
     return;
   }
   const f = task.followup as Stored;
+  // A debrief with nothing on record that they meant to go closes here, before any model call (debriefWakeGate).
+  if (await debriefWakeGate(userId, task)) return;
   // Their zone from the same layer read (identity: services/memberTime.ts memberZone, the one source).
   const zone = ctx.zone;
   const until: string | null = f?.payload?.until ?? null;

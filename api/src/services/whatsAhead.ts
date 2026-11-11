@@ -11,7 +11,8 @@ import type { SearchCoverage } from "./searchCoverage.js";
 import { isCommitment } from "./commitmentLog.js";
 
 // promised: a commitment on the ledger (services/commitmentLog.ts isCommitment): something Co said it would do for them.
-export type AheadTask = { id: number; goal: string; kind: string | null; nextCheckAt: string; deadline: string | null; promised?: boolean };
+// debriefOf: a debrief follow-up's event name (followup.type "debrief"), said as asking whether they made it, never how it went.
+export type AheadTask = { id: number; goal: string; kind: string | null; nextCheckAt: string; deadline: string | null; promised?: boolean; debriefOf?: string | null };
 export type Ahead = { tasks: AheadTask[]; queuedFinds: number };
 
 const AHEAD_MAX = 8;
@@ -23,7 +24,7 @@ export async function loadAhead(userId: string, now = new Date(), given?: import
   const F = await import("./sourceFence.js");
   const fence = given ?? (await F.memberFence(userId));
   const [rows, queuedFinds] = await Promise.all([F.readScheduled(fence, now, AHEAD_MAX), F.readQueuedFindCount(fence)]);
-  const tasks = rows.map((x): AheadTask => ({ id: x.id, goal: x.goal ?? "", kind: x.kind, nextCheckAt: x.nextCheckAt, deadline: x.deadline, promised: isCommitment({ source: x.source, followup: x.followup, kind: x.kind }) }));
+  const tasks = rows.map((x): AheadTask => ({ id: x.id, goal: x.goal ?? "", kind: x.kind, nextCheckAt: x.nextCheckAt, deadline: x.deadline, promised: isCommitment({ source: x.source, followup: x.followup, kind: x.kind }), debriefOf: x.kind === "followup" && x.followup?.type === "debrief" ? String(x.followup?.payload?.eventName ?? "").trim() || null : null }));
   return { tasks, queuedFinds };
 }
 
@@ -38,7 +39,11 @@ export function aheadLine(a: Ahead, coverage: SearchCoverage, zone: string | nul
     const goal = keep(t.goal);
     if (!goal) { withheld++; continue; }
     const when = localStamp(t.nextCheckAt, zone);
-    if (t.kind === "followup") parts.push(`a check-in with them, "${goal.slice(0, 140)}", on ${when}`);
+    // A debrief is only ever "whether they made it" here (2026-11-11: "I'll follow up on how both went" for two events nothing said
+    // they went to). The send-time draft decides the rest from the record (harness/proactiveRegistry.ts draftDebrief).
+    const debrief = t.debriefOf ? keep(t.debriefOf) : null;
+    if (t.kind === "followup" && debrief) parts.push(`a check-in on whether they made it to "${debrief.slice(0, 120)}" (say it that way, never as how it went), on ${when}`);
+    else if (t.kind === "followup") parts.push(`a check-in with them, "${goal.slice(0, 140)}", on ${when}`);
     else if (t.kind === "research_brief") parts.push(`research brief #${t.id} "${goal.slice(0, 140)}", next due on Cue's side around ${when}`);
     else if (t.promised) parts.push(`task #${t.id} "${goal.slice(0, 140)}", which Cue committed to them, due around ${when}${t.deadline ? `; their deadline ${t.deadline}` : ""}`);
     else parts.push(`task #${t.id} "${goal.slice(0, 140)}", next due on Cue's side around ${when}${t.deadline ? `; their deadline ${t.deadline}` : ""}`);
