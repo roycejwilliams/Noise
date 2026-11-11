@@ -59,7 +59,8 @@ const ok200 = (h: string) => classify({ html: h, status: 200, error: null });
   check("...registration open, not sold out, not cancelled, listed", !!r && r.registration === "open" && r.registrationOpen === true && r.soldOut === false && !r.cancelled && !r.noindex, r);
   const w = ok200(html({ registration: "waitlist", soldOut: true, spots: 0, approval: true }));
   const wr = w.kind === "event" ? w.record : null;
-  check("a waitlist: exists, upcoming, not taking registrations (registration 'waitlist', sold out, approval kept)", !!wr && wr.registration === "waitlist" && wr.registrationOpen === false && wr.soldOut === true && wr.requireApproval === true && wr.spotsRemaining === 0, wr);
+  // Royce, 2026-11-10: a waitlist is offered as waitlist only, never turned away as sold out (its page's sold_out true notwithstanding).
+  check("a waitlist: exists, upcoming, not open (registration 'waitlist'), waitlist only and not sold out, approval kept", !!wr && wr.registration === "waitlist" && wr.registrationOpen === false && wr.soldOut === false && wr.details.waitlist === true && wr.requireApproval === true && wr.spotsRemaining === 0, wr);
   const so = ok200(html({ registration: "sold-out", soldOut: false }));
   check("sold out by its registration state alone (sold_out false on the page, as one sampled real page had it) is sold out", so.kind === "event" && so.record.soldOut === true && so.record.details.soldOut === true, so);
   const cx = ok200(html({ status: "EventCancelled" }));
@@ -166,7 +167,7 @@ const page = (o: Ev = {}) => ({ html: html(o), status: 200, error: null });
   check("each outcome counted apart: private, unknown and noindex as not public; cancelled; past; no place; calendar; missing; failed", rep.notPublic === 3 && rep.cancelled === 1 && rep.past === 1 && rep.noLocation === 1 && rep.calendars === 1 && rep.missing === 1 && rep.failed === 1, rep);
   check("...logged as the page route, the API's 403 named, and not a failure (the route answered)", rep.route === "page" && /HTTP 403/.test(rep.apiDown ?? "") && !rep.sourceDown && /1 of 13 Luma checks got no usable answer/.test(rep.error ?? ""), rep);
   const wait = r!.events.find((e) => e.api_id === "evt-wait1")!;
-  check("a waitlisted event is carried honestly: registration 'waitlist', sold out (the gate turns it away as it does a sold-out page), approval true", wait.details.registration === "waitlist" && wait.details.soldOut === true && wait.details.requiresApproval === true, wait.details);
+  check("a waitlisted event is kept and carried honestly: registration 'waitlist', waitlist only, not sold out (Royce, 2026-11-10), approval true", wait.details.registration === "waitlist" && wait.details.waitlist === true && wait.details.soldOut === false && wait.details.requiresApproval === true, wait.details);
   const appr = r!.events.find((e) => e.api_id === "evt-appr1")!;
   check("approval required is carried, not dropped; the street the host hides stays hidden, the city stays", appr.details.requiresApproval === true && appr.details.soldOut === false && appr.details.venue === null && appr.details.address === null && appr.city === "San Francisco", appr.details);
   const good = r!.events.find((e) => e.api_id === "evt-good1")!;
