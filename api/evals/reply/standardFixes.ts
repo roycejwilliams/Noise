@@ -44,6 +44,11 @@ check("no brevity line on a why-it-fits ask about sent finds", R.lengthLineFor("
 check("the same ask with no finds sent keeps it", R.lengthLineFor(BEST, "asking", false, false) === R.replyLengthLine(BEST) && R.replyLengthLine(BEST) !== null);
 check("any other short message keeps it", R.lengthLineFor("what time?", "asking", false, true) === R.replyLengthLine("what time?"));
 
+// ---- the approved wording (exact)
+check("DECISION_LINE sends the pick's link again", R.DECISION_LINE.endsWith("what you don't know about it; and send its link again with shareLink before your reply (they asked you to choose, so it isn't a repeat)."));
+const replySrc = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+check("the vent line: receive first, then help", replySrc.includes("A vent with a practical ask gets both, in that order: one short line that receives what they feel comes first, then the help.") && !replySrc.includes("A vent with a practical ask gets both: receive what they feel, then actually help."));
+
 // ---- owning a mistake (feedback-cue-mistake)
 const conv = "User said: What was the ceramics studio you mentioned last week?\nCo replied: https://emberclaystudio.example/workshops/wheel-intro\nCo replied: Ember Clay Studio in the Mission. Their intro wheel class runs Saturday mornings, four weeks.";
 const owns = { text: "That's on me, it shouldn't have gone out dead.", type: "past_action" as const, supported: true, factId: null, quote: "Ember Clay Studio in the Mission. Their intro wheel class runs Saturday mornings, four weeks." };
