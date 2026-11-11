@@ -309,6 +309,7 @@
     "evals/reply/usesItsFinds.ts",
     "evals/reply/readFacts.ts",
     "evals/reply/lateLine.ts",
+    "evals/reply/cutRedraft.ts",
     "evals/reply/shareGuide.ts",
     "evals/reply/oneReply.ts",
     "evals/reply/secondSend.ts",
