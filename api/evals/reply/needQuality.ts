@@ -136,10 +136,16 @@ export const CASES: Case[] = [
   },
 ];
 
+// --only id,id: run (or estimate) just those cases.
+const onlyArg = process.argv.find((a) => a.startsWith("--only="))?.slice(7) ?? (process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null);
+const ONLY = onlyArg ? new Set(onlyArg.split(",").map((x) => x.trim()).filter(Boolean)) : null;
+if (ONLY) for (const id of ONLY) if (!CASES.some((c) => c.id === id)) throw new Error(`--only: no case "${id}"`);
+const RUN = ONLY ? CASES.filter((c) => ONLY.has(c.id)) : CASES;
+
 if (process.argv.includes("--estimate")) {
   // Each case is a new one-turn reply: estimate.ts counts it at the median recorded reply case, plus one grade.
-  const e = estimateQuality(CASES.map((c) => ({ id: `need-${c.id}`, awaiting: true, turns: 1 })), 1);
-  console.log(`reply need quality estimate: ${CASES.length} cases x 1 run = $${e.total.toFixed(2)} (median recorded reply case each, rubric grade $${RUBRIC_CALL_USD.toFixed(4)} each). Searches are stubbed. Suggested cap: EVAL_COST_CAP_USD=${Math.max(1, Math.ceil(e.total * 2))}`);
+  const e = estimateQuality(RUN.map((c) => ({ id: `need-${c.id}`, awaiting: true, turns: 1 })), 1);
+  console.log(`reply need quality estimate: ${RUN.length} cases x 1 run = $${e.total.toFixed(2)} (median recorded reply case each, rubric grade $${RUBRIC_CALL_USD.toFixed(4)} each). Searches are stubbed. Suggested cap: EVAL_COST_CAP_USD=${Math.max(1, Math.ceil(e.total * 2))}`);
   process.exit(0);
 }
 
@@ -153,8 +159,25 @@ const { anthropic } = await import("@ai-sdk/anthropic");
 const { GRADER_MODEL } = await import("../../src/models.js");
 const { parseModelJson } = await import("../../src/services/modelJson.js");
 
+// What went to them, in send order (Fix 1, 2026-11-10: a link shared with the share tool never reached replyText, so the grader saw
+// "names the residency, no link" when the link had gone first). The dry run logs each send; the grader reads those lines.
+const sentLines: string[] = [];
+const realLog = console.log;
+const captureSends = (on: boolean) => {
+  console.log = on
+    ? (...a: any[]) => {
+        const line = a.map(String).join(" ");
+        const link = line.match(/^\[conversationReply dryRun\] would share link (\S+)/);
+        const reply = line.match(/^\[conversationReply dryRun\] would reply to [^:]+: "([\s\S]*)"$/);
+        if (link) sentLines.push(link[1]);
+        else if (reply) sentLines.push(reply[1]);
+        realLog(...a);
+      }
+    : realLog;
+};
+
 let bad = 0;
-for (const c of CASES) {
+for (const c of RUN) {
   const facts = baseReplyFacts();
   if (c.context) addFact(facts, "known", c.context);
   if (c.seed?.running?.length) {
@@ -162,20 +185,28 @@ for (const c of CASES) {
     for (const f of ongoingFactsFor(c.seed.running.map((text) => ({ text, kind: "find" as const })))) addFact(facts, f.kind, f.text);
   }
   for (const x of c.seed?.sent ?? []) for (const f of sentFindFacts({ name: x.name, url: x.url, sentAt: new Date(x.at), key: `name:${x.name.toLowerCase()}` } as any, NOW)) addFact(facts, "known", f);
+  sentLines.length = 0;
+  captureSends(true);
   const r = await runConversationReplyAgent(
     { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan", resolvedContent: c.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: c.recent, recentMemories: "", contextSummary: "", personaPrompt: null, isTeam: !!c.isTeam, sendCoReply: async () => true } as any,
-    { dryRun: true, record: false, stubSearch: true, stubEvents: [] },
+    // Fix 2: the fixture's running search is what a dry run's listOpenAsks reports open.
+    { dryRun: true, record: false, stubSearch: true, stubEvents: [], ...(c.seed?.running?.length ? { dryRunOpenAsks: c.seed.running.map((text) => ({ text, type: "seeking" as const })) } : {}) },
   ).catch((err: any) => ({ replyText: `(failed: ${err?.message ?? err})` }) as any);
+  captureSends(false);
+  const sent = sentLines.length ? sentLines.join(" || ") : String(r.replyText ?? "");
+  // What Cue did and what the fact check changed, so a cut is visible in the log.
+  console.log(`    tools: ${(r.toolsCalled ?? []).join(", ") || "none"}`);
+  for (const g of (r.grounding ?? []) as any[]) if (g?.outcome && g.outcome !== "as_drafted") console.log(`    fact check ${g.outcome}: ${(g.checks ?? []).filter((k: any) => !k.pass).map((k: any) => `${k.name}${k.reason ? ` (${String(k.reason).slice(0, 140)})` : ""}`).join("; ")}${g.draft ? `\n      draft: ${String(g.draft).replace(/\n/g, " / ").slice(0, 300)}` : ""}\n      final: ${String(g.final ?? "").replace(/\n/g, " / ").slice(0, 300)}`);
   const { text } = await generateText({
     model: anthropic(GRADER_MODEL),
     maxOutputTokens: 250,
-    prompt: `A companion texted this reply. Judge whether it SATISFIES what the moment asked for (not its length).\n\nTheir message: "${c.message}"\nEarlier:\n${c.recent || "(nothing)"}\n${c.context ? `Context: ${c.context}\n` : ""}\nThe reply (separate texts split by ||):\n${r.replyText}\n\nIt passes only if: ${c.bar}${c.never ? `\nIt fails if it ${c.never}.` : ""}\n\nReturn ONLY JSON: {"pass": true|false, "why": "one line"}`,
+    prompt: `A companion texted this reply. Judge whether it SATISFIES what the moment asked for (not its length).\n\nTheir message: "${c.message}"\nEarlier:\n${c.recent || "(nothing)"}\n${c.context ? `Context: ${c.context}\n` : ""}\nThe reply (separate texts in send order, split by ||; a bare link is a shared link):\n${sent}\n\nIt passes only if: ${c.bar}${c.never ? `\nIt fails if it ${c.never}.` : ""}\n\nReturn ONLY JSON: {"pass": true|false, "why": "one line"}`,
   });
   const g = parseModelJson(text) ?? {};
   const ok = g.pass === true;
   if (!ok) bad++;
-  console.log(`${ok ? "PASS" : "FAIL"} ${c.id} (${c.check}): ${String(g.why ?? "no grade")}\n    ${String(r.replyText).replace(/\n/g, " / ").slice(0, 400)}`);
+  console.log(`${ok ? "PASS" : "FAIL"} ${c.id} (${c.check}): ${String(g.why ?? "no grade")}\n    ${sent.replace(/\n/g, " / ").slice(0, 400)}`);
 }
 const spend = (globalThis as any).__EVAL_METER_SPEND__?.();
-console.log(`reply need quality: ${CASES.length - bad}/${CASES.length} satisfied${spend ? ` | spent $${Number(spend.cost ?? 0).toFixed(4)} of $${Number(spend.capUsd).toFixed(2)}` : ""}`);
+console.log(`reply need quality: ${RUN.length - bad}/${RUN.length} satisfied${spend ? ` | spent $${Number(spend.cost ?? 0).toFixed(4)} of $${Number(spend.capUsd).toFixed(2)}` : ""}`);
 if (bad) process.exitCode = 1;
