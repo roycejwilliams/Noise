@@ -65,7 +65,9 @@ check("approval required: kept, no waitlist label, approval line and spots as be
 // ---------------------------------------------------------------- 4. the caption check refuses spots for a waitlist event
 const facts = lines.join(" ");
 const refused = (c: string) => !SC.captionNumbersBacked(c, facts).ok;
-for (const c of ["Spots are still open if you want in.", "There are still spots, grab one.", "Registration is still open.", "Only a few spots left.", "Not sold out yet.", "You can still register for it."]) check(`waitlist event: refused "${c}"`, refused(c), SC.captionNumbersBacked(c, facts));
+for (const c of ["Spots are still open if you want in.", "There are still spots, grab one.", "Registration is still open.", "Only a few spots left.", "Not sold out yet.", "You can still register for it.",
+  // Review of #452: a waitlist phrase never hides a spots claim.
+  "Open spots on the waitlist.", "You can register now, spots are open for the waitlist crowd."])check(`waitlist event: refused "${c}"`, refused(c), SC.captionNumbersBacked(c, facts));
 for (const c of ["I can get you off the waitlist.", "I can get you a spot."]) check(`waitlist event: refused "${c}" (Cue only adds them to the waitlist)`, refused(c), SC.captionNumbersBacked(c, facts));
 for (const c of ["Founders Supper on Thursday. It's waitlist only, so joining puts you on the list, not in.", "A small founders dinner at Pier 1. Full, but there's a waitlist.",
   // Review of #452: joining the waitlist, and the venue's room or space, are not spots.
