@@ -1,0 +1,97 @@
+{
+  "hash": "ca248d6440015b18",
+  "case": "std-roundup-page",
+  "recorded_at": "2026-11-11T21:45:48.092Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member asked: \"Any founder dinners coming up in the next couple of weeks? Something small.\". Cue's search found only a blog roundup (https://example.test/blog/sf-founder-events-fall) listing eleven SF found...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member asked: \"Any founder dinners coming up in the next couple of weeks? Something small.\". Cue's search found only a blog roundup (https://example.test/blog/sf-founder-events-fall) listing eleven SF founder events, one entry a founder dinner on Thu Oct 22 hosted by a seed fund, \"details to come\", with no application or RSVP link.\n\nCue's text:\n\"\"\"https://example.test/blog/sf-founder-events-fall\nNot its own event page, a roundup mentioning a founder dinner Oct 22 hosted by a seed fund, details still to come and no RSVP listed yet.\nThat's the only lead right now, and it's thin, no real page yet. Nothing else small and confirmed in the next couple weeks. Want me to keep an eye out for one?\"\"\"\n\nDoes Cue either hold it (say nothing solid turned up, or offer to look for the dinner's own page) or share it clearly labeled as a roundup that mentions the dinner, WITHOUT presenting the post as the dinner's page, telling them to apply or RSVP, or inventing details about the dinner? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Cue states it's 'Not its own event page, a roundup mentioning a founder dinner... no RSVP listed yet' and offers 'Want me to keep an eye out for one?' without inventing details or urging RSVP.\"}",
+      "usage": {
+        "input_tokens": 494,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 89,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwscxqPtqd34HYmBgEC3",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Cue states it's 'Not its own event page, a roundup mentioning a founder dinner... no RSVP listed yet' and offers 'Want me to keep an eye out for one?' without inventing details or urging RSVP.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 494,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 89,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "ca248d6440015b18",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

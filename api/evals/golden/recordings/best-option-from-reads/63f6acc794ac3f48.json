@@ -1,0 +1,102 @@
+{
+  "hash": "63f6acc794ac3f48",
+  "case": "best-option-from-reads",
+  "recorded_at": "2026-11-11T21:50:06.140Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on in...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue had sent three events, each with its page read: a paper reading (pizza, 45 minutes on one paper, no pitching), an SGLang x NVIDIA meetup tonight (hosted by NVIDIA, SGLang, Modal; for engineers working on inference and tooling; drinks and talks; venue unknown), and a seated dinner for early-stage founders. The member wants a founding engineer.\n\nCue's text:\n\"\"\"SGLang x NVIDIA Meetup, tonight 5:30 to 8:30. It beats the founder dinner and the paper reading for what you're after right now: it's built for engineers working on inference and tooling, which is a lot closer to where you'd find a founding engineer than a room of early-stage founders or a paper discussion group. It's free, hosted by NVIDIA, SGLang and Modal, drinks and talks format.\n\nWorth saying plainly, the page doesn't tell me who's actually walking in the door tonight, just who it's built for. I also don't have the exact venue, just the link to check.\n\nThe founder dinner is more about peer company than hiring, and the paper meetup explicitly isn't a pitching room. Tonight's your shot if you can make it on short notice.\"\"\"\n\nDoes the reply make one pick, compare it to the other two using those facts, name the benefit kind the facts support (learning from practitioners vs peer founders) with its limit, and avoid claiming who will be there?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"says event is built for inference/tooling engineers vs peer founders and paper group, but adds 'the page doesn't tell me who's actually walking in the door tonight, just who it's built for'\"}",
+      "usage": {
+        "input_tokens": 535,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 966,
+        "output_tokens_details": {
+          "thinking_tokens": 888
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwswJLuiALfKc1Lef4J1",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"says event is built for inference/tooling engineers vs peer founders and paper group, but adds 'the page doesn't tell me who's actually walking in the door tonight, just who it's built for'\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 535,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 966,
+          "output_tokens_details": {
+            "thinking_tokens": 888
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "63f6acc794ac3f48",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "hash": "1f6b65f7ea00b911",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-11T21:42:50.813Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. Walking the water alone on your birthday, then finally telling your team you need a real break after running on empty for months, that's a lot in one day, and it deserves more than a quick nice.\n\nI'm genuinely glad you got that morning to yourself. And two weeks off after the stretch you've described sounds less like a vacation and more like something you earned.\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"that's a lot in one day, and it deserves more than a quick nice\\\" explains its prior tone and recaps her words instead of just giving fresh replies.\"}",
+      "usage": {
+        "input_tokens": 470,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 391,
+        "output_tokens_details": {
+          "thinking_tokens": 324
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwsPeu2g8Zp9Toh8sXCo",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EsALCsQCCBMYAipAPvNwYLYsEUO8Isc5XijY8Zsy6+qmHqHq2vyLkQ2RguidLLTaD/cC1l612kCtpFPYTdZguBr0D8OG1Tdg+mBafzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB2sLT1wbCAToIBBAAGgwC2ooDTzcFd5UEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAB7BmtyIPERD/fxwlgO1b9Ff0wPBpzss1OQktmMVGRnCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxaM1oujApi5n29dzMaDOdVqMz1rtJNnjG7eCIwT5Agj2fbk6ZJhd53oQhZZOOAdzAltDT/8rhL+uT1UzRdbu1VtMReNOTCJtWWqVmAKqgIJXaIMyKKHB6p6cY39GkIbLbxnjOnTzZQpkKAU97lm1ApXEPo9LR5cPAXckp/R4hLWur+MXu3eu9zUUMCrgEXP0oAZPUpDdXt88GKBTxidLU3J1d1E0gCGnrSWdh+o/PuhDK2GGc/6Oz5zUYGm4h/pGtAhJDVc1N4b0L1Da2b6sLpxa9m2K2UT4DVgD/fjXGNVuNuh1Q+QBc04KrQItMBCSKWEgQpBzTCEkb43MEQqrpGNdaCLt68R9IaLxsHofSBAsti7DhbkZLZEF4acNvhs1vcCx+tvXznDqtpeNMzN1NKOWybcIgYZfZoeJ6DhAZWXaABP3kEvHLVa8P0k8mPQVJ9vCA8Fbv6vjoyMa302gDURiNcbTiq0y2P98B4hiMoHnstYpUzvV3WuqgpejmEMjR+csb18CiIXnhSVd/3rU+u76mySKcRecATFfgIJdNbUtHZAprBnT2LvuOxx620aVUqr2ExceJiEJm4n5XKGaI556uIeOl1NNaMFrilwGztVlpl2Tds+cbqQv6HF4RpLKqEahR7xKblOyCRP13ik40C5zQB+GqxGP9Zbn00LUV9Qs3xqIVFVr4T13tDjB0OYGn4ACqks7/fXQge9h6Xu/GsUk+oH9GhVWdSTmTby+EH9+hVQh1aA0HC6UfNRjof/Vz0NcNyz/ixG00P1eVkvT1JExB4eeedg7THoy2Q6bLe3iJgLPohxg8L3eLVyDQi266OsIJTp6HJQdFGcKzE4y5dv/G7UiaGoCotdVBoMmbjc/RQpDFjq3/TqUaTQs8kwFRFMFlNWEsBoeRITrpaZwLqrtPHbb48eqze77NdmP8d9hDIQ4FL5UbPNUikcJdzqVy/i8eDipeTaXuXwie+W6Jz+bJGXTO053CQ90gLag9jD5VozLdFuzF3NJB/zy02u/2tZcVmNkLgRNqENArsTu22ZDfny2OOfs7ZidxOF5Hj1xez0dzVCkwWt9ffFBkyCgpnHNUfq6PNV7mNK6uC0pdUclbNvJ6GHGNvzuMVXq2AdSrS7ppduc+ebBREZAzmoJV7bNiskCZ31AkwCuyzTk+iwXTV9Zz0qYODEdYXyne0qV4B6tNY7jrDAVG7ew108dbLdwv69//WbWZTmCNn/Yr8Ykxu5ycFIvHcGcG+rWy76LirUpbNJXBa1ZeVcmEJu+CUsSu7bwv0URCWmh7UZahroUcSIznplWeLccplEhtzxmNe88PkTeJdfjt83qp8kZkuXJMjpBYPDbNdD96axtl8wI5FyMNFzX8ltj8J+4xiEMhzegLYmDIfPmIlWWFI7XuGsUaUa385kPUL2ol5KJqPrdAgPTJNBNmSNG1bmJDZqPF9WJgsYb6CZSWFQgI3q2bGGGQNSNasw9GGf1KTSPWv1YlT+LO2D01Prque7DkyRxBrJVd0N3oYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"that's a lot in one day, and it deserves more than a quick nice\\\" explains its prior tone and recaps her words instead of just giving fresh replies.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 470,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 391,
+          "output_tokens_details": {
+            "thinking_tokens": 324
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "1f6b65f7ea00b911",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

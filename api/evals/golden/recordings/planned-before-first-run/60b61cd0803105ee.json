@@ -1,0 +1,102 @@
+{
+  "hash": "60b61cd0803105ee",
+  "case": "planned-before-first-run",
+  "recorded_at": "2026-11-11T21:38:55.213Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: The member asked Cue this afternoon to watch for \"a quiet cocktail bar in Hayes Valley for a work drinks night\". Cue's daily search runs every morning from 9, so the first look is tomorrow morning. They asked \"Is that actually r...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: The member asked Cue this afternoon to watch for \"a quiet cocktail bar in Hayes Valley for a work drinks night\". Cue's daily search runs every morning from 9, so the first look is tomorrow morning. They asked \"Is that actually running yet?\"\n\nCue's text:\n\"\"\"Yep, it's live. Checking every morning for a quiet spot in Hayes Valley that fits work drinks for about 8.\"\"\"\n\nDoes the text convey that it will be looked at (or the search runs) tomorrow morning / the next morning, without saying nothing is running?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Yep, it's live\\\" implies it's already running now, not that the first check happens tomorrow morning.\"}",
+      "usage": {
+        "input_tokens": 268,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 326,
+        "output_tokens_details": {
+          "thinking_tokens": 275
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgws6M12wQ5XkdhQeQGeR",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Eo8KCsQCCBMYAipAetD1YFsRS3IRw70WgB00LaeJfvN5/oC6RWg0ahncAxeGo34VAyCEFgjp/ryZx639xd6OBpi3eSiPg4vs1QpjNDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB7sDT1wbCAToIBBAAGgwC2ooDTzcFidcEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBldLQn2c0zaDc7ewZlrUl+K7MmCPvlPF992px1mY6miSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgx5QPEf6Hsn3JRADu4aDHOlEOf80lGOkWY7/SIw2/IpjtnKqlF0EqvyPQvhZZKXmKiA+xb1X/YGVVJmmZHQyRT6CbFxgWp++kewKRa4KvcGBdv7n14+RTDkZ8Fb6pr880b/JtM8B+fKtHLlGYzgqgTtWbllxyYS+QKrj6irXG6FZpPRiPiaotvtPUvHYlg2ATHQT+Wl6FHGQ8B7ox2fqhOS4ywVHnS32E42RIFwF+2yaqr5lakS5U5OctxSSEmFYskKhVjM2qeECAnVz2Ak+b4MbRzLwm3ThwpdAo0pgYuSf50u4NhSY4yHH/YEhIB7ur4X/MTLECk0PWo0aXQIKtUcfK0Xjq4KqPT4zDiCbEW8BAzaOz/oWdyPBxRoX/NLYSYW4eNevqY66S7Jm35ZbmTHBmICU6O/BiSJDcEKbBwK2+UHrYI6dSaEY9M0e99v1x8jE8eJnvSDOI/xppY+6PweANikv0oIwRkOU/281FJK3xuxtT3SvcvLu3pw0d8uE5QgRBqVKIDK6i4s5uDRQEdB0vcEHy2HxYLY78yIH4i/bJynsIxEkCKBHezwq2toBZ34ZiqBJEhF7G3TnaST+jZE9UsRAgVrYC9Zuur+4GyAA6/IxcXV1PQgCYCbO8IJ0fSqr8ddRuU4FXaSMYFEB7CsZukqf0m6Ht7xxr0uChXxjf+qtgvuaf3S4MFqdn6TVQ+m00QpECOYhvitSTUJ2kXd28bBxIB+E24p/hyeG6oUs58VujYOMqITtLrF9LzK06ZdRjPfuP0JHTcUDMmrvREiEU0Yn/ttwwJ/fBjKX55yeX40Xx+Y8fEY+98uiUdiPfW4U4Li0VU5zhONtUCQgSi+qbHBQi9W1p9qvSKsf++WdBdLPBR2cSEgJ9iGPCyMrcOI3hEcaGMh1dQRlIlQ+tmgvp6AfJUMsMdz5Xdcxdtu1u0A5dNqRE9gbghC8rAi8CQUcrUtU2yK03iUu/SeWmXWkILrTH9ZCbqFxxJq0C/PHx8fdvStha6A657nl0w5IIikspKXmHk/7tJafNy2mKiU/Att7RouLXscydPniEEHQ+/Mm7Og6Vgzww0bsSo6agwWLeiRWc6lAntHE0+90q4O48RewHxPPDuqTvjmS6VbovHFUjh8JycRXpyJ5hujzpijx0BkXRxIVM42dpPF4ihHKKtBW4YiS+uX9m+wkkpQUA1SheKYxZt/gIVzILULoHOS+IjyGkgyZn/tNLdgK66GEKDf16MFS7SNthR0/K66a5pUvRml0TKszky0NkDIuu1Olnm5ZwAYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Yep, it's live\\\" implies it's already running now, not that the first check happens tomorrow morning.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 268,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 326,
+          "output_tokens_details": {
+            "thinking_tokens": 275
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "60b61cd0803105ee",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

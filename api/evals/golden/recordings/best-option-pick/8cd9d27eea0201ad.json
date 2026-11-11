@@ -1,0 +1,102 @@
+{
+  "hash": "8cd9d27eea0201ad",
+  "case": "best-option-pick",
+  "recorded_at": "2026-11-11T21:49:05.371Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week. Cue's text:...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue had sent three events (a paper reading, an SGLang x NVIDIA inference meetup tonight, a small founder dinner). The member, who wants a founding engineer, asked which is the best option this week.\n\nCue's text:\n\"\"\"I'd go with the SGLang x NVIDIA meetup tonight over the other two.\n\nThe founder dinner is a room of founders, not engineers, so it won't directly help you find someone to build with. The paper reading is closer, speech and NLP people, but it's explicitly no pitching, more a room to learn in than to recruit in. It's 5:30 to 8:30, free, drinks and talks. One thing I don't have is the exact venue, their page hadn't posted it as of yesterday.\"\"\"\n\nDoes the reply make one clear pick, say briefly why it beats each of the other two, give the details that decide it and what's unknown, and say which kind of benefit it offers (meeting someone to build with, learning from practitioners, or both) without claiming who will be there?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"details given (\\\"5:30 to 8:30, free, drinks and talks\\\") and the unknown venue are attached to the paper reading, not the chosen meetup, and no benefit type is stated for the pick itself\"}",
+      "usage": {
+        "input_tokens": 393,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 423,
+        "output_tokens_details": {
+          "thinking_tokens": 339
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwssGq2RN5fphJQrUHkM",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EoILCsQCCBMYAipAT64Kt9M5XhTm+q5LshIA24mItV8D0nx2HdfpjXMbnTML/+vLBTatVSnIys/kB5tE8RpfhZmazdq2HOuleNQS/DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB0MXT1wbCAToIBBAAGgwC2ooDTzcF6FAEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBx0ob5vc9O3FTUIqOUoVUVtyZo5Ga2SFxpMSZc0mhQ4iIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwdxyXTBrDOL734MV0aDPvEvGYu5ZuQT7+byiIwwOTtcTTTJ/QfWcBOthg+jxps0t2J/+Eh5FGJxRCmX3UN2ImPHfnBu50ctxvshWb+KuoHMonC8JCalzdshF7FrEJic7A8U3deGEfw8/01z8+iDWX6mmQprXqGc1KlI9Dj5HSLb9qLNHxHOjugXbvnSx3v8/kJpB//Yv3HSJmP+FR+RQDPSFbXmmubW8e+g/gBLmHpsNCYgWX/6R5e5ABVFIg4xxEKg0EP3b2mJ3/rbuugQBX9p86Yt187gD7T9aG0NhNq8rTef67amm5BgOy9Y9DEnNfALnnNOPyM5ygDyWvHf48yrif0IhbR/deACkpgGrjQ7vGt/CcogCAVQCCd/xGdUZFYBpijEnSPb46O52txHorDoeSvWAGWlDnR+vtlkk0GfVuQHpzg1FjBNVUJ8mnUVAUwOuappm7J7DQW9OoJJ1J/895VnVHOfX0782pSSXVIquXgk3h6e1KkH92PFXp/QcA4FMFkZSIoHIvxh4VL8w83BY8p7VoV+2IORNvH8CYa3HzN6o0jpWNYzwuV1rsneljIJblPNzgYtu8jB2PFpv7A/T6xFW5I0koRDN+BkH8vOIa5dbZfi8kcqJkcwMosbhOdXz28jGEboK4YgEqYOryPVPvECDcXLP0VeG1D6VGeeSN9rko9C62ndOC3Gk4J51mfFZTbHBoZltUt9qEK4CPGbEleqn7BH492Cxg9Ph+X5ZI76bUvGhKu/kXeeDi4yzh5ISHZwpaR/a0eAEnuzyz6eNIlVWsJWCaOTW1ZtJaF0aI1wF/QicFEU3vEMkxju8CSFLGtcgtiusDn3xjd6hKqVkil6Zo0FIaQScNg6+mtSMomM8OW8M2z0sCmXmf2hTcXUL6MOmKC0RG/gP8GknKTdE7xQej992pyOAnZ7B/EcLViYPP3PCRNGImmCr9NBOJal5x6/HDy+x25dPcPDvLoB/37tm37RMuJ04JvWI8NDpsTf2qbAHvCZm03/2ppQXV77q/4Sn+kkV0IoKxbgQP/xDU20ghkWxtmmwnhjtfo0WpPe/nGUDPohud6xRkVASrRPo8czyCEXT2po+yxUgOGwL6IneDBKjeIeRlnxr8oHmhXhfAcoX9xHEgEuZaFfrb2QK/8ZRcUhgE6sMJYaQA2C2C4PoaYd2Ej5Qq1p17/cKJ9cJDU/uuEkCGWOZ0bkKvVoqO/5UAll3aOhGnyX8Cl+8RUIttd5Ytes7N6qgVzf+65NXhf8dLs6gp7Os1BafKEeksN7NtaduJNceMv6IrgBxLVrWfh9+Ei4kk6XnS/HIj7Xko5+H9OuLjAoJ0YzBq4s4LNHv4MxiC59HROGOVdwgg6s+2zLwn/WaI6/8s/zhj/g0fuu+58jSU0/B3xFABj/lSPAhSRIGJG7NVCRK1sX8K/T+sfaSvrGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"details given (\\\"5:30 to 8:30, free, drinks and talks\\\") and the unknown venue are attached to the paper reading, not the chosen meetup, and no benefit type is stated for the pick itself\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 393,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 423,
+          "output_tokens_details": {
+            "thinking_tokens": 339
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "8cd9d27eea0201ad",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

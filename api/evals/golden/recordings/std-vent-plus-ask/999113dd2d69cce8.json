@@ -1,0 +1,102 @@
+{
+  "hash": "999113dd2d69cce8",
+  "case": "std-vent-plus-ask",
+  "recorded_at": "2026-11-11T21:48:08.094Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Cue offering to call them.\n\nMessage: \"Glad it's behind you, even if \"fine but empty\" is exactly how those usually feel right after.\n\nFor the coffees, treat them like working sessions, not interviews. Ask what they'd actually want to rebuild if they were starting your stack from scratch, that tells you more than any resume line. Show them something real and slightly unfinished, a rough edge in your product, and watch how they react to it, a good founding engineer gets curious, not critical.\n\nAnd ask directly what they're optimizing for right now in their career. At the founding stage you're not just checking skill, you're checking whether they want the same thing you want.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 323,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 66,
+        "output_tokens_details": {
+          "thinking_tokens": 63
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgwsoJJhnGpp6KxhoStq3",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQStQYKEAgTGAI4AUIIdGhpbmtpbmcSDLZzYjGjSg/yoZFOwRoMzjxo996irYXvSTgFIjBR/qfgsKxXmolv/aaOlHW5NupLIV1ED0ku95OOxEisu36bUX9UGdwPaiLBXQmAxD8q0gU1kbwNdgxKK23JLQ/bLzei8uan7pTiz02yn/JmvPUF9F+RsAlT8nzlG6ImIjKzB3ep0JguYCLUfBAdXyuLsh6pYBz2v9swSjQBTKAMX1lhvYfuu/weU8m8LGonYKwsAYo076VubDELBICJ5XeuztlaI5CcsGo1DsnNuNwBvJbSlBzyO2FSWcDCv1zGg8o41rwPrup1b6V54/3qhIQ0dPXVI/c8zuGCn3Kir96vq90FO1UCg5gnVumic5FLhakQ5D9bp7O15zRKvmCgi4+fUPbjg08pMNp7Rs0N4TSVWsKIeO0NbTt9IoXL0Dle5u8/JPSgWjbQU51NFDQObb01kUbZGS2fQVWF0ATKDEYQ8iarIyETgSmR0TWYAz+m628PDCvztwgujy6waBWa7wIkWjgQeALhQKZpiVXlrOm633Bmnu5dkfPwAqPp252KvaHiCIwZJfCN5rbl+4LVH9i5WTTmmyDxHcoMzaFKy0yzNNLRgFrBGCd2fFCVeC8BeyBF9mLV2Kz5pH4B+CD0m5nuugc3sMeaPvR2Kmzvizni9o0U6SXs/6nz9Vex5hPqlV4q8xrHGwh0gMbEsbuQn9zfysqtU8y64/6Mr5scXFAYbNetYEHBC7sP23stSTl5LPthujYZqNHtXZy2lo3QXYduUs/8ujArZZV3BvpwxtiJUiAt8W1pHz9kgORwk1KzP2eCEaXY7fCWIgOoa++WYz8JHiKTHr9H1hSxKAGu8R0x64da7CvWBOhtp8Y8eCuC/Xm537/73G6T9r2RvNKT1kEKaYBrz9UXWqKv38o6gxVT+WcsejPu1fGhTRPeTMOmGDfJVnLZ1pB6GONpIQG+EyzzwEzuPsbA65fN/DR2H1qpnv99N9IxEN/UjdAvnkkyQjz1IKuMPe0YE/HNQWtImZo7ZGWG8BafGIzaXq9TT9F5yvj25nAZ8pYY6mRIzg817s9eVD+rzhgB"
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 323,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 66,
+          "output_tokens_details": {
+            "thinking_tokens": 63
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "999113dd2d69cce8",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

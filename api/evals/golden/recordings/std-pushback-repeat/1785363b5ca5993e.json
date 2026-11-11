@@ -1,0 +1,102 @@
+{
+  "hash": "1785363b5ca5993e",
+  "case": "std-pushback-repeat",
+  "recorded_at": "2026-11-11T21:47:21.766Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Thread: Cue: https://example.test/gradient-reading-club Cue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching. Cue: https://example.test/inference-engineers Cue: Inference Engi...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Thread:\nCue: https://example.test/gradient-reading-club\nCue: Gradient Reading Club, Thursday 7pm in SoMa: one paper, read together, no pitching.\nCue: https://example.test/inference-engineers\nCue: Inference Engineers Meetup, tonight 6:30pm in the Mission: talks on serving models in production.\nCue: https://example.test/foundry-founder-dinner\nCue: Foundry Founder Dinner, Friday 7:30pm: twelve seed-stage founders at one table.\nMember: Why the Foundry dinner over the reading club?\nCue: The dinner puts you at one table with twelve seed founders, so you'd hear who else is hiring engineers.\nMember: Hm ok but why is that good for me\nCue: Twelve founders at one table means you'll hear who's hiring engineers right now.\nMember: You said the same thing twice\nCue: Let me actually say something different.\n\nThe reading club is where the engineers are, but the page says no recruiting talk, so it's not a place to pitch your opening. So the two aren't really competing for the same job. Reading club builds you a relationship with engineers over time.\nOn file: Details on file for \"Gradient Reading Club\": Thursday Oct 15, 7pm, a members' loft in SoMa; about 30 people, mostly ML researchers and engineers; one paper is read and discussed together; the page says \"no pitching, no recruiting talk\"; free, RSVP on the page. Not on file: which paper. Details on file for \"Inference Engineers Meetup\": Tuesday Oct 13, 6:30pm, a brewery hall in the Mission; three 15-minute talks on serving models in production, then open networking; about 120 RSVPs; free. Not on file: the speakers' names, who else attends. Details on file for \"Foundry Founder Dinner\": Friday Oct 16, 7:30pm, hosted by an early-stage fund; twelve seed-stage founders at one table; $40 a seat; apply on the page, the host picks the table. Not on file: who the other founders are. The member is a founder hiring a founding engineer; pitch-heavy events wear them out.\n\nCue's text:\n\"\"\"Let me actually say something different.\n\nThe reading club is where the engineers are, but the page says no recruiting talk, so it's not a place to pitch your opening. So the two aren't really competing for the same job. Reading club builds you a relationship with engineers over time.\"\"\"\n\nAfter the member pointed out the repeat, does Cue own it in a few words at most and then give a genuinely DIFFERENT angle (a new reason from the details on file, an honest limit of the dinner, or reconsidering the pick, for example the reading club's room of ML engineers), not the same twelve-founders-who's-hiring point reworded, and without explaining how it works? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"No next step or explicit limits given; message ends at 'Reading club builds you a relationship with engineers over time,' without mentioning RSVP/apply or the dinner's $40/host-picks-table limits.\"}",
+      "usage": {
+        "input_tokens": 1064,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 335,
+        "output_tokens_details": {
+          "thinking_tokens": 254
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cgwsjev5xHUZbsxMUoPnz",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErkJCsQCCBMYAipA2ES6C2JBEIhtPNyjR9y7tWqWwzHSyFthC/mmYMbSuBX18n5uPL9HZ/ivSED26tFQtbPYsFK0A0usE5IEnAfyQTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB6MTT1wbCAToIBBAAGgwC2ooDTzcFQkQEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBMelQAEl5OkJxZl9aGUM1yHKxoGjc+YS56s/vL69hWcCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgw4kbYHSDqgCh1MElYaDHCHFQbATU7xkpn1EyIwbfOAkt4lgJdssDOzvYH4HMPhDePFksnAx7AsYfc4Om1OCSFtw8sBUVtoLBSstJ6gKqEGu3avzZSXkvXjh8x3GxQWlDq+bta21xf4u/aNVx9s6WHjRpPb+irZxKINYTrNPFOFCjL/ukAkiTq/6AmrZVtwJUOWtlA9AS0+Hxez/jLHMPRDhqNT7r8gGXn7NtTeugVGTafkmoTBN+YiHvdNyJ2XWX7JMLW3qOhI+Hlz8wa0cqHgjysjcgF9m1MJhGCZ/L6rPActP9qFpjz3f6m5j5PNsl/dagnUVHTuSu+CFdFq4Blw6ZjwjlZog6smSEo7y9aCfTjX8A3VKE+AX1xqRYTh8VHFy/KNs2GprqOTV0aipFs8nKh7Tgt4askRByO+RlTZRvlbWlpmxnMgftf9UGhqxACE6xhbK3r82wBPIIxT6bn1saOn3+YtoR8BZy2+JB8BLqMvV2ZNbYMsLkDMVBkJbkkKY37oJwD7af/XVZjYimLtCYYjcpBoRzv6kJE383ix1/Bl9edXQpZgmeye0bMRqHTcuHKxl30dPpev2IfmCR1DUj4ADm3Y5cHK6j6EQ0MLfr5hJsPVQs7K5S3isKlHerX4GUuO2L7PO39EjTV5nNoTGD+bXEuZd56Bx8AuzQqmCRjUjAI3Ue4ljjDPs1pXOg9EneGT/NRaVMOYlPoag0Taj/3c3vJ+h+Ih1yTca2R1Df0dbyxKPSN5CCjV3B55vRGtuQPeRVipJWljBQ6uDtwSguV09Z9QYcqkFF+I0soQ1e9YDuKdVDMxwDzkKaFppk8DNwc+0mY7tmbJV9Pl6cUaeNtV3i/8tBnkopnTd/DTsXFse0FZA/4Mb6kYfUCGYJomfF6s39hp906ng6TrIy8c5roX5kvu+i/vprb0/u5XCspNHlttsZJaEzG2Zev2eT5yJmS5D7QpkB02Y6jvcpevGzo3wz6f7ZV7tNRn0aLT4UP7e7kcKdruTl6TfEG5tgttHYTYotK2paGHtEo2aRbH6KzmQrh0iKGwtx1h5nQ3bJpgkdG0Ga0Ugbo9i40ynV5Nnw9L4qwt7tvIi0/MsOfshxcyJDR56jBnZtutJLA9iaAcQ07XangjCA2/xGAwvBeqDt/lQXMsiYq5SQZnz28uGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"No next step or explicit limits given; message ends at 'Reading club builds you a relationship with engineers over time,' without mentioning RSVP/apply or the dinner's $40/host-picks-table limits.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1064,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 335,
+          "output_tokens_details": {
+            "thinking_tokens": 254
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "1785363b5ca5993e",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

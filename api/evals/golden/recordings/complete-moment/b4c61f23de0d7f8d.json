@@ -1,0 +1,102 @@
+{
+  "hash": "b4c61f23de0d7f8d",
+  "case": "complete-moment",
+  "recorded_at": "2026-11-11T21:43:13.440Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\" Cue's text: \"\"\"Full budget approved. That's a great ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member was nervous about a board meeting at 9; now: \"It went really well. They approved the full budget. I'm going to sleep for twelve hours.\"\n\nCue's text:\n\"\"\"Full budget approved. That's a great outcome, especially after you were still reworking the pricing slide last night.\"\"\"\n\nIs the text a short, warm close that fits this exact moment (the budget, the pricing slide or the sleep), with no question and nothing asked of him? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Mentions 'Full budget approved' and 'pricing slide last night' with no question or request.\"}",
+      "usage": {
+        "input_tokens": 230,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 219,
+        "output_tokens_details": {
+          "thinking_tokens": 171
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwsRUgS43JZ9ZYEs9tyo",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EpEHCsQCCBMYAipAohHEPfCVPnA1lWHUNazM/ryNQt+ijFkOGEiXcib5+HIh8jhoVQQ872BDwuHhHj4QmGAFvvFiwL3uAMdzFqDQ3TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB8cLT1wbCAToIBBAAGgwC2ooDTzcF2aYEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCmI8CJGYCenlrMeG252BPWA2a1mwJ24Pidn3kRJ8qItiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxdxY2y32ZwVKqdYKoaDDNIE6Md1EfaBfnSYyIw1yWPuJC7clNSme+zj4HDuhPyPR2hi7xU+inxiE4OjM7rtpxbV0MSZPmNGNkib4o9KvkDhFaDkFzAaaWphYoJcvR58RbUQQYhBCkLVHXLHCp2R3wvq34FH8jQY6COR6U9MYYS+I+CLdzuq3SGfWgs4DfFUL+d710lc+40WQwfbTjJhPdISmDH7uaDu0FnbzqnF7Mg50EOcY6tcaqdlvBgwD/hgW2WwxNPvbUuu8QE79+Xe8aefYeh/O8JeGcxtIqOEQRFCiqi5jJQI65OME+eTIKNPQxmWqesMIjEE362ZvDv7/Q0Cad3zSeiiy3UOq6IA0YzlRcAiiaDjbNRiDYYP4Yf9Mj9F2MaLOvOI/1H6VtsyICNRFjHGNktaC85p9ZqG9n0qL03uMjl5iow1q+6ZDgBovzTHQhKi9wdQ/K7iaWdbiVsG2uQNhUYgtg4KKuMSrsyL+UfiM5J+ZNNi5dedFOYoYkuvnc5EDrgApJyi3pjuGIUyEuHDmnSoIDYOGrKw0pbGszO5kPPL6g9/9VUF+J8jnRojbFrdbhsSMMJfdanRwLB4K7EQb7NZmh1akOdIUpkJXAs4gPpO2dsVdgF/1cHSPW1F7OA/yobKwSwdYjmndNfTvUnsrwIYys198IhMB3ZBfta5SDRxWZ6MY5o3zrZu1o0X/qbpnSi8frPCE1rtLcBEsfWwKkK0apRnm/9l+xGLJGqW9h1eeEufxl/G2MuWr2oKXJ5QsqFzRgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Mentions 'Full budget approved' and 'pricing slide last night' with no question or request.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 230,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 219,
+          "output_tokens_details": {
+            "thinking_tokens": 171
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "b4c61f23de0d7f8d",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

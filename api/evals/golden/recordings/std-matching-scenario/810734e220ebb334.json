@@ -1,0 +1,97 @@
+{
+  "hash": "810734e220ebb334",
+  "case": "std-matching-scenario",
+  "recorded_at": "2026-11-11T21:46:55.238Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: A teammate on the Noise team, preparing for a host call, asked Cue \"Tell me more about your matching system\" then \"Ok give me a scenario. Walk me through one start to finish\". Thread: Member: Got a host call to...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: A teammate on the Noise team, preparing for a host call, asked Cue \"Tell me more about your matching system\" then \"Ok give me a scenario. Walk me through one start to finish\".\nThread:\nMember: Got a host call tomorrow and they'll ask how this works\nCue: Happy to walk it through with you first.\nMember: Tell me more about your matching system\nCue: Here's the shape of it. Each member tells me what they're building, who they want to meet, what they're looking for, over texts and calls, same as you and I talk. I keep that on file.\nAt a Noise event, I know the full guest list and what each person told me. So if you're there, I can tell you specifically who's worth meeting and why, based on what you've both said, not just a shared industry tag.\nNobody gets introduced blind. I ask each person if they want to meet the other, and only when both say yes does the intro actually happen, as one email to both. I never tell one what the other said about them, that stays private.\nMember: Ok give me a scenario. Walk me through one start to finish\nCue: Here's a made up walk through, start to finish. Say a member, call him Theo, tells me he's building in climate and wants to meet seed investors who write first checks. Another member, call her Dana, tells me separately she's an angel who does exactly that. Both end up on the list for the same Noise dinner.\n\nOnce I know they're both going, I reach out to each privately. I tell Theo there's someone at the dinner worth meeting and why, based on what he told me. Same to Dana. Neither hears what the other said about them, just that I think it's worth a conversation.\n\nIf they both say yes, I send one email to both, introducing them and saying why I thought to connect them. If either says no, it goes no further and the other never finds out it was floated.\n\nCue's text:\n\"\"\"Here's a made up walk through, start to finish. Say a member, call him Theo, tells me he's building in climate and wants to meet seed investors who write first checks. Another member, call her Dana, tells me separately she's an angel who does exactly that. Both end up on the list for the same Noise dinner.\n\nOnce I know they're both going, I reach out to each privately. I tell Theo there's someone at the dinner worth meeting and why, based on what he told me. Same to Dana. Neither hears what the other said about them, just that I think it's worth a conversation.\n\nIf they both say yes, I send one email to both, introducing them and saying why I thought to connect them. If either says no, it goes no further and the other never finds out it was floated.\"\"\"\n\nIs Cue's last text a full scenario, clearly labeled as a hypothetical, that walks start to finish through how a connection happens (what Cue learns about each person, why it would put two people together, how both say yes before anyone is introduced, and what happens after), WITHOUT deflecting, staying abstract, or naming real members? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Clearly labeled 'made up walk through' with Theo/Dana, covers what Cue learns ('building in climate and wants to meet seed investors'), the match logic, consent ('If they both say yes... If either says no'), and outcome ('one email to both'), with no real names or deflection.\"}",
+      "usage": {
+        "input_tokens": 1047,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 110,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwshsiDRfs8EAd5Mag6Z",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Clearly labeled 'made up walk through' with Theo/Dana, covers what Cue learns ('building in climate and wants to meet seed investors'), the match logic, consent ('If they both say yes... If either says no'), and outcome ('one email to both'), with no real names or deflection.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1047,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 110,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "810734e220ebb334",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

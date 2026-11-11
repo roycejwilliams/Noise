@@ -1,7 +1,7 @@
 {
   "hash": "88603b4fce1585e5",
   "case": "std-best-option-this-week",
-  "recorded_at": "2026-11-11T20:51:26.918Z",
+  "recorded_at": "2026-11-11T21:44:17.854Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\":\"They're asking Cue to recommend which of the three shared events is best for them this week\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"choosing among the events Cue shared\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":{\"verdict\":\"in\",\"connection\":null},\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":null,\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
+      "text": "{\"reason\":\"they're asking Cue to recommend which of the three shared events is best for them this week\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"choosing among the three events shared this week\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":{\"verdict\":\"in\",\"connection\":null},\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"location_availability\"],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"this week\",\"item\":null,\"not_item\":null,\"between\":[\"D1\",\"D2\",\"D3\"]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}",
       "usage": {
         "input_tokens": 6691,
         "cache_creation_input_tokens": 0,
@@ -47,7 +47,7 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 339,
+        "output_tokens": 373,
         "output_tokens_details": {
           "thinking_tokens": 0
         },
@@ -57,13 +57,13 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgwoUSCiervSEGi9td4WS",
+        "id": "msg_011CgwsW9cbxjC5Ma975q5xM",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "{\"reason\":\"They're asking Cue to recommend which of the three shared events is best for them this week\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"choosing among the events Cue shared\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":{\"verdict\":\"in\",\"connection\":null},\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"location_availability\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":null,\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
+            "text": "{\"reason\":\"they're asking Cue to recommend which of the three shared events is best for them this week\",\"answers\":null,\"ambiguousBetween\":[],\"call\":\"none\",\"wantsRecommendation\":true,\"beyondAsk\":null,\"askUnclear\":null,\"confidence\":\"high\",\"mode\":\"asking\",\"topic\":\"choosing among the three events shared this week\",\"pushback\":null,\"lesson\":null,\"dots\":[],\"emotion\":null,\"says_okay\":false,\"seeking\":\"solving\",\"feedback\":[],\"ack\":null,\"scope\":{\"verdict\":\"in\",\"connection\":null},\"message_kind\":\"ask\",\"about_co\":false,\"asks_for_list\":false,\"about_sent\":null,\"covered_now\":[\"location_availability\"],\"missing\":[\"current_situation\",\"major_transition\",\"goals_challenges\",\"looking_for\",\"people_to_meet\",\"ways_to_help\",\"personality\",\"boundaries_preferences\",\"long_term_direction\"],\"move\":\"answer\",\"refers_to\":{\"phrase\":\"this week\",\"item\":null,\"not_item\":null,\"between\":[\"D1\",\"D2\",\"D3\"]},\"answered\":[],\"closes\":[],\"reopens\":[],\"asks_again\":null}"
           }
         ],
         "container": null,
@@ -78,7 +78,7 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 339,
+          "output_tokens": 373,
           "output_tokens_details": {
             "thinking_tokens": 0
           },

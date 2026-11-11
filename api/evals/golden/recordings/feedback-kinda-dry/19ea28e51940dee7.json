@@ -1,0 +1,102 @@
+{
+  "hash": "19ea28e51940dee7",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-11T21:42:06.732Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That almost-walked-off-then-nailed-it moment deserves more than that.\n\nSeven years old, nervous enough to nearly bail, and she sat back down and got through the whole thing clean. That's real nerve for a kid. And you were there watching it happen.\n\nWhat was that like for you, watching her get through it.\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Fair.\\\" owns it briefly, then adds Cue's own observation (\\\"That's real nerve for a kid\\\") and a genuine question, without re-explaining tone or quoting the earlier line.\"}",
+      "usage": {
+        "input_tokens": 373,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 531,
+        "output_tokens_details": {
+          "thinking_tokens": 448
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwsLJEVTWgGDGcTqPoVp",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Fair.\\\" owns it briefly, then adds Cue's own observation (\\\"That's real nerve for a kid\\\") and a genuine question, without re-explaining tone or quoting the earlier line.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 373,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 531,
+          "output_tokens_details": {
+            "thinking_tokens": 448
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "19ea28e51940dee7",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

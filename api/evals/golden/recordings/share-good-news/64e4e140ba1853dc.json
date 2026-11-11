@@ -1,7 +1,7 @@
 {
   "hash": "64e4e140ba1853dc",
   "case": "share-good-news",
-  "recorded_at": "2026-11-11T20:49:16.856Z",
+  "recorded_at": "2026-11-11T21:41:36.266Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -35,7 +35,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Two years and it's done\\\" merely restates her words with no added warmth, reaction, or question.\"}",
+      "text": "{\"answer\": \"no\", \"reason\": \"\\\"Two years and it's done\\\" just restates her words with no added warmth or reaction of Cue's own\"}",
       "usage": {
         "input_tokens": 296,
         "cache_creation_input_tokens": 0,
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 132,
+        "output_tokens": 133,
         "output_tokens_details": {
-          "thinking_tokens": 84
+          "thinking_tokens": 83
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,18 +54,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgwoJvv67cHtnQRHZqCqU",
+        "id": "msg_011CgwsJMcpzsmqJDD3z87j5",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "Ep0FCsQCCBMYAipAd98rpmSi8dNf+6DNO9Je/s+yLlOAIvWBY01ZfyVlW2i+KO6VbuxIPDsqXKRbSDeoABXjtq2baGJnUpxIObRVwzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBzKnT1wbCAToIBBAAGgwC2ooDTzcFGjcEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAX3shI488p77vza/IbecgM8WKl9lqn0kDW79HzhrrsnyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxf2UPCn36zcs6s2PIaDGaY6inlYHr1XV3IvSIwgHrAEUXwiFCESX6xdOn4wQQNR41UTDYtM7FnzP9XNoU2VojseOyDOJkUvHuHi2qvKoUCC7/FspdccndSRARQM9o2RD8NgQkUb8/tMRVjVpcrfgQK/5ROfMmf2yKC5TsAEZB2nPMjHN0dfxVLK5mnzlgVkx/smKTlDJS+BkT42kqvJz70hnJHbKz6WpBm0IqeL6hIEua3ZFBRg5LXc7dmpOAmE4mzbSP5Yg9mMT6aFbJowMK7uJeRCgroHhFMjnbJ7qdYnoIlW15pAdE83sNhXzyBHoUoizrE5l6pA1s1eqK+WXcPdmw5QaIDAs79k+wi9BkuZ8TNleB+8yRFAwpNVa9NbPCGeaKoV2twfuSYyVyk9HtZzxErYVJGVGdsTVpwnKI5vmwR8Ay4JsXcoAE2bHnY5C3voclVGAE="
+            "signature": "EqoFCsQCCBMYAipApig/BIJFhG/6reUMPputpawWy9menNitPXQ/4skD2g1iQXySaTrPhdQIpAybswpAk0OH2DSa61L2T0Dl/ebzLjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBj8LT1wbCAToIBBAAGgwC2ooDTzcFGjcEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAX3shI488p77vza/IbecgM8WKl9lqn0kDW79HzhrrsnyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgw1aF9IcSK53so8VJQaDAOx6zO2VS0zf4+4FSIwx7vGSJMln0a1zqO1qXEMmS9+nNSQGcIYp4t89J8QNCPiPI3dtE6vM0uEYjPPfk4AKpIC5yVa13tStIvUyJELxfNUBiLJzz4C3+BSZf0EFl3qveUkHtQmXqpTusS1sh/WTyjoL6kKXNRpjuQJ78q9fXWD1wn0kRy3WCvaoZmoWZbja7mL/15tEs0ie5t0LrXVdmt/3PSZqB3acUghnO87uBPGgdw5NAnlAcs7NSSrM/XBDMkJGyDXRRKt8TvQhmb1osFXSVfbsNldLyRdwY5EHqZMEANGbzdaT/8QAekszmhtM8JGy4awkCR1dsSyvUar+FBLBRo1pyD4NDfCqk7+nz/cP+eMHwS6Inxq8Q7u39WYoJPBFBANYhHRU+Rf1IfeDuoUC7tk3t7p4tJ4HTMQqjm4iAI1o99baOLKxH1DCTAbC9WtcxgB"
           },
           {
             "type": "text",
-            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Two years and it's done\\\" merely restates her words with no added warmth, reaction, or question.\"}"
+            "text": "{\"answer\": \"no\", \"reason\": \"\\\"Two years and it's done\\\" just restates her words with no added warmth or reaction of Cue's own\"}"
           }
         ],
         "container": null,
@@ -80,9 +80,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 132,
+          "output_tokens": 133,
           "output_tokens_details": {
-            "thinking_tokens": 84
+            "thinking_tokens": 83
           },
           "service_tier": "standard",
           "inference_geo": "global",

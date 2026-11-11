@@ -1,0 +1,102 @@
+{
+  "hash": "5d2b9c4bc2d664cc",
+  "case": "continuous-follow-up",
+  "recorded_at": "2026-11-11T21:43:03.090Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other c...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other companies efficient and I want it to matter for people like him.\"\n\nCue's text:\n\"\"\"This is the real reason, not a story you tell investors. You watched it happen to someone specific, and now you've got ten years of exactly the skill that problem needs.\n\nMost people who want to do something about food systems never watched the unfair part up close. You did, in your own family. That's not nothing.\"\"\"\n\nDoes the text build on his answer with something of Cue's own (a real observation, a position, or a question that follows from what he just said and moves it forward), WITHOUT paraphrasing his answer back to him, and without filling in what he didn't say (his childhood, what his grandfather felt, which part of the chain)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"'You watched it happen to someone specific' and 'You did, in your own family' just restate his answer rather than adding a new observation or question.\"}",
+      "usage": {
+        "input_tokens": 368,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 246,
+        "output_tokens_details": {
+          "thinking_tokens": 187
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwsQf8x3PRa9eus8MuHU",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EpIICsQCCBMYAipAwrmrCjQzUS7bSFy0IXwwBQ+bC9AWZlTucNfob2xY/lUorBvTDvjjaa3jWNIaIfPgNm+H7mL2/c0/vZ80gcSAhTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB5sLT1wbCAToIBBAAGgwC2ooDTzcFPgsEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAD0KbjI35gNEDKVomfQEpsXxbUVjEQFn9h4/a1uCrcLiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgymKUZ+i1xwdgHaYmEaDIJeNBWOecVmHMr6RSIw8i49GU/KLvdhF8CimALP4heP10wXzsw03P9UjilVhoLrB2Wq2IV/sxKoh0wOwLjzKvoEPrb3XhtI6OGT3Uspsje8gk7uVgayFVnMCEadPGZNraLLNM/MqIweqKnIwYnP50VmdRws4Bbye7Rn8Oyw4WHUJl/hjfuMnSltU4kRg9jJK7tc38fAzNd7FaKIBW0BlS6z8dwz+poqwfQrkTd2WX/gNumrNlqyGkXwjdtcPsytpDfXyj67bMEPTuUeYDA+sgtyP3YyIOKfgY7tmO/rHUP3omj5+Ct62lvG2Ub1MnvsAU4IuvT6jx32LbDg8AI8dfpILjWqZgsfHu9GlALvBtcudDBE8yuirQQm+M2D0nfnuD7CaxjAK739IaP6x/yQlqR8X6niN41uhRJqGHjU8S2hGKCXTjJ9B4c8vFKx+RqGkBI4ejM7wRiJ4C84f5uks6ut9iaOdwMgJeCq6NyucP/JlrZx2tBswXX0IIdh7udSI14Jpr6Zx7VgHw34HuHcyZK+bqHeAQrl/OMo0eSL1uTzEEU+zO92t2hDcEA9OhOdvq2Yn36pwVb9xRnEtwHy6Cc8iQjEk+JIFfq0ycoLpXW6dEfEi6fm3d+4REpvAZZU77Wzm61HeI1vmuXWBNXI0P+ET3PJ0s/8PgR4uTQh3Q/FaxiFfHEvy1hTf1k8wMvW473okoPAJlyab5YmSVQot+Wz0jtaMVS+ws1ed22swd0/WhBDr1FSrHiBZw49tWg6qDyEPtQWkfpMeGG301P2basiN6g2Amfywr4t7vMgRxysABKaOmXQ7/I9urccmYLkdkiPle1ar+tyCOjSzm1oMtO6IBLr0xsGHdVAUU01f8PEaZFBqV6KdE3EpRF5JnJK6vfWitEwcLRNnJZQKh7Tu9d29vL755nFY52JdxgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"'You watched it happen to someone specific' and 'You did, in your own family' just restate his answer rather than adding a new observation or question.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 368,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 246,
+          "output_tokens_details": {
+            "thinking_tokens": 187
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "5d2b9c4bc2d664cc",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

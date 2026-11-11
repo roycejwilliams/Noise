@@ -1,7 +1,7 @@
 {
   "hash": "e0c12a79896477cf",
   "case": "share-good-news",
-  "recorded_at": "2026-11-11T20:49:11.901Z",
+  "recorded_at": "2026-11-11T21:41:30.512Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -105,7 +105,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"claims\": [{\"text\": \"Two years and it's done.\", \"type\": \"member_life\", \"supported\": true, \"factId\": null, \"quote\": \"We closed the seed round this morning. Two years of no's and it finally happened.\"}]}",
+      "text": "{\"claims\": []}",
       "usage": {
         "input_tokens": 3733,
         "cache_creation_input_tokens": 3455,
@@ -114,9 +114,9 @@
           "ephemeral_5m_input_tokens": 3455,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 74,
+        "output_tokens": 27,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 17
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -124,13 +124,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgwoJbgSqyKhHc73LzsZ7",
+        "id": "msg_011CgwsHxuLPdBK2cA5xAz45",
         "type": "message",
         "role": "assistant",
         "content": [
           {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EuYDCscCCBMYAipAPZf/16Kqe8ke5qCJYp/7da5EiaEO57vAxeOGEhDfLmr+/smL3pXNO2MR//aKHDs1grLTOM9QgDCa1ul/Lp9Z+DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBisLT1wbCAT0IBRAAGg8BgWIC2ooDTzcFxgEEJq0gAjIEEnHPJToEfDPbpEIEODMjikoEODMjilAAWgTZBeFWYAJoAXAB2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA41nJreH7gFHXU5gViIiLKhMgIymHAt7M5DpE3GSmvICIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyBJhTdzoR85CW0dE8aDOx+zB+fHMcgeQ/UMiIwiStVfbSt+lIoZLVf7vdhGKvWbJhrAdLz42d8LOY0f63JQ9Hu2lcSuS8CrdEwXzgCKkzxNYXP9IlQuo6Vnz1BjP4a4cioxgxJ9giA67oMvrYxGiwxOWqYzkk55ukzZp769y0a4PWjCYi5w6tFph/s9+/5FIL2wP/ufX8PA84FGAE="
+          },
+          {
             "type": "text",
-            "text": "{\"claims\": [{\"text\": \"Two years and it's done.\", \"type\": \"member_life\", \"supported\": true, \"factId\": null, \"quote\": \"We closed the seed round this morning. Two years of no's and it finally happened.\"}]}"
+            "text": "{\"claims\": []}"
           }
         ],
         "container": null,
@@ -145,9 +150,9 @@
             "ephemeral_5m_input_tokens": 3455,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 74,
+          "output_tokens": 27,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 17
           },
           "service_tier": "standard",
           "inference_geo": "global",
