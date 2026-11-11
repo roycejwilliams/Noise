@@ -555,7 +555,7 @@ async function realDeps(d: Partial<LumaViaExaDeps> = {}): Promise<LumaViaExaDeps
       d.page ??
       (async (slug) => {
         const E = await import("./eventDetails.js");
-        return classifyLumaPage(await E.readLumaPage(`https://lu.ma/${slug}`), E.lumaPageRecord);
+        return classifyLumaPage(await E.readLumaPage(`https://lu.ma/${slug}`, fetch, { lane: "sweep" }), E.lumaPageRecord);
       }),
     configured: d.configured ?? (() => X.exaConfigured()),
     now: d.now ?? (() => new Date()),

@@ -67,7 +67,7 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   const eb = await W.pickPage({ ...raw, url: "https://www.eventbrite.com/e/memorybox-beta-launch-tickets-1" }, { read: async () => lumaText, official: async () => "https://www.memorybox.ai/", eventPage: async () => ({ oneEvent: false, text: null }) });
   check("an Eventbrite event page is kept by its url alone", !eb.swapped && eb.url.includes("eventbrite.com/e/"));
   // 2026-10-28 (event tier by page): any event-shaped page is read once, through eventPage.ts readEventPage (Luma's record or one schema.org Event).
-  check("Luma's own page data decides it, from one fetch (eventPage.ts readEventPage), read for an event-shaped url", /m\.readEventPage\(url\)/.test(src("services/taskWeb.ts")) && /return \(await readLumaPage\(url\)\)\.details;/.test(src("services/eventDetails.ts")));
+  check("Luma's own page data decides it, from one fetch (eventPage.ts readEventPage), read for an event-shaped url", /m\.readEventPage\(url\)/.test(src("services/taskWeb.ts")) && /const r = await readLumaPage\(url, fetch, \{ lane: opts\.lane \}\);/.test(src("services/eventDetails.ts")));
   const calText = await W.pickPage({ ...raw, url: "https://lu.ma/genai-sf" }, { read: async () => { throw new Error("read twice"); }, official: async () => null, eventPage: async () => ({ oneEvent: false, text: lumaText, shareable: true }) });
   check("a Luma page that isn't one event and has no own site found is checked on the text that one fetch read", !calText.swapped && calText.text === lumaText);
   const blog = { name: "The Loft at Mission Bay", url: "https://bestvenues-blog.com/top-10-sf-venues", details: [] };

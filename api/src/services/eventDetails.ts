@@ -221,12 +221,15 @@ export async function fetchCheckedHops(url: string, signal: AbortSignal, fetchIm
 
 // maxAgeMs: how old a cached successful read may be. A cached search result
 // re-checks availability with a short one, since sold-out status changes.
-export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: number } = {}): Promise<EventDetails | null> {
+// lane: "sweep" for the background searches (waits its turn, bounded), anything else a reply's (never queues behind a sweep: past
+// LUMA_PACE.replyMaxWaitMs it isn't read now, and what's cached, however old, or nothing, is used).
+export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: number; lane?: LumaLane } = {}): Promise<EventDetails | null> {
   const key = lumaUrl(url);
   const cached = detailCache.get(key);
   const ttl = cached?.details ? Math.min(opts.maxAgeMs ?? DETAIL_TTL_MS, DETAIL_TTL_MS) : FAILED_DETAIL_TTL_MS;
   if (cached && Date.now() - cached.at < ttl) return cached.details;
-  return (await readLumaPage(url)).details;
+  const r = await readLumaPage(url, fetch, { lane: opts.lane });
+  return r.error === LUMA_PACED ? (cached?.details ?? null) : r.details;
 }
 
 // One fetch of a Luma page: its html and its event record (null for a calendar's or a city's page), the record cached as above. The web
@@ -235,26 +238,39 @@ export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: numb
 // status: the page's HTTP status (null when no answer came: timed out, unreachable, or a redirect hop refused); error: why there's no
 // html, said plainly. A 404 is a page that isn't there; a 403, 429 or 503 is Luma not serving it to us (never "no such event").
 // One pace for every Luma page read in this process (2026-11-11 9am sweep: two searches read 21 and 24 pages five at a time, and the third,
-// a minute later, got HTTP 429 on all 24). Reads start at most one per LUMA_PAGE_GAP_MS, whichever search, member or reply asks; the
-// in-process caches (this file's detailCache, lumaViaExa.ts pageCache) mean the same link read again within its TTL is never fetched.
-// Luma publishes no page limit: one a second is a guess at "safe", not a measured one. Only the real network fetch is paced.
-export const LUMA_PAGE_GAP_MS = 1000;
-let lumaNextSlot = 0;
-// Pure-ish: when this read may start (ms from now), and the slot after it reserved. Exported for the probes.
-export function lumaPaceWait(now: number, gap: number = LUMA_PAGE_GAP_MS): number {
-  const start = Math.max(now, lumaNextSlot);
-  lumaNextSlot = start + gap;
-  return start - now;
+// a minute later, got HTTP 429 on all 24): a token bucket, a small burst, then one read a second, whichever search, member or reply asks.
+// The in-process caches (this file's detailCache, lumaViaExa.ts pageCache) mean the same link read again within its TTL is never fetched.
+// Every wait is bounded (second review of #456: first-come slots made a reply's read wait 30s behind a sweep's): a sweep read waits up to
+// sweepMaxWaitMs, a reply's up to replyMaxWaitMs; past that the read doesn't happen now (LUMA_PACED: nothing is reserved). Luma publishes no
+// page limit: one a second is a guess at "safe", not a measured one; a refusal still pauses the route (lumaViaExa.ts). Only the real
+// network fetch is paced.
+export const LUMA_PACE = { gapMs: 1000, burst: 4, replyMaxWaitMs: 2500, sweepMaxWaitMs: 20_000 } as const;
+export type LumaLane = "reply" | "sweep";
+export const LUMA_PACED = "paced: Luma's pages are busy; not read now";
+let bucket = { tokens: LUMA_PACE.burst as number, at: 0 };
+// Pure-ish: take one read's token at `now`. The wait in ms, or null when it would pass maxWait (then nothing is taken).
+export function lumaPaceTake(now: number, maxWait: number): number | null {
+  const tokens = bucket.at ? Math.min(LUMA_PACE.burst, bucket.tokens + (now - bucket.at) / LUMA_PACE.gapMs) : bucket.tokens;
+  const wait = tokens >= 1 ? 0 : Math.ceil((1 - tokens) * LUMA_PACE.gapMs);
+  if (wait > maxWait) {
+    bucket = { tokens, at: now };
+    return null;
+  }
+  bucket = { tokens: tokens - 1, at: now };
+  return wait;
 }
-export const resetLumaPace = () => void (lumaNextSlot = 0);
-async function lumaPace(): Promise<void> {
-  const wait = lumaPaceWait(Date.now());
+export const resetLumaPace = () => void (bucket = { tokens: LUMA_PACE.burst, at: 0 });
+async function lumaPace(lane: LumaLane): Promise<boolean> {
+  const wait = lumaPaceTake(Date.now(), lane === "sweep" ? LUMA_PACE.sweepMaxWaitMs : LUMA_PACE.replyMaxWaitMs);
+  if (wait === null) return false;
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  return true;
 }
 
-export async function readLumaPage(url: string, fetchImpl: typeof fetch = fetch): Promise<{ html: string | null; details: EventDetails | null; status: number | null; error: string | null }> {
+export async function readLumaPage(url: string, fetchImpl: typeof fetch = fetch, o: { lane?: LumaLane } = {}): Promise<{ html: string | null; details: EventDetails | null; status: number | null; error: string | null }> {
   const key = lumaUrl(url);
-  if (fetchImpl === fetch) await lumaPace();
+  // Not read now (the pace's bound passed): nothing cached is overwritten, and it isn't a refusal (no pause).
+  if (fetchImpl === fetch && !(await lumaPace(o.lane ?? "reply"))) return { html: null, details: null, status: null, error: LUMA_PACED };
   let html: string | null = null;
   let status: number | null = null;
   let error: string | null = null;
