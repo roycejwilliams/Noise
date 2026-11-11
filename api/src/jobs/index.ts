@@ -380,6 +380,8 @@ export function registerJobs(io: Server) {
   // the area is still its place (services/memberPreferences.ts expireAreaRules). Nothing is sent.
   cron.schedule("*/10 * * * *", () => {
     import("../services/memberPreferences.js").then((P) => P.expireAreaRules()).catch((err: any) => console.error("memberPreferences: area rule expiry failed (non-fatal):", err?.message ?? err));
+    // A where-to-search rule whose area couldn't be set because a lookup was down is tried again, bounded (retryAreaRules). Nothing is sent.
+    import("../services/memberPreferences.js").then((P) => P.retryAreaRules()).catch((err: any) => console.error("memberPreferences: area retry failed (non-fatal):", err?.message ?? err));
   });
 
   // Every 5 min — place calls booked via the schedule-a-call text flow, and
