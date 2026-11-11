@@ -60,9 +60,13 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
     lane?: import("./eventDetails.js").LumaLane;
   } = {},
 ): Promise<{ ranked: RankedEvent<T>[]; closest: Closest | null }> {
-  const pool = spreadAcrossDays(candidates, MAX_CANDIDATES, opts.zone);
   const profileText = opts.profileText?.trim() || null;
-  if ((!askText && !(opts.browse && profileText)) || !pool.length) return { ranked: [], closest: null };
+  if ((!askText && !(opts.browse && profileText)) || !candidates.length) return { ranked: [], closest: null };
+  // More than MAX_CANDIDATES: every one gets a relevance check before the cut (Royce, 2026-11-11: "the best event can't be number 13"),
+  // from what it already carries (its name, and its description when it has one: no page read), and the MAX_CANDIDATES that fit best go
+  // on to be read in full. Before this, the cut was by position (spread across days, Exa's first), so a feed event late in a busy day
+  // was never scored. A browse ask (no subject) still spreads across days. One extra embedding batch, only when over the cap.
+  const pool = candidates.length <= MAX_CANDIDATES ? candidates : opts.browse ? spreadAcrossDays(candidates, MAX_CANDIDATES, opts.zone) : await prefilterByFit(candidates, askText, MAX_CANDIDATES);
   // An event that already has its details (one Exa found, read from Luma's API: services/lumaViaExa.ts) isn't read again from its page.
   // Pages are read for at most RANK_PAGE_READS of the rest, the ones whose own text fits the ask best (second review of #456: 40 page
   // reads per ranking held a reply's search ~40s); the others are ranked on their name alone.
