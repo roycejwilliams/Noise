@@ -153,7 +153,8 @@ export async function settleArea(userId: string, place: string, deps: SetAreaDep
 // isFailedAttempt: no decision, so the same event can queue again if it's found for the new place). A want's own place, and its finds,
 // are never touched.
 // Pure: a find searched where a want with no place looks (their home city, or their area), not at a want's own place.
-export const isFallbackFind = (it: any): boolean => ["home", "area"].includes(String(it?.match?.searchedIn?.source ?? ""));
+// A goal searched where its plan names ("plan") looks there only while no area is set, so its finds move with the area too.
+export const isFallbackFind = (it: any): boolean => ["home", "area", "plan"].includes(String(it?.match?.searchedIn?.source ?? ""));
 export const withoutFallbackFinds = (items: unknown[]): unknown[] => items.filter((it) => !isFallbackFind(it));
 export async function dropFallbackFinds(db: Db, userId: string, because: string): Promise<{ dropped: number; cancelled: { id: string; what: string }[] }> {
   let dropped = 0;
