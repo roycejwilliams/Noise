@@ -172,7 +172,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
 {
   const { CO_WHY } = await import("../../src/services/coVoice.js");
   const D = await import("../../src/services/connectDots.js");
-  check("the why rule: their words, where it could take them, never a promised outcome", /in their words/.test(CO_WHY) && /never a promised outcome/.test(CO_WHY) && /right track/.test(CO_WHY));
+  check("the why rule (2026-11-11): from what its record supports, the benefit by kind and its limit, never their goal said back, never a promised outcome", /what its own record supports/.test(CO_WHY) && /Name which kind of benefit it is/.test(CO_WHY) && /Saying their goal back/.test(CO_WHY) && /never a promised outcome/.test(CO_WHY));
   check("their why reads as their asks and what they're in the middle of", D.whyContext({ asks: ["a builder community"], threads: [{ text: "deciding on accelerators", feeling: null }] }) === 'What they\'ve asked Cue for: "a builder community". What they\'re in the middle of: deciding on accelerators.' && D.whyContext({ asks: [], threads: [] }) === "");
   const sb = src("routes/sendblue.ts");
   check("reacting to a link or an offer ties the reply back to their why", /reactingToSent = true;/.test(sb) && /if \(reactingToSent\) \{/.test(sb) && /They're reacting to something Cue sent them\. \$\{CO_WHY\}/.test(sb));

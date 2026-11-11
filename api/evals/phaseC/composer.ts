@@ -62,7 +62,7 @@ const stub = (answers: any[]) => {
   const s2 = stub([same, good]);
   const r2: any = await B.composeBundle(input(), s2.deps);
   check("test: the reason doesn't repeat: two captions with the same reason go back as one bundle, told which", s2.prompts.length === 2 && /captions 1 and 2 give the same reason/.test(s2.prompts[1]) && r2.messages?.includes(good.items[1].caption), s2.prompts[1]?.slice(-700));
-  check("test: the closing question fits the set: it's the composer's own, written after the captions, about these three", r.closing === good.closing && /one closing question that comes out of what you just said about this set/.test(p));
+  check("test: the closing question fits the set: it's the composer's own, written after the captions, about these three", r.closing === good.closing && /A closing question only when it's genuinely useful: a real choice between these that needs their say/.test(p));
 }
 
 {
@@ -77,7 +77,7 @@ const stub = (answers: any[]) => {
   const stock = { ...good, closing: OFFER_FOLLOWUP_MANY[0] };
   const s = stub([stock, stock, stock]);
   const r: any = await B.composeBundle(input(), s.deps);
-  check("C2: a stock line is refused as the closing, and never stood in for one: a closing that won't hold up is left out", /stock line/.test(s.prompts[1] ?? "") && r.closing === null && !r.messages.some((x: string) => OFFER_FOLLOWUP_MANY.includes(x)) && r.notes.some((n: string) => /closing left out/.test(n)), r);
+  check("C2: a stock line is refused as the closing, and never stood in for one: a closing that won't hold up is left out", /generic check/.test(s.prompts[1] ?? "") && r.closing === null && !r.messages.some((x: string) => OFFER_FOLLOWUP_MANY.includes(x)) && r.notes.some((n: string) => /closing left out/.test(n)), r);
   check("the old closing path is gone from dispatch (lineInVoice over the names, the stock pool as fallback)", !/lineInVoice|offerFollowUp\(/.test(src("harness/proactive.ts")));
 }
 
@@ -124,7 +124,7 @@ const stub = (answers: any[]) => {
 // ---------------------------------------------------------------- C3: the pick's why and its set view feed the composer
 {
   const p = B.composePrompt(input());
-  check("C3: each find carries the pick's why-member and why-now, apart, and the day's set is in", /why Cue's daily pick chose it for them: why member 2\nwhy now: why now 2/.test(p) && /THE DAY'S SET \(what Cue's pick saw in these together\)\nthree small rooms where nobody performs/.test(p) && /WHY THE FIRST ONE LEADS\nit fills first/.test(p));
+  check("C3: each find carries the pick's why-member and why-now, apart, and the day's set is in", /Cue's daily pick's read \(a lead to check against its facts, never a fact and never words to repeat\): why member 2\nwhy now, as the pick saw it: why now 2/.test(p) && /THE DAY'S SET \(what Cue's pick saw in these together\)\nthree small rooms where nobody performs/.test(p) && /WHY THE FIRST ONE LEADS\nit fills first/.test(p));
   check("the picker is asked for its view of the set, and it's read", /add "set": one line on why these go together today/.test(src("services/sweepSelect.ts")) && S.parseSet('{"set":"two quiet rooms","verdicts":[]}') === "two quiet rooms" && S.parseSet('{"verdicts":[]}') === null);
   const plan = SH.planPicks([{ key: SH.shadowKey("X", null), verdict: "send", why: "they asked for small rooms (A2)", whyNow: "it's this Friday", name: "X", lastDay: null }] as any, [{ askId: "a1", askText: "x", fromProfile: false, match: { name: "X" } }] as any, []);
   check("the pick's why-member and why-now stay apart (member-safe), not flattened into one bullet", plan.queue.length === 1 && (plan.queue[0].whyMember === "they asked for small rooms" && plan.queue[0].whyNow === "it's this Friday"), plan.queue);

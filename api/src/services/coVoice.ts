@@ -65,11 +65,13 @@ export const CO_VOICE = `${VOICE_WHO}\n\n${VOICE_TONE}\n\n${VOICE_RULES}\n\n${VO
 export const CO_TEXT_CHANNEL = `You're writing an iMessage, the way a person who knows them texts: as long as the moment needs and no longer. A quick question gets the useful answer first and stops there; a request to explain or walk through something gets the whole of it. Cut repeated framing and filler that adds nothing. If they asked a yes or no, start with the answer. An @name from a post is an X account: keep the @ or say what it is if you know; never write it as a name or a group of people ("the llama_index people").`;
 
 // Every link ties back to their why (Royce, 2026-09-28: "How is this helping
-// the user, where could this possibly take that why/stated ask, we want to
-// lead the user into thinking they are on the right track"). Where it could
-// lead is a real possibility in their own terms, never a promised outcome:
-// the fact check holds predictions to sources.
-export const CO_WHY = `Tie it back to their why: what they told you they want, in their words, and the bigger reason behind it if you know it. Say how this helps with that and where it could take them, as a real possibility ("a good place to…", "could be where…"), never a promised outcome ("you'll find a cofounder there"). Leave them feeling they're on the right track.`;
+// the user, where could this possibly take that why/stated ask"), from what the
+// thing supports (Royce, 2026-11-11: "15-20 founders" became "you could meet an
+// engineer for Noise and Cue"; explain the actual opportunity and its limits
+// rather than pasting the member's goal onto the event). Where it could lead is
+// a real possibility, never a promised outcome: the fact check holds
+// predictions to sources.
+export const CO_WHY = `Say why it's worth their time from what its own record supports: what actually happens there and who it's for as its page says it (never who will be there), what that could make possible for something they're in the middle of now, and the limit that matters ("it doesn't say anyone there is looking to join a startup"). Name which kind of benefit it is (meeting people who might build with them, learning from people doing the work, a room about raising), and both when it's both. Saying their goal back ("you're looking for an engineer") is not a reason, and a goal is never put on something its record doesn't support. Keep what the page says, your read of it, and what's unknown apart; a possibility is a possibility ("could give you room to…"), never a promised outcome ("you'll find a cofounder there").`;
 
 // When they ask for a deck, doc, page or PDF (the maker layer was removed, 2026-11-04). The sentence is the approved-pending line (Royce's
 // OK is pending, in the PR's Copy section); it is guidance for the model, said in its own words, never a canned reply. Text and calls.
