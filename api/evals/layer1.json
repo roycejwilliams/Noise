@@ -311,6 +311,7 @@
     "evals/reply/readFacts.ts",
     "evals/reply/lateLine.ts",
     "evals/reply/cutRedraft.ts",
+    "evals/reply/standardFixes.ts",
     "evals/reply/shareGuide.ts",
     "evals/reply/oneReply.ts",
     "evals/reply/secondSend.ts",

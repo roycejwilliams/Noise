@@ -1,3 +1,4 @@
+import { DECISION_ASK, FIT_ASK } from "./findGuards.js";
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import type { TurnContext } from "../services/turnContext.js";
 import type { ReplySnapshot } from "../services/memberSnapshot.js";
@@ -41,8 +42,8 @@ export function replyLengthLine(message: string): string | null {
 // suggestions"; from that morning's turn: "best option for me this week?" got a bare pick, and "why it fits?" got the member's own goal
 // said back instead of what the event offers). Code only spots the ask; the model decides the pick and the reasons, from the facts.
 // Only on these asks, so every other turn's prompt is unchanged.
-export const DECISION_ASK = /\b(?:best (?:option|one|bet|pick|choice)|which (?:one|of (?:these|those|them|the)\b|(?:is|would be|sounds) better)|(?:should|do) i (?:go(?: to)?|pick|choose|hit) (?![^?.!]*\bor not\b)[^?.!]{1,80}\bor\b|pick (?:one )?for me|choose for me|what would you (?:pick|choose|go (?:with|to)|do)|if you were me|(?:is|are) (?:it|this|that|they|the [\w'-]+(?: [\w'-]+)?) worth (?:it|going|the trip|my time)\b)|^\s*(?:the )?[\w'&-]+(?: [\w'&-]+){0,3} or (?!not\b)(?:the )?[\w'&-]+(?: [\w'&-]+){0,3}\s*\?\s*$/i;
-export const FIT_ASK = /\bwhy (?:it|this|that)(?: one)? (?:fits|works|makes sense|is (?:a )?(?:good )?(?:fit|pick))\b|\bwhy (?:is )?(?:it|this|that)(?: one)? (?:for|right for) me\b|\bhow (?:does )?(?:it|this|that) fit\b|\bwhy (?:does|would) (?:it|this|that)(?: one)? (?:fit|suit|work for)\b|\b(?:is |how is |why is )?(?:it|this|that)(?: one)? relevant (?:to|for) me\b|\brelevant to me\b|\bwhy (?:should|would) i go\b|\bwhy (?:this|that) one\b/i;
+// The asks themselves live in agent/findGuards.ts (the past-find link guard reads DECISION_ASK too).
+export { DECISION_ASK, FIT_ASK };
 export const DECISION_LINE = "They're asking you to choose. Pick one and own it, in one reply: why it beats the other options you already sent them, naming each in a short clause from its own facts; the details that decide it (when, where, cost, how to get in); what you don't know about it; and its link.";
 export const FIT_LINE = "Say which kind of good it is for them, from the event's own facts (who it's for, its format, its hosts): a room to meet someone they could build or work with, a room to learn from people doing the work, or both, said as which. Then its limit: who actually comes isn't known, so say what the page says the night is for, never who will be there. Their own goal comes in only in their words, as why that kind of good matters to them.";
 // Pure on its inputs: adds the lines this message asks for to the turn's instructions, only when Cue has sent them finds to choose
@@ -57,7 +58,10 @@ export function addAnswerShapeLines(rf: ReplyFacts, message: string, findsSent =
 // Scoped to shares and feedback (Royce 2026-10-29): those moments carry their own depth (connectDots SHARING_GUIDE, FEEDBACK_GUIDE),
 // so the length line never caps them; every other turn keeps it.
 export const UNCAPPED_MOMENTS = new Set(["sharing", "feedback"]);
-export function lengthLineFor(message: string, moment: string | null | undefined, image: boolean): string | null {
+// A decision or why-it-fits ask about finds Cue sent gets no length line either (2026-11-11, std-best-option-this-week: "answer it
+// directly, as briefly as it needs" beside DECISION_LINE's pick, reasons, details, limits and link split the answer into two texts).
+export function lengthLineFor(message: string, moment: string | null | undefined, image: boolean, findsSent = false): string | null {
+  if (findsSent && (DECISION_ASK.test(message) || FIT_ASK.test(message))) return null;
   return image || UNCAPPED_MOMENTS.has(moment ?? "") ? null : replyLengthLine(message);
 }
 
@@ -435,7 +439,9 @@ export async function runConversationReplyAgent(
   if (noFirstRead) withdrawDoorMoment(input.facts, noFirstRead.why);
 
   // A decision or a why-it-fits ask gets its answer-shape line (addAnswerShapeLines). Texts only: a photo turn answers the photo.
-  if (!input.imageForVision) addAnswerShapeLines(input.facts, input.resolvedContent, !!input.turn?.referents?.length || !!input.turn?.sent?.some((s) => Date.now() - s.sentAt.getTime() < 14 * 86_400_000) || input.facts.facts.some((f) => /^Cue sent them "/.test(f.text)));
+  // findsSent: they have finds from Cue to choose among (the length line reads it too).
+  const findsSent = !!input.turn?.referents?.length || !!input.turn?.sent?.some((s) => Date.now() - s.sentAt.getTime() < 14 * 86_400_000) || input.facts.facts.some((f) => /^Cue sent them "/.test(f.text));
+  if (!input.imageForVision) addAnswerShapeLines(input.facts, input.resolvedContent, findsSent);
 
   const lastCoMessage = lastCoLine(input.recentConversation);
   // Real context on them: anything in their snapshot's first four sections (what they said, what they're in the middle of, how they
@@ -535,7 +541,7 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // for a short reply, the median reply went from 39 to 21 words and one or
   // two sentences from 13 to 20 of 24, with no loss in blind comparison).
   // Never on a share or feedback turn (Royce 2026-10-29): there the moment's guide sets the depth.
-  const lengthLine = lengthLineFor(input.resolvedContent, input.facts.moment, !!input.imageForVision);
+  const lengthLine = lengthLineFor(input.resolvedContent, input.facts.moment, !!input.imageForVision, findsSent);
   const userText = lengthLine ? `${baseUserText} ${lengthLine}` : baseUserText;
 
   // Medium effort (2026-09-26): on 40 real texting cases, blind, medium beat

@@ -98,9 +98,12 @@ export async function reply(s: Scene): Promise<Reply> {
   if (read?.aboutCo) G.addInstruction(facts, R.ABOUT_CO_INSTRUCTION);
   const note = R.feedbackInstruction(read?.feedback ?? []);
   if (note) G.addInstruction(facts, note);
+  // As production sets them (routes/sendblue.ts): the check's feedback turn reads the pushback and the read's feedback with the mode.
+  facts.feedbackNoted = !!read?.feedback?.length;
   if (s.withMoment && read?.moment) {
     const D = await import("../../../src/services/connectDots.js");
     facts.moment = read.moment.mode ?? null;
+    facts.pushback = read.moment.pushback ?? null;
     const m = D.momentInstruction(read.moment);
     if (m) G.addInstruction(facts, m);
   }

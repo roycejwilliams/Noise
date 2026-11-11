@@ -52,18 +52,28 @@ export function ignoresFinds(draft: string, finds: Found[], shared: string[]): b
 // for it, and isn't telling Cue a link was wrong (then the old link is never pushed again).
 export const REASKS_FIND = /\b(?:what was|which (?:one|was|bar|place|event|program)|send (?:me )?(?:it|that|the link)|the link|link (?:again|to)|again|resend|re-send|share (?:it|that))\b/i;
 export const SAYS_LINK_WRONG = /\b(?:wrong|not the|isn'?t the|wasn'?t the|was a roundup|broken|dead|doesn'?t (?:work|load|open)|didn'?t (?:work|load|open))\b/i;
-// Pure: the past finds they refer to that the draft names with no link gone this turn (or riding in it).
+// A decision question and a "why it fits" question about finds Cue sent (agent/conversationReply.ts DECISION_LINE, FIT_LINE; Royce,
+// 2026-11-11). Here because the past-find link guard below reads DECISION_ASK too; conversationReply.ts re-exports both.
+export const DECISION_ASK = /\b(?:best (?:option|one|bet|pick|choice)|which (?:one|of (?:these|those|them|the)\b|(?:is|would be|sounds) better)|(?:should|do) i (?:go(?: to)?|pick|choose|hit) (?![^?.!]*\bor not\b)[^?.!]{1,80}\bor\b|pick (?:one )?for me|choose for me|what would you (?:pick|choose|go (?:with|to)|do)|if you were me|(?:is|are) (?:it|this|that|they|the [\w'-]+(?: [\w'-]+)?) worth (?:it|going|the trip|my time)\b)|^\s*(?:the )?[\w'&-]+(?: [\w'&-]+){0,3} or (?!not\b)(?:the )?[\w'&-]+(?: [\w'&-]+){0,3}\s*\?\s*$/i;
+export const FIT_ASK = /\bwhy (?:it|this|that)(?: one)? (?:fits|works|makes sense|is (?:a )?(?:good )?(?:fit|pick))\b|\bwhy (?:is )?(?:it|this|that)(?: one)? (?:for|right for) me\b|\bhow (?:does )?(?:it|this|that) fit\b|\bwhy (?:does|would) (?:it|this|that)(?: one)? (?:fit|suit|work for)\b|\b(?:is |how is |why is )?(?:it|this|that)(?: one)? relevant (?:to|for) me\b|\brelevant to me\b|\bwhy (?:should|would) i go\b|\bwhy (?:this|that) one\b/i;
+// Pure: the past finds they refer to that the draft names with no link gone this turn (or riding in it). A decision ask counts when the
+// draft names exactly one of them (2026-11-11, std-best-option-this-week: the pick went without its link; DECISION_LINE asks for it):
+// naming two or more is a comparison, not a pick, and no link is pushed.
 export function unlinkedPastFinds(draft: string, message: string, referents: readonly { name: string; url: string | null }[], linksThisTurn: readonly string[]): { name: string; url: string }[] {
-  if (!REASKS_FIND.test(message) || SAYS_LINK_WRONG.test(message)) return [];
-  return referents
+  if (SAYS_LINK_WRONG.test(message)) return [];
+  const reasks = REASKS_FIND.test(message);
+  if (!reasks && !DECISION_ASK.test(message)) return [];
+  const named = referents
     .filter((x): x is { name: string; url: string } => !!x.url && /^https?:\/\//.test(x.url))
-    .filter((x) => !draft.includes(x.url) && !linksThisTurn.some((l) => l.includes(x.url)) && namesFind(draft, { name: x.name, url: x.url }));
+    .filter((x) => namesFind(draft, { name: x.name, url: x.url }));
+  if (!reasks && named.length !== 1) return [];
+  return named.filter((x) => !draft.includes(x.url) && !linksThisTurn.some((l) => l.includes(x.url)));
 }
 
 export function findsRedraftNote(kind: "unlinked" | "ignored" | "emptied" | "unlinked_sent", finds: Found[], shared: string[]): string {
   const left = finds.filter((f) => !shared.includes(f.url)).slice(0, 6);
   const list = left.map((f) => `"${f.name.slice(0, 80)}" (${f.url})`).join("; ");
-  if (kind === "unlinked_sent") return `Not sent: they asked about something you sent them before, and this names it without its link. Send its link first with shareLinks (the link, then a short line), then nothing that repeats it. Sent before: ${list}.`;
+  if (kind === "unlinked_sent") return `Not sent: they asked about something you sent them before, and this names it without its link. Send its link first with shareLink (the link, then a short line), then nothing that repeats it. Sent before: ${list}.`;
   const send = "Send each one you mean with shareFinds (its link, then a one-line caption), then a short reply that doesn't repeat them.";
   if (kind === "unlinked") return `Not sent: it names something your search found this turn without its link. Every find goes out as its link, then a one-line caption, never in prose. ${send} Found this turn: ${list}.`;
   if (kind === "ignored") return `Not sent: it says there's little or nothing, but your search found these this turn: ${list}. Send what fits with shareFinds (each its link, then a one-line caption), or say plainly why none of them fit. Never call it thin while finds are waiting.`;

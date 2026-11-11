@@ -135,7 +135,7 @@ export type Fact = { id: string; kind: FactKind; text: string; snap?: "said" | "
 // cached block (judgeSystem) and list "Since then" after it.
 // prefRules: how they asked Cue to reply and what not to bring up (services/memberPreferences.ts, applied rules only), for the reply
 // check's rule read (services/prefTopics.ts judgeReplyRules).
-export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; prefRules?: import("../services/memberPreferences.js").ReplyRules | null; moment?: string | null; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads; exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null; turnScope?: import("./scope.js").ScopeVerdict | null; turnShare?: import("./scope.js").MessageKind | null };
+export type ReplyFacts = { snapshot?: { prefix: string; since: string[] } | null; changedBy?: string[]; prefRules?: import("../services/memberPreferences.js").ReplyRules | null; moment?: string | null; pushback?: string | null; feedbackNoted?: boolean; shareRetried?: boolean; claimCites?: Map<string, { pass: boolean; failureFact: boolean }>; retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads; exchange?: import("../services/exchangeRecord.js").ExchangeRecord | null; turnScope?: import("./scope.js").ScopeVerdict | null; turnShare?: import("./scope.js").MessageKind | null };
 // What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
 // thread stands; plus each read, for the log.
 // pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
@@ -998,7 +998,8 @@ const SAYS_DONE = /\b(?:looked|searched|checked|dug|tried|went through|had a loo
 const SAYS_ONGOING = /\b(?:still|keep(?:s|ing)?|ongoing|currently|in the background|will|going to|on it|give me|a (?:minute|sec(?:ond)?|moment)|more soon|soon|hang tight|stand by|tonight|tomorrow|later|back to you|another (?:pass|look|try|round)|more to come|next)\b|\b(?:look|search|digg?|check|hunt|find|try)ing\b|\bI'(?:ll|m)\b|\bI am\b/i;
 export const saysSearchDone = (claim: string): boolean => { const t = claim.replace(/[’‘]/g, "'"); return SAYS_DONE.test(t) && !SAYS_ONGOING.test(t); };
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
-  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
+  // "Nothing's on my radar for you" says the same (2026-11-11, golden std-old-rec-not-new: it was cut and the canned line replaced it).
+  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion|on my radar)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
 }
 
 // The honest line that replaces a cut "still working on it" (item 3): said once, never on top of one that already says it.
@@ -1010,7 +1011,7 @@ export async function withNothingRunningLine(final: string, failed: GateCheck[],
   if (!failed.some((c) => c.name === "claim_work_status")) return final;
   // Cue searched in this turn: "nothing's running" would deny it (the receipt is what Cue did, the line would contradict it).
   if (!rf || !nothingRunsAt(rf) || startedThisTurn(rf) || searchedThisTurn(rf)) return final;
-  if (/\bnothing(?:'s| is)\s+(?:actively\s+)?(?:running|being worked|in motion)\b/i.test(final)) return final;
+  if (/\bnothing(?:'s| is)\s+(?:actively\s+)?(?:running|being worked|in motion|on my radar)\b/i.test(final)) return final;
   const [honest] = NOTHING_RUNNING_LINE.split(". ");
   // What's left already offers or asks something: the honest part goes first, and no second offer.
   if (final.trim() && (await offers(final))) return `${honest}. ${final.trim()}`;
@@ -1565,9 +1566,13 @@ export function sentLineFor(c: Pick<Claim, "quote">, src: Pick<GroundingSources,
   return coLinesIn(src.recentConversation).find((l) => norm(l).includes(q)) ?? null;
 }
 // On a feedback turn only: each past action whose quote is Cue's own sent line, read for whether it only owns a mistake in that send.
-export async function ownershipReadsFor(claims: Claim[], rf: Pick<ReplyFacts, "moment">, src: Pick<GroundingSources, "recentConversation">, judge: OwnershipJudge = haikuOwnership): Promise<Map<string, boolean>> {
+// Pure: a turn where they're telling Cue something it did was wrong. The moment read's mode alone flips between "feedback" and
+// "reacting" on the same text (2026-11-11, golden feedback-cue-mistake: same request, the re-record read "reacting" and "That's on me, it
+// shouldn't have gone out dead" was cut), so its pushback and the turn read's feedback count too. Owning still needs Cue's own sent line.
+export const feedbackTurn = (rf: Pick<ReplyFacts, "moment" | "pushback" | "feedbackNoted">): boolean => rf.moment === "feedback" || !!rf.pushback || !!rf.feedbackNoted;
+export async function ownershipReadsFor(claims: Claim[], rf: Pick<ReplyFacts, "moment" | "pushback" | "feedbackNoted">, src: Pick<GroundingSources, "recentConversation">, judge: OwnershipJudge = haikuOwnership): Promise<Map<string, boolean>> {
   const out = new Map<string, boolean>();
-  if (rf.moment !== "feedback") return out;
+  if (!feedbackTurn(rf)) return out;
   await Promise.all(claims.filter((c) => c.type === "past_action").map(async (c) => {
     const line = sentLineFor(c, src);
     if (!line) return;
@@ -1584,8 +1589,8 @@ export async function ownershipReadsFor(claims: Claim[], rf: Pick<ReplyFacts, "m
 // Pure: on a feedback turn, a past action that only owns a mistake in what Cue sent (the admission read says so), backed by Cue's own sent
 // line in the thread (review of #310: their report alone backed "I booked the table at Nopa for 8", and an earlier confabulated
 // "Done, I've booked Nopa" backed a repeat). Never their report alone, never a line that asserts something was done.
-export function ownsWhatItSent(c: Pick<Claim, "text" | "quote">, rf: Pick<ReplyFacts, "moment">, src: Pick<GroundingSources, "recentConversation">, ownership: Map<string, boolean>): boolean {
-  return rf.moment === "feedback" && !!sentLineFor(c, src) && ownership.get(c.text) === true;
+export function ownsWhatItSent(c: Pick<Claim, "text" | "quote">, rf: Pick<ReplyFacts, "moment" | "pushback" | "feedbackNoted">, src: Pick<GroundingSources, "recentConversation">, ownership: Map<string, boolean>): boolean {
+  return feedbackTurn(rf) && !!sentLineFor(c, src) && ownership.get(c.text) === true;
 }
 // Pure: the claim cites the world line, quoting its thread part.
 export function citesTheirThread(c: Pick<Claim, "factId" | "quote">, rf: Pick<ReplyFacts, "facts" | "world">): boolean {
@@ -1669,7 +1674,9 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       const cited = rf.facts.find((f) => f.id === c.factId);
       // The running-work line itself backs what it says: a listed item as running, or "nothing is running" as nothing. The daily
       // search's own fact backs it too, while the running-work line says something is running (it lists the same asks, held or not).
-      const fromState = !!cited && cited.kind === "known" && (RUNNING_LIST.test(cited.text) || (NOTHING_RUNNING.test(cited.text) && SAYS_NOT_RUNNING.test(c.text)));
+      // The daily search's own "isn't looking for anything" fact backs "nothing is running" too, when nothing else runs either (2026-11-11,
+      // golden std-old-rec-not-new: a true "Nothing's on my radar for you right now" cited it and was cut).
+      const fromState = !!cited && ((cited.kind === "known" && (RUNNING_LIST.test(cited.text) || (NOTHING_RUNNING.test(cited.text) && SAYS_NOT_RUNNING.test(c.text)))) || (cited.kind === "unknown" && cited.text.startsWith(NOT_SEARCHING) && nothingRunsAt(rf) && SAYS_NOT_RUNNING.test(c.text)));
       // A held search backs nothing; an ask saved this turn backs itself (nothingRunsAt is false then).
       const fromSearch = !!cited && cited.kind === "ongoing" && /^(?:Co|Cue)'s daily search is (?:now )?looking for/.test(cited.text) && !nothingRunsAt(rf) && !searchHeld(rf);
       // Their world line (services/memberWorld.ts) lists the same running items: it backs work said as running only when the claim names

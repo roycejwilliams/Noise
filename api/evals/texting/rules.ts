@@ -33,7 +33,7 @@ check("say each thing once", /Say each thing once\. Don't repeat a point, an off
 
 check("the reply starts with Cue's own answer or reaction", /Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words\./.test(reply));
 // Scoped to shares and feedback (Royce 2026-10-29): the length line is said last on every other turn, never on a share or feedback.
-check("the length line is said last, right before Cue writes, from the turn's moment", /const lengthLine = lengthLineFor\(input\.resolvedContent, input\.facts\.moment, !!input\.imageForVision\);\s+const userText = lengthLine \? `\$\{baseUserText\} \$\{lengthLine\}` : baseUserText;/.test(reply));
+check("the length line is said last, right before Cue writes, from the turn's moment", /const lengthLine = lengthLineFor\(input\.resolvedContent, input\.facts\.moment, !!input\.imageForVision, findsSent\);\s+const userText = lengthLine \? `\$\{baseUserText\} \$\{lengthLine\}` : baseUserText;/.test(reply));
 check("no test switches or example block left in", !/process\.env\.CO_TEXT_|SHORT_EXAMPLES/.test(reply));
 // ---- Prompt sweep 2026-10-29 (Royce: "go with your recommendation"), then scoped the same day: the rules every text gets are
 // co-test's again (CO_TEXT_CHANNEL's cap, "Say less than you could", match the weight, the fragment line, the first-words sample);
