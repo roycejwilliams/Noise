@@ -34,5 +34,22 @@ check("the wake gate runs before the decider and reads the same record as the se
 const A = await import("../../src/services/whatsAhead.js");
 const aheadText = A.aheadLine({ tasks: [{ id: 1, goal: 'Morning-after follow-up on "SF Private Dinner" (asks whether they went; how it went only with evidence they did)', kind: "followup", nextCheckAt: "2026-11-11T18:00:00Z", deadline: null, debriefOf: "SF Private Dinner" }], queuedFinds: 0 }, { asks: [], goals: [] } as any, "America/Los_Angeles");
 check("the ahead line says a debrief as whether they made it, never how it went", /whether they made it to "SF Private Dinner"/.test(aheadText) && !/Morning-after follow-up/.test(aheadText));
+// Review of #453: with the database down (layer 1 has none: every query fails), a read that didn't happen is never "nothing on record".
+{
+  const R = await import("../../src/harness/proactiveRegistry.js");
+  const payload = { eventApiId: null, eventName: "Test Dinner", eventDate: "2026-11-01", outcomeFollowupIds: ["00000000-0000-0000-0000-000000000001"], checkinFollowupIds: [], walkinCheckinIds: [], askText: null };
+  const threw = await R.debriefRecordEvidence("00000000-0000-0000-0000-000000000000", payload as any, new Date("2026-11-01T00:00:00Z")).then(() => false, () => true);
+  check("DB down: the debrief's evidence read throws instead of reading as 'none'", threw);
+  const task = { id: 1, userId: "00000000-0000-0000-0000-000000000000", createdAt: new Date(), followup: { type: "debrief", targetKey: "debrief:x", summary: "", payload } } as any;
+  const closed = await F.debriefWakeGate(task.userId, task).catch(() => "threw");
+  check("DB down: the wake leaves the task open (no close, no source rows dropped)", closed === false, closed);
+  const fresh = await R.proactiveRegistry.debrief!.draft({ id: 1, userId: task.userId, type: "debrief", targetKey: "debrief:x", payload, createdAt: new Date(), dueAt: new Date() } as any, { firstName: "Sam" } as any).catch((e: any) => ({ threw: String(e?.message ?? e) }));
+  check("DB down: the send-time draft waits and reads again, never a drop", !!(fresh as any)?.defer && /couldn.t be read/.test((fresh as any).reason) && !("skip" in (fresh as any)), fresh);
+  const old = await R.proactiveRegistry.debrief!.draft({ id: 1, userId: task.userId, type: "debrief", targetKey: "debrief:x", payload, createdAt: new Date(Date.now() - 80 * 3_600_000), dueAt: new Date() } as any, { firstName: "Sam" } as any).catch((e: any) => ({ threw: String(e?.message ?? e) }));
+  check("DB down past the 3-day wait: it goes quietly (a skip, its source rows kept), never sent on a guess", /couldn.t be read/.test((old as any)?.skip ?? "") && !(old as any)?.message, old);
+  const reg = src("harness/proactiveRegistry.ts");
+  const evFn = reg.slice(reg.indexOf("export async function debriefRecordEvidence"), reg.indexOf("// Pure: whether the record says they went"));
+  check("no read inside the evidence (or its keys) swallows its error", !/\.catch\(/.test(evFn), evFn.match(/\.catch\([^)]*\)/g));
+}
 console.log(`follow-up rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

@@ -165,7 +165,16 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   // A stated "went" counts only if it was said after this event started (or, with no date, after this find was sent): an old "I went"
   // to a same-name event (a recurring dinner) is not evidence they went to this one.
   const startedAt = date ? DateTime.fromISO(date, { zone: tz ?? "America/Los_Angeles" }).startOf("day").toJSDate() : new Date(c.createdAt.getTime() - 3 * 86_400_000);
-  const evidence = await debriefRecordEvidence(c.userId, p, startedAt, came);
+  const evidence = await debriefRecordEvidence(c.userId, p, startedAt, came).catch((err: any) => {
+    console.error("draftDebrief: the record couldn't be read (non-fatal, waiting and reading again):", err?.message ?? err);
+    return null;
+  });
+  // Unreadable: never a drop and never a guess. It waits and reads again inside the debrief's first 3 days; past them it goes quietly,
+  // its source rows kept.
+  if (!evidence) {
+    if (Date.now() - c.createdAt.getTime() > DEBRIEF_WAIT_MAX_HOURS * 3_600_000) return skip("whether they meant to go couldn't be read");
+    return { defer: new Date(Date.now() + 2 * 3_600_000), reason: "whether they meant to go couldn't be read just now" };
+  }
   if (doorMissed && evidence.level !== "attended") return skip("the door was tracked and they weren't scanned: the no-show flow covers that night");
   // Their stated word is the only evidence, and the debrief is only about a recommendation: they already told Cue how it went, so a
   // debrief would re-ask it (settleFollowUpForResult closes the row when they say it; this covers one queued before they did).
@@ -194,21 +203,21 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
 // debrief's keys, a registration Cue made for them by key or by the find's own link, a Noise check-in or walk-in, and came (a door scan
 // or arrival the caller read). The same mapping as the queue (recommendationOutcome.ts evidenceOf, registeredFor; review of #445: the
 // reads disagreed). startedAt: a stated "went" counts only if said after this event started.
+// Throws when any part can't be read (review of #453: a swallowed read error read as "nothing on record" and closed the task): the wake
+// leaves the task open, and the draft waits and reads again. Never a drop on a read that didn't happen.
 export async function debriefRecordEvidence(userId: string, p: DebriefPayload, startedAt: Date, came = false): Promise<import("../services/followUpEvidence.js").Evidence> {
   const keys = await debriefItemKeys(p);
   const rows = await pool
     .query(`SELECT item_key, result, provenance, created_at FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [userId, keys])
-    .then((r) => (r.rows as { item_key: string; result: string; provenance: string | null; created_at?: Date | string }[]).filter((x) => !((x.result === "helped" || x.result === "didnt_help") && x.created_at && new Date(x.created_at) < startedAt)))
-    .catch(() => []);
+    .then((r) => (r.rows as { item_key: string; result: string; provenance: string | null; created_at?: Date | string }[]).filter((x) => !((x.result === "helped" || x.result === "didnt_help") && x.created_at && new Date(x.created_at) < startedAt)));
   const reactions = await pool
     .query(`SELECT reaction FROM revealed_offers WHERE user_id = $1 AND item_key = ANY($2::text[]) AND reaction IS NOT NULL`, [userId, keys])
-    .then((r) => r.rows.map((x: any) => String(x.reaction)))
-    .catch(() => [] as string[]);
+    .then((r) => r.rows.map((x: any) => String(x.reaction)));
   const RO = await import("../services/recommendationOutcome.js");
   const links = p.outcomeFollowupIds?.length
-    ? await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[]) AND user_id = $2`, [p.outcomeFollowupIds, userId]).then((r) => r.rows.map((x: any) => x.url as string | null)).catch(() => [] as (string | null)[])
+    ? await pool.query(`SELECT match->>'url' AS url, match_name FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[]) AND user_id = $2`, [p.outcomeFollowupIds, userId]).then((r) => r.rows.map((x: any) => x.url as string | null))
     : [];
-  const viaCue = await RO.registeredFor(userId, keys, links).catch(() => false);
+  const viaCue = await RO.registeredFor(userId, keys, links);
   return RO.evidenceOf({ rows, reactions, came, walkin: (p.walkinCheckinIds ?? []).length > 0, registered: (p.checkinFollowupIds ?? []).length > 0 || viaCue });
 }
 
@@ -218,7 +227,7 @@ async function debriefItemKeys(p: DebriefPayload): Promise<string[]> {
   // With an event id, the name is never a key: a same-name event (a recurring dinner) is another event.
   const keys = new Set<string>(p.eventApiId ? [`event:${p.eventApiId}`] : [`name:${p.eventName.toLowerCase()}`]);
   if (p.outcomeFollowupIds?.length) {
-    const { rows } = await pool.query(`SELECT id, match FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]).catch(() => ({ rows: [] as any[] }));
+    const { rows } = await pool.query(`SELECT id, match FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]);
     for (const r of rows) {
       keys.add(`followup:${r.id}`);
       if (r.match?.event_api_id) keys.add(`event:${r.match.event_api_id}`);
