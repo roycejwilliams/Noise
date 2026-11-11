@@ -1,0 +1,102 @@
+{
+  "hash": "f799dac103b2ca32",
+  "case": "dry-thread",
+  "recorded_at": "2026-11-11T00:31:07.331Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, L...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Today the member shared: \"It's my birthday today. Spent the morning walking along the water with no phone and honestly I feel hopeful and recharged for the first time in months.\" Cue answered \"Happy birthday, Lena. Glad you're feeling recharged.\". Then: \"Also, I'm taking two weeks off starting Monday. I was burning out hard and finally told my team I need a real break.\" Cue answered \"That sounds like a good call. Enjoy the time off.\". Now she asked \"Why are your responses so dry?\"\n\nCue's text:\n\"\"\"Fair. Let me actually say what I mean.\n\nA morning like that, no phone, water, feeling hopeful again after months of running on empty, that's not nothing. That's the version of you that's been missing for a while showing back up.\n\nAnd telling your team you needed a real break, then actually taking it, two weeks starting Monday. That's you choosing yourself after a long stretch of not having room to. Happy birthday, Lena. I hope those two weeks give you back more of that feeling from this morning.\"\"\"\n\nDoes the text own it in a few words at most and then give the replies her birthday morning and her two weeks off deserved, with something of Cue's own (not her words recapped back to her), WITHOUT explaining its tone or how it works, quoting its own earlier lines, or inventing details she didn't give? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Owns it briefly with 'Fair. Let me actually say what I mean.' then adds original interpretation like 'That's you choosing yourself' without quoting prior lines or inventing facts.\"}",
+      "usage": {
+        "input_tokens": 514,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 475,
+        "output_tokens_details": {
+          "thinking_tokens": 395
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgvCQvcKqeiV4JapYLdqS",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Owns it briefly with 'Fair. Let me actually say what I mean.' then adds original interpretation like 'That's you choosing yourself' without quoting prior lines or inventing facts.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 514,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 475,
+          "output_tokens_details": {
+            "thinking_tokens": 395
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "f799dac103b2ca32",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
