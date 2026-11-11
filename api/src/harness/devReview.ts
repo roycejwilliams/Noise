@@ -43,9 +43,10 @@ import { withTraceUser } from "../services/llmTraceText.js";
 import { withMember } from "../services/llmUsage.js";
 import { HIGH_REASONS, flaggedCalls, type FlaggedCall } from "../services/callHealth.js";
 import { stuckDeletes, type StuckDelete } from "../services/elevenLabsForget.js";
+import { isDevService } from "../devService.js";
 
 export function reviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test") return false;
+  if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || !isDevService(env.RAILWAY_SERVICE_NAME)) return false;
   return env.DEV_REVIEW === "true";
 }
 

@@ -14,10 +14,11 @@
 // even with the flag set, so a merge to main can never turn it on in
 // production. Read reports back with `npm run issues`.
 import pool from "../db/db.js";
+import { isDevService } from "../devService.js";
 import { recordDecision } from "../harness/core.js";
 
 export function captureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test") return false;
+  if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || !isDevService(env.RAILWAY_SERVICE_NAME)) return false;
   return env.CAPTURE_USER_ISSUES === "true";
 }
 
