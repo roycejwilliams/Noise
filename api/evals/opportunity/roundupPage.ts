@@ -35,6 +35,19 @@ const LINED_OWN_PAGE = `${DINNER}\nThe second of two dinners this month.\nA seat
   check("its own flat page (title names it) is not a roundup", roundupOf(FLAT_OWN_PAGE, DINNER, { page: true }) === null);
   check("its own page with lines, mentioning 'two dinners', is not a roundup (first line names it)", roundupOf(LINED_OWN_PAGE, DINNER, { page: true }) === null);
   check("a page that never names it is never its roundup", roundupOf("Weekend notes | Harbor. Five events this week.", DINNER, { page: true }) === null);
+  // Review of #455: its own pages must never read as lists (each held forever otherwise). A browser-read page has lines, its first the menu.
+  const NAV = "Home\nAbout\nEvents\nContact";
+  const own = (body: string) => `${NAV}\n${body}\n${DINNER} is on Thu, Nov 12 at 5:30 PM.`;
+  for (const body of ["Since 2023 we've hosted 30 dinners for founders.", "A retreat: two nights in the redwoods, Nov 12 to Nov 14.", "This is one of three dinners in our fall series: Oct 3, Nov 12, Dec 5.", "We run 12 events a year: Oct 3, Nov 12, Dec 5."])
+    check(`its own lined page is never a roundup: "${body}"`, roundupOf(own(body), DINNER, { page: true }) === null);
+  const flatOwn = (body: string) => `Harbor Builders | Home About Events Contact ${body} ${DINNER} is on Thu, Nov 12 at 5:30 PM, then Dec 5 and Jan 9.`;
+  for (const body of ["Since 2023 we've hosted 30 dinners for founders.", "This is one of three dinners in our fall series.", "We run 12 events a year.", "Two nights in the redwoods."])
+    check(`its own flat page with a history, series, rate or duration is never a roundup: "${body}"`, roundupOf(flatOwn(body), DINNER, { page: true }) === null);
+  check("a flat page counting events with no list of dates is not a roundup", roundupOf(`Harbor notes | Blog. We counted three founder events worth your time. ${DINNER} is one; details soon.`, DINNER, { page: true }) === null);
+  // The cheap misses from the review, caught: "15+ events", "a dozen events", "three workshops and two talks", each with several dates.
+  const flatList = (count: string) => `Bay notes | Blog Home About. This week's calendar has ${count} for builders: Mon, Nov 9 a talk; Wed, Nov 11 a workshop; Thu, Nov 12 ${DINNER}; Fri, Nov 13 a games night.`;
+  for (const count of ["15+ events", "a dozen events", "three workshops and two talks"]) check(`a flat list counting "${count}" is a roundup`, !!roundupOf(flatList(count), DINNER, { page: true }));
+  // Still missed (noted in the PR): a title that names the thing among others ("X and two other events this week").
   // Posts (X) keep the first-line rule.
   check("a post whose first line names it is still not a roundup", roundupOf(`${DINNER} is on Thursday\n- seated\n- 15 to 20 founders\n- host approval`, DINNER) === null);
 }
