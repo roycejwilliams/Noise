@@ -30,15 +30,50 @@ import pool from "../db/db.js";
 // nothing until its page is read again.
 // viaPost: a link an X post pointed to (checked for a private event page again before it's shared, batched review of #299).
 export type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null; stored?: boolean; checkedAt?: string | null; freshUntil?: number | null; viaPost?: boolean };
-// The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, never a status message.
-// Never praise or a recap either (2026-11-06 live test: "founder dinners before an investor meeting, good instinct"). Royce,
-// 2026-11-09: "Looking for a low key wine night in SF." read like a system status restating his ask ("a wine night in SF... where I
-// can whine down and chill"): "Let Cue say it in its own voice. Give it different variations, let it be creative." The old anchor
-// example ("Looking at what's on in SF this week.") is gone; the examples below are kinds of line from different moments.
-export const WHILE_LOOKING = "Optional, and only on your first search: when a lookup is really starting, it will take a moment, and a word to them would help, give one short line in your own voice that answers them the way a person would, never a status. React to what they asked or how they put it (their mood, a word they chose, the occasion), warm, playful or wry as fits them and the moment, and different every time. The kind of line, from different moments (never a template, never these words): someone who wants a wine night to wind down gets \"A wine night sounds right. Let me find you somewhere quiet.\"; someone nervous about a first date gets \"Somewhere easy to talk, then. Nothing too loud for a first one.\"; someone after founders at the end of a rough week gets \"After the week you've had, a room of people who get it.\"; someone with their parents in town gets \"Good food, nowhere too loud, nothing that needs explaining.\" Leave it empty when the answer will be quick or a line wouldn't help; it is never required and never filler. Never open with \"Looking for\" or \"Looking at\", and never just say their request back to them. No praise, no tools or machinery, never anything that implies you've found something, and never knowledge you don't have (\"I know just the place\"). Not a bare label (\"SF events this week\"), not a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
+// No "looking" text when a search starts (Royce, 2026-11-11: "It doesn't need to say anything, it could just be a tapback as an
+// acknowledgement"): the tapback sent on receipt (routes/sendblue.ts) is the acknowledgement. The whileLooking line and its prompt are
+// gone. Measured that day: median search reply 33s, p90 64s, max 115s, 7 of 37 over 60s. So one optional late line, approved the same
+// day: at most once a search turn, only when nothing has gone to them yet LATE_LINE_AFTER_MS after their message, never on a call or a
+// voice note, a Haiku draft from their message alone with the approved instruction below, through the same checks a holding line had
+// (holdProblem) plus status phrases (STATUS_LINE); a draft that fails goes nowhere (no retry).
+export const LATE_LINE_AFTER_MS = 45_000;
+// Model-facing, approved wording (Royce, 2026-11-11), exact.
+export const LATE_LINE_INSTRUCTION = "This search is taking longer than usual and they've only had your tapback. You may send one short line so they know you're still with them; leave it empty if nothing natural comes. Make it about them, not the search: a reaction to what they asked or how they asked it, in your own voice, the way a friend would mid-task. Never say what you're doing or how it's going (\"still looking\", \"almost there\", \"pulling results\", \"give me a sec\"), never say their request back to them, never open with \"Looking\", never hint at what you'll find or that you've found something, and never promise a time. Different every time. One sentence at most.";
+// A status anywhere in the line ("I'm on it", "still looking", "almost there"), a hint at a result, or a time promise: the instruction
+// rules them out; code holds the line to it.
+export const STATUS_LINE = /\b(?:(?:i'?m|i am|we'?re) on it|on it\b|still (?:looking|searching|digging|checking|working|on it|at it|hunting)|almost (?:there|done|ready)|nearly (?:there|done)|pulling (?:results|some|a few|options|together)|working on (?:it|this|that)|give me (?:a )?(?:sec|second|minute|moment|min)|one (?:sec|second|moment|min)|hang (?:on|tight)|bear with me|(?:i'?ve |i )?found\b|(?:got|have) (?:some|a few|a couple|options)|coming (?:up|right up|your way)|in a (?:sec|second|minute|moment|bit)|shortly|any (?:sec|second|minute|moment) now|(?:\d+|a|one|two|three|a few|few|a couple(?: of)?) (?:secs?|seconds?|mins?|minutes?)|i'?ll have (?:it|something|them|a few|some))\b/i;
+// Pure: why a late line can't go, or null when it can. One sentence at most, never empty.
+export function lateLineProblem(line: string, theirWords: string): string | null {
+  const t = line.trim();
+  if (!t) return "empty";
+  if ((t.match(/[.!?](?:\s|$)/g) ?? []).length > 1) return "more than one sentence";
+  if (/^\s*looking\b/i.test(t)) return "it opens with \"Looking\"";
+  if (STATUS_LINE.test(t)) return "it says what Cue is doing, hints at a result or promises a time";
+  return holdProblem(t, theirWords);
+}
+// Pure: the draft as a line: one line, no quotes around it, no "(empty)" or a dash; nothing usable is "".
+export function cleanLateLine(raw: string | null | undefined): string {
+  const t = String(raw ?? "").split("\n").map((l) => l.trim()).filter(Boolean)[0] ?? "";
+  const un = t.replace(/^["'“‘]+|["'”’]+$/g, "").trim();
+  return /^\(?(?:empty|none|nothing|n\/a|-+)\)?\.?$/i.test(un) ? "" : un;
+}
+// The draft: one Haiku call from Cue's voice and their message alone (no thread, no facts), so it can't claim anything about the search.
+// About 2,100 input and 40 output tokens. Null on any failure.
+export async function draftLateLine(theirWords: string): Promise<string | null> {
+  const [{ generateText }, { anthropic }, { MODELS }, { CO_VOICE }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js"), import("../services/coVoice.js")]);
+  const { text } = await generateText({
+    model: anthropic(MODELS.haiku),
+    maxOutputTokens: 80,
+    abortSignal: AbortSignal.timeout(8_000),
+    experimental_telemetry: { isEnabled: true, functionId: "reply.late_line" },
+    prompt: `${CO_VOICE}\n\nA member asked you to find something.\n\n${LATE_LINE_INSTRUCTION}\n\nWhat they asked: "${theirWords.trim().slice(0, 400)}"\n\nReturn only the line, or nothing at all.`,
+  });
+  return text;
+}
 // Tests only (golden cases): a fixed set of real events a stubbed search returns, the way a live one would.
 export type StubEvent = { name: string; url: string; tier?: 1 | 2; lines: string[] };
-export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; holdAsked?: boolean };
+// holdSent: the one late line went (LATE_LINE_INSTRUCTION); lateArmed: its timer is set for this turn.
+export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; lateArmed?: boolean };
 // A stock holding line (Royce, 2026-10-17: "Let me look" is bland; golden 55 still said "Let me see what's good this week").
 // Openers only, after an optional "ok,", "sure,", "got it,"; Royce 2026-10-17 asked for the wider list, and what it doesn't cover is in
 // evals/reply/usesItsFinds.ts.
@@ -140,7 +175,7 @@ export async function storedFinds(userId: string, now = Date.now()): Promise<Sto
 // started: when their text arrived, so the time budget counts the turn's prep
 // too (2026-10-01 code review); now when not known.
 export function newLoopState(started = Date.now()): LoopState {
-  return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0, eventSearches: 0, holdAsked: false };
+  return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0, eventSearches: 0, lateArmed: false };
 }
 
 // What a document tool tells Co once its attachment went with its one line (Royce, 2026-10-08: no second bubble repeating it).
@@ -177,7 +212,7 @@ const AREA_UNREAD = Symbol("area unread");
 
 export function loopTools(
   ctx: ConversationToolContext,
-  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean; holdLines?: string[] },
+  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean; holdLines?: string[]; sendsInFlight?: number; pendingLinks?: string[] },
   loop: LoopState,
   notDone: (what: string) => void,
 ) {
@@ -196,22 +231,30 @@ export function loopTools(
     await writeMemory(ctx.userId, "text_exchange", record).catch((err: any) => console.error("loopTools: logging a sent text failed (it did send):", err?.message ?? err));
     return true;
   };
-  // A stock opener is asked for once more (stockHold below); one that's still stock is never sent: the search goes on without it.
-  const stockHold = (line?: string) => {
-    // On a call the line is never sent (services/callTools.ts), so asking again only spends one of the call's few rounds.
-    const problem = ctx.onCall || !line?.trim() || loop.holdSent || state.sent || loop.holdAsked ? null : holdProblem(line, theirWords());
-    if (!problem) return null;
-    loop.holdAsked = true;
-    return { ok: false, error: `Not searched yet: "${line!.trim().slice(0, 80)}" can't go: ${problem}. Call this again with a whileLooking that answers them in your own voice, reacting to what they asked or how they put it, never opening on "Looking for" or "Looking at", never just their request said back, never a generic status, with no praise and nothing that implies a result or knowledge you don't have; or leave whileLooking out.` };
+  // The one late line (LATE_LINE_INSTRUCTION): armed when a search turn's first search starts, sent only if nothing has gone to them
+  // LATE_LINE_AFTER_MS after their message. Never on a call or a voice note. Checked when it fires, again after its draft, and the
+  // draft goes nowhere unless it passes lateLineProblem.
+  const lateLineOpen = () => !ctx.onCall && !ctx.isVoice && !loop.holdSent && !state.sent && state.sentMessages.length === 0 && !(state.sendsInFlight ?? 0) && !(state.pendingLinks ?? []).length && Date.now() - loop.started < (LOOP_BUDGET.seconds + 30) * 1000;
+  const armLateLine = () => {
+    if (loop.lateArmed || ctx.onCall || ctx.isVoice) return;
+    loop.lateArmed = true;
+    const after = ctx.lateLineAfterMs ?? LATE_LINE_AFTER_MS;
+    const wait = Math.max(0, (ctx.messageArrivedAt ?? loop.started) + after - Date.now());
+    const timer = setTimeout(() => void sendLateLine().catch((err: any) => console.error("loopTools: the late line failed (non-fatal, nothing sent):", err?.message ?? err)), wait);
+    (timer as any).unref?.();
   };
-  const hold = async (line?: string) => {
-    if (!line?.trim() || loop.holdSent || state.sent || stockLine(line, theirWords())) return;
+  const sendLateLine = async () => {
+    if (!lateLineOpen()) return;
+    const draft = cleanLateLine(await (ctx.lateLineDraft ?? draftLateLine)(theirWords()).catch(() => null));
+    const problem = draft ? lateLineProblem(draft, theirWords()) : "empty";
+    if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.late_line", userId: ctx.userId, outcome: problem ? "skip" : "act", action: problem ? "held" : "sent", reason: problem, proposal: { line: (draft ?? "").slice(0, 200) } }).catch(() => {});
+    if (problem || !draft || !lateLineOpen()) return;
     loop.holdSent = true;
     // Sent as a hold, so a turn that dies after it is still owed an answer (services/turnReplies.ts asHoldSend, review of #301).
-    if (await asHoldSend(() => say(line.trim(), `${HOLD_PREFIX} ${line.trim()}`))) {
-      ctx.facts?.add("did_this_turn", `Told them "${line.trim()}" while looking.`);
+    if (await asHoldSend(() => say(draft, `${HOLD_PREFIX} ${draft}`))) {
+      ctx.facts?.add("did_this_turn", `Told them "${draft}" while the search ran.`);
       // A holding line answers nothing (agent/conversationTools.ts sendReply never counts it as the reply).
-      state.holdLines?.push(line.trim());
+      state.holdLines?.push(draft);
     }
   };
   // Code saves the basics whenever a search runs, so the next text picks up
@@ -284,15 +327,12 @@ export function loopTools(
         what: z.string().describe("What kind of event, in a few words."),
         when: z.string().optional().describe("The time in their own words: \"this weekend\", \"Friday night\", \"Oct 10\"."),
         city: z.string().optional().describe("The city, when they named one; their own city otherwise."),
-        whileLooking: z.string().optional().describe(WHILE_LOOKING),
       }),
-      execute: async ({ what, when, city, whileLooking }) => {
-        const stock = stockHold(whileLooking);
-        if (stock) return stock;
+      execute: async ({ what, when, city }) => {
         const avoided = await ruledOut(what);
         if (avoided) return { ok: false, error: avoided };
         if (ctx.stubSearch && ctx.stubEvents?.length) {
-          await hold(whileLooking);
+          armLateLine();
           const events = ctx.stubEvents.map((e) => {
             const match = { tier: e.tier ?? 2, kind: e.tier === 1 ? "co_event" : "public_event", name: e.name, url: e.url, reason: "" } as unknown as TierMatch;
             loop.found.set(e.url, { name: e.name, url: e.url, facts: e.lines.join(" "), match, blocked: null });
@@ -312,7 +352,7 @@ export function loopTools(
         if (eventsHome === AREA_UNREAD) return areaUnread();
         if ((loop.eventSearches ?? 0) >= LOOP_BUDGET.eventSearches) return { ok: false, error: `No event searches left this turn (${LOOP_BUDGET.eventSearches} used): work with the events you already have, or try webSearch.` };
         loop.eventSearches = (loop.eventSearches ?? 0) + 1;
-        await hold(whileLooking);
+        armLateLine();
         // Where it looks (services/askPlace.ts): the city passed, unless it's just their home city and "what" names another place
         // ("in/near/around X", or SF/NYC-style short names; "visiting Lisbon" or lowercase isn't seen); else that named place; else their
         // home city.
@@ -359,15 +399,12 @@ export function loopTools(
       inputSchema: z.object({
         queries: z.array(z.string()).min(1).max(3).describe("1 to 3 short searches, 3 to 7 words each, each a different angle; they run at the same time."),
         sites: z.array(z.string()).optional().describe("Sites where this kind of thing is listed, e.g. peerspace.com, thebash.com, lu.ma."),
-        whileLooking: z.string().optional().describe(WHILE_LOOKING),
         theirs: z
           .object({ what: z.string().optional(), city: z.string().optional(), area: z.string().optional(), when: z.string().optional(), headcount: z.number().optional(), budget: z.number().optional(), hours: z.number().optional() })
           .optional()
           .describe("What they've asked for so far (what, place, date, headcount, budget in dollars, hours): saved to your working notes, so the next text picks up from here."),
       }),
-      execute: async ({ queries, sites, whileLooking, theirs }) => {
-        const stock = stockHold(whileLooking);
-        if (stock) return stock;
+      execute: async ({ queries, sites, theirs }) => {
         // Their constraints go into the notes with the search (2026-10-01 next-live run:
         // turn one's 120 people, $3k and 4 hours were lost in 2 of 4 runs when no updateNotes followed).
         for (const q of queries) {
@@ -387,7 +424,7 @@ export function loopTools(
         if (left <= 0) return { ok: false, error: "No web searches left this turn: work with what you have, or read a page you already found." };
         const run = [...new Set(queries.map((q) => q.trim().slice(0, 90)).filter(Boolean))].slice(0, left);
         loop.webQueries += run.length;
-        await hold(whileLooking);
+        armLateLine();
         const { taskWebSearch } = await import("../services/taskWeb.js");
         // Where each search looks (services/askPlace.ts): a query that names a place ("in/near/around X", or SF/NYC-style short names;
         // "visiting Lisbon" or lowercase isn't seen) gets nothing added on top; else theirs.city; else their home city, unless the query
@@ -467,11 +504,8 @@ export function loopTools(
       description: toolUse("searchPosts"),
       inputSchema: z.object({
         query: z.string().describe("2 to 4 distinctive keywords, OR for real synonyms; no city, no year they didn't say."),
-        whileLooking: z.string().optional().describe(WHILE_LOOKING),
       }),
-      execute: async ({ query, whileLooking }) => {
-        const stock = stockHold(whileLooking);
-        if (stock) return stock;
+      execute: async ({ query }) => {
         const avoided = await ruledOut(query);
         if (avoided) return { ok: false, error: avoided };
         if (ctx.stubSearch) return { ...STUB, posts: [] };
@@ -481,7 +515,7 @@ export function loopTools(
         const { reserveXSearch } = await import("../services/tieredRecommendation.js");
         const budget = await reserveXSearch(ctx.userId, "request", q);
         if (!budget.ok) return { ok: false, error: `X search isn't available right now (${budget.reason ?? "daily budget"}); use webSearch instead.` };
-        await hold(whileLooking);
+        armLateLine();
         const { searchRecentPosts, X_SEARCH_RESULTS } = await import("../services/xSearch.js");
         const posts = await searchRecentPosts(q, X_SEARCH_RESULTS).catch(() => null);
         await remember({ tried: [`x: ${q}`] });

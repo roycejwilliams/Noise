@@ -96,6 +96,9 @@ export type ConversationToolContext = {
   stubEvents?: import("./loopTools.js").StubEvent[];
   // Tests only: the meaning read the find guards use (agent/findGuards.ts realFindUseRead otherwise).
   findUseRead?: import("./findGuards.js").FindUseRead;
+  // Tests only: the late line's wait and its draft (agent/loopTools.ts LATE_LINE_AFTER_MS, draftLateLine otherwise).
+  lateLineAfterMs?: number;
+  lateLineDraft?: (theirWords: string) => Promise<string | null>;
   // A live call (services/callTools.ts): nothing but a link is texted mid-call.
   onCall?: boolean;
   // The live call's key: a task started on it is that call's job for that need (services/coTasks.ts dispatchKeyFor).

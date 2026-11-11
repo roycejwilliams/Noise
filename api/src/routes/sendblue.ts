@@ -162,9 +162,6 @@ export function isRealReply(content: string): boolean {
   if (!t || t.startsWith(HOLD_PREFIX)) return false;
   return ![...HOLD_LINES, ...OWED_AFTER].some((l) => cleanCoMessage(l).trim() === t);
 }
-// After a reaction, the looking text waits this long: a quick search needs none.
-const HOLD_AFTER_ACK_MS = 8_000;
-const HOLD_NO_ACK_MS = 5_000;
 function deriveStyleHint(chronological: { content: string }[]): string {
   const userLines = chronological
     .map((m) => m.content)
