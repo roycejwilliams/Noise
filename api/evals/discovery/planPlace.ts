@@ -72,6 +72,14 @@ const goal = (key: string, plan: string) => ({ askId: "profile", userId: "m1", a
 check("the plan's SF is the place it names", P.planNamesPlace("look for: small founder dinners SF") === "SF", P.planNamesPlace("look for: small founder dinners SF"));
 check("SF and San Francisco in one plan are one place", P.planNamesPlace("look for: founder dinners SF; climbing nights in San Francisco") !== null);
 check("two different places in one plan: none (never a pick)", P.planNamesPlace("look for: founder dinners SF; hikes in Oakland") === null, P.planNamesPlace("look for: founder dinners SF; hikes in Oakland"));
+// Review of #450: the detector reads only "Oakland" in "Oakland or Berkeley"; a pair is two places, so none.
+for (const s of ["Oakland or Berkeley", "look for: founder dinners in Oakland or Berkeley", "look for: hikes in Oakland and Berkeley", "look for: dinners SF or Oakland", "look for: dinners Berkeley or SF", "look for: meetups SF/Oakland"])
+  check(`"${s}": two places, none`, P.planNamesPlace(s) === null, P.planNamesPlace(s));
+check("a place joined to a lowercase word isn't a pair (\"SF and climbing\")", P.planNamesPlace("look for: founder dinners in San Francisco and climbing gyms") !== null, P.planNamesPlace("look for: founder dinners in San Francisco and climbing gyms"));
+{
+  const r = await E.placeToSearch(goal("goal:or", "look for: founder dinners in Oakland or Berkeley"), { place: placeDeps({ place: null }), resolve: rdeps({ "goal:or": "Oakland" }) });
+  check("a goal whose plan says \"Oakland or Berkeley\" -> home", r.city === HOME && r.searchedIn.source === "home", r);
+}
 check("a plan naming no place: none", P.planNamesPlace("look for: small founder dinners; climbing gyms") === null);
 check("a topic after \"in\" isn't a place", P.planNamesPlace("look for: women in Venture dinners") === null);
 
