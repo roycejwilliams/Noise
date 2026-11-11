@@ -67,11 +67,13 @@ const facts = lines.join(" ");
 const refused = (c: string) => !SC.captionNumbersBacked(c, facts).ok;
 for (const c of ["Spots are still open if you want in.", "There are still spots, grab one.", "Registration is still open.", "Only a few spots left.", "Not sold out yet.", "You can still register for it.",
   // Review of #452: a waitlist phrase never hides a spots claim.
-  "Open spots on the waitlist.", "You can register now, spots are open for the waitlist crowd."])check(`waitlist event: refused "${c}"`, refused(c), SC.captionNumbersBacked(c, facts));
+  "Open spots on the waitlist.", "You can register now, spots are open for the waitlist crowd.",
+  // Final review of #452: room left as a number.
+  "Get on the waitlist, there's room for 20 more.", "Join the waitlist, 15 more can get in.", "Waitlist's moving, 5 seats just freed up."]) check(`waitlist event: refused "${c}"`, refused(c), SC.captionNumbersBacked(c, facts));
 for (const c of ["I can get you off the waitlist.", "I can get you a spot."]) check(`waitlist event: refused "${c}" (Cue only adds them to the waitlist)`, refused(c), SC.captionNumbersBacked(c, facts));
 for (const c of ["Founders Supper on Thursday. It's waitlist only, so joining puts you on the list, not in.", "A small founders dinner at Pier 1. Full, but there's a waitlist.",
   // Review of #452: joining the waitlist, and the venue's room or space, are not spots.
-  "You can register for the waitlist on the page.", "You can sign up for the waitlist.", "Registration is open for the waitlist.", "Great space available for demos at the venue.", "Plenty of room to breathe at this one, it's outdoors."])check(`waitlist event: an honest caption passes "${c}"`, !refused(c), SC.captionNumbersBacked(c, facts));
+  "You can register for the waitlist on the page.", "You can sign up for the waitlist.", "Registration is open for the waitlist.", "Great space available for demos at the venue.", "Plenty of room to breathe at this one, it's outdoors.", "Waitlist only, and it's a 20-minute walk from BART."]) check(`waitlist event: an honest caption passes "${c}"`, !refused(c), SC.captionNumbersBacked(c, facts));
 check("an open event's caption is unchanged by this rule (\"spots are still open\" with spots on its page)", SC.captionNumbersBacked("Spots are still open.", E.renderEventDetails("Founders Supper", appr).join(" ")).ok, SC.captionNumbersBacked("Spots are still open.", E.renderEventDetails("Founders Supper", appr).join(" ")));
 
 console.log(`${total - failed}/${total} passed`);
