@@ -122,6 +122,49 @@ for (const empty of [null, "", "(empty)", "\"\""]) {
   await wait(20);
   check("the answer went while the line was being drafted: the line is dropped", t.state.holdLines.length === 0 && t.state.sentMessages.length === 1);
 }
+// ---------------------------------------------------------------- review of #459: never after the turn, a tapback-only turn or a retry
+{
+  const { t, search, drafts } = mk({ after: 30 });
+  await search();
+  t.endTurn();
+  await wait(80);
+  check("the turn ended before the wait (a reaction-only or silent-by-choice turn): the timer is cleared, no late line", drafts.length === 0 && t.state.sentMessages.length === 0 && t.state.turnOver === true);
+}
+{
+  const { t, search, drafts } = mk({ after: 10 });
+  await search();
+  t.state.reacted = true;
+  await wait(50);
+  check("a turn answered with a tapback: no late line", drafts.length === 0 && t.state.sentMessages.length === 0);
+}
+{
+  let release: () => void = () => {};
+  const { t, search } = mk({ after: 10, draft: () => new Promise((r) => (release = () => r(GOOD))) });
+  await search();
+  await wait(30);
+  t.endTurn();
+  release();
+  await wait(20);
+  check("the turn ended while the line was being drafted: the line is dropped", t.state.sentMessages.length === 0);
+}
+{
+  const drafts: string[] = [];
+  const t = createConversationTools({
+    userId: "u", phoneNumber: "+14155550101", resolvedContent: ASK, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true, stubSearch: true,
+    stubEvents: [{ name: "Wine Down Thursday", url: "https://lu.ma/wine-down-test", lines: ["Thursday 7pm."] }],
+    sendCoReply: async () => true, facts: { add: () => {}, text: () => "" }, lateLineAfterMs: 10, messageArrivedAt: Date.now(), lateLineOff: true,
+    lateLineDraft: async (w: string) => (drafts.push(w), GOOD),
+  } as any) as any;
+  await t.tools.searchEvents.execute({ what: "wine night", city: "SF" }, { toolCallId: "s", messages: [] });
+  await wait(50);
+  check("a retry after the delay note (lateLineOff) never sends a late line", drafts.length === 0 && t.state.sentMessages.length === 0);
+}
+{
+  const { readFileSync } = await import("node:fs");
+  const cr = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
+  check("the reply ends the turn right after the model run, before any plain-text or fallback send; a retry runs with lateLineOff", /endTurn\(\);\n\s*if \(state\.sendStopped && !state\.sendsHeld\) state\.sendStopped = false;/.test(cr) && /lateLineOff: \(opts\.attempt \?\? 1\) > 1/.test(cr));
+  check("the fallback line counts as a send in flight", /state\.sendsInFlight \+= 1;\n\s*const sent = await input\.sendCoReply\(\{ phone: input\.phoneNumber, message: fallback/.test(cr));
+}
 // ---------------------------------------------------------------- the check itself (pure)
 check("'I'm on it' and 'on it' style status phrases are caught anywhere in the line", ["I'm on it", "Ok I'm on it, wine it is", "We're on it.", "Still on it"].every((x) => L.STATUS_LINE.test(x) && L.lateLineProblem(x, ASK) !== null));
 check("a line about them passes", L.lateLineProblem(GOOD, ASK) === null && L.lateLineProblem("A Thursday wind-down sounds earned.", ASK) === null, [L.lateLineProblem(GOOD, ASK), L.lateLineProblem("A Thursday wind-down sounds earned.", ASK)]);

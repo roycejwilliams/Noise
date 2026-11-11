@@ -307,7 +307,9 @@ export async function runConversationReplyAgent(
   let cutFirstDone = false;
   // Steps finished, so a guard knows whether a redraft can still follow (conversationTools.ts sendReply redraftLeft).
   let stepsDone = 0;
-  const { tools, state, flushLinks } = createConversationTools(tapToolContext({
+  const { tools, state, flushLinks, endTurn } = createConversationTools(tapToolContext({
+    // A retry after the delay note: something already went to them on this turn, so no late line.
+    lateLineOff: (opts.attempt ?? 1) > 1,
     redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
     exchange: input.facts.exchange ?? null,
     turnScope: input.facts.turnScope ?? null,
@@ -612,6 +614,8 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // (replyGrounding.ts send_held).
   // Stopped after two refused sends that weren't the breaker (the outbound filter, a failed send): not held, so the member still
   // gets the plain-text reply or the fallback line, never silence for a reply Co wrote (2026-10-12 audit).
+  // The model run is over: no late line can go after this (agent/loopTools.ts; review of #459), whatever goes next.
+  endTurn();
   if (state.sendStopped && !state.sendsHeld) state.sendStopped = false;
   if (!state.sent && state.sendStopped) {
     console.error(`conversationReply: sends to ${input.userId} are held; stopped without retrying`);
@@ -660,7 +664,10 @@ ${TOOL_TURN_RULES(input.isVoice)}
     } else {
       // Only counted when it really went out (2026-09-17 code review: a
       // refused send used to be marked sent, so nobody noticed the silence).
-      const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice });
+      state.sendsInFlight += 1;
+      const sent = await input.sendCoReply({ phone: input.phoneNumber, message: fallback, asVoice: input.isVoice }).finally(() => {
+        state.sendsInFlight -= 1;
+      });
       if (sent !== false) {
         state.sent = true;
         state.lastReplyText = fallback;

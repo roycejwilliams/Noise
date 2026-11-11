@@ -73,7 +73,7 @@ export async function draftLateLine(theirWords: string): Promise<string | null> 
 // Tests only (golden cases): a fixed set of real events a stubbed search returns, the way a live one would.
 export type StubEvent = { name: string; url: string; tier?: 1 | 2; lines: string[] };
 // holdSent: the one late line went (LATE_LINE_INSTRUCTION); lateArmed: its timer is set for this turn.
-export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; lateArmed?: boolean };
+export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; lateArmed?: boolean; lateTimer?: ReturnType<typeof setTimeout> | null };
 // A stock holding line (Royce, 2026-10-17: "Let me look" is bland; golden 55 still said "Let me see what's good this week").
 // Openers only, after an optional "ok,", "sure,", "got it,"; Royce 2026-10-17 asked for the wider list, and what it doesn't cover is in
 // evals/reply/usesItsFinds.ts.
@@ -212,7 +212,7 @@ const AREA_UNREAD = Symbol("area unread");
 
 export function loopTools(
   ctx: ConversationToolContext,
-  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean; holdLines?: string[]; sendsInFlight?: number; pendingLinks?: string[] },
+  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean; holdLines?: string[]; sendsInFlight?: number; pendingLinks?: string[]; reacted?: boolean; turnOver?: boolean },
   loop: LoopState,
   notDone: (what: string) => void,
 ) {
@@ -234,14 +234,15 @@ export function loopTools(
   // The one late line (LATE_LINE_INSTRUCTION): armed when a search turn's first search starts, sent only if nothing has gone to them
   // LATE_LINE_AFTER_MS after their message. Never on a call or a voice note. Checked when it fires, again after its draft, and the
   // draft goes nowhere unless it passes lateLineProblem.
-  const lateLineOpen = () => !ctx.onCall && !ctx.isVoice && !loop.holdSent && !state.sent && state.sentMessages.length === 0 && !(state.sendsInFlight ?? 0) && !(state.pendingLinks ?? []).length && Date.now() - loop.started < (LOOP_BUDGET.seconds + 30) * 1000;
+  const lateLineOpen = () => !ctx.onCall && !ctx.isVoice && !ctx.lateLineOff && !state.turnOver && !state.reacted && !loop.holdSent && !state.sent && state.sentMessages.length === 0 && !(state.sendsInFlight ?? 0) && !(state.pendingLinks ?? []).length && Date.now() - loop.started < (LOOP_BUDGET.seconds + 30) * 1000;
   const armLateLine = () => {
-    if (loop.lateArmed || ctx.onCall || ctx.isVoice) return;
+    if (loop.lateArmed || ctx.onCall || ctx.isVoice || ctx.lateLineOff || state.turnOver) return;
     loop.lateArmed = true;
     const after = ctx.lateLineAfterMs ?? LATE_LINE_AFTER_MS;
     const wait = Math.max(0, (ctx.messageArrivedAt ?? loop.started) + after - Date.now());
     const timer = setTimeout(() => void sendLateLine().catch((err: any) => console.error("loopTools: the late line failed (non-fatal, nothing sent):", err?.message ?? err)), wait);
     (timer as any).unref?.();
+    loop.lateTimer = timer;
   };
   const sendLateLine = async () => {
     if (!lateLineOpen()) return;
