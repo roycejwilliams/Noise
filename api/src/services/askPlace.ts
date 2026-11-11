@@ -66,11 +66,18 @@ export function placesNamed(text: string): string[] {
 // Pure: the one place a goal's search plan names (Royce, 2026-11-10: a goal with no place of its own is searched where its own plan
 // names; "look for: small founder dinners SF" from a Sacramento member searched events in Sacramento while its web search said SF).
 // Read with placesNamed, the same detector the reply searches use. Two different places, or none: null, never a pick between them
-// (the goal looks where it did before).
+// (the goal looks where it did before). A place joined to another capitalized name by or/and/& or a slash ("Oakland or Berkeley",
+// "SF/Oakland", where the detector reads only the first) is two places too (review of #450).
 export function planNamesPlace(text: string | null | undefined): string | null {
-  const named = placesNamed(String(text ?? ""));
+  const t = String(text ?? "");
+  const named = placesNamed(t);
   const distinct = named.filter((p, i) => !named.slice(0, i).some((q) => samePlace(p, q)));
-  return distinct.length === 1 ? distinct[0] : null;
+  if (distinct.length !== 1) return null;
+  // The place in any case (an alias can come back lowercase), the other name capitalized as written.
+  const esc = distinct[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[a-z]/gi, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`).replace(/\s+/g, "\\s+");
+  const join = "\\s*,?\\s+(?:or|and|&)\\s+|\\s*\\/\\s*";
+  const paired = new RegExp(`(?:^|[^A-Za-z0-9])${esc}(?:${join})[A-Z]|[A-Z][A-Za-z]*(?:${join})${esc}(?=$|[^A-Za-z0-9])`);
+  return paired.test(t) ? null : distinct[0];
 }
 
 // Pure: the place one search names: one its own words name, or one their message names that its words repeat.
