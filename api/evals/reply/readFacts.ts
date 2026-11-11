@@ -31,12 +31,19 @@ const now = new Date("2026-11-11T14:05:00Z");
 
 // ---------------------------------------------------------------- the reads are the find facts the reply and the fact check see
 const lines = SENT.map((s) => T.sentFindFacts(s, now, "America/Los_Angeles").join("\n"));
-check("each sent find's facts carry its read: who it's for, format, hosts, as the page states them", /audience: engineers working on inference and tooling/.test(lines[1]) && /host: hosted by NVIDIA, SGLang, Modal/.test(lines[1]) && /format: drinks and talks/.test(lines[1]) && /format: a seated dinner/.test(lines[2]) && /45 minutes/.test(lines[0]), lines);
+check("each sent find's facts carry its read: who it's for, format, hosts, as the page states them", /audience: "engineers working on inference and tooling"/.test(lines[1]) && /host: hosted by NVIDIA, SGLang, Modal/.test(lines[1]) && /format: "drinks and talks"/.test(lines[1]) && /format: "seated dinner"/.test(lines[2]) && /45 minutes/.test(lines[0]), lines);
 check("... what the page doesn't say stays an unknown", /Not stated, so unknown[^\n]*the exact venue/.test(lines[1]) && /how guests are picked/.test(lines[2]), lines);
 check("... and only the benefits its facts support, by kind (learning vs peer founders)", /learning from people doing the work/.test(lines[1]) && /time with other founders at a similar stage/.test(lines[2]) && !/meeting people who might build or work with them/.test(lines.join("\n")), lines);
 check("... said as of when it was read", lines.every((l) => /as read Nov 10/.test(l)), lines);
 check("a find with a read no longer says its page hasn't been read", !lines.some((l) => /hasn't been read yet/.test(l)), lines);
 check("a find without a read is unchanged", T.sentFindFacts({ ...SENT[0], opportunityRead: null }, now).some((l) => /hasn't been read yet/.test(l)));
+// Review of #458: only the page's quoted words go into a FACT; Cue's paraphrase never rides in to back a claim.
+check("a quoted fact goes in as its quote, never with Cue's paraphrase beside it", !lines.some((l) => /Cue's read:/.test(l)) && !/pizza, then 45 minutes discussing one paper/.test(lines[0]) && /format: "45 minutes of paper discussion"/.test(lines[0]) && !/format: a seated dinner/.test(lines[2]), lines);
+check("... and a benefit's reason is the quote it rests on", /because "?45 minutes of paper discussion/.test(lines[0]) || /because 45 minutes of paper discussion/.test(lines[0]), lines[0]);
+// Review of #458: a read on file still says what it lacks.
+check("a read with no start or area still says it has no start time or street address", /Cue has no start time or street address on file for "Speech & NLP Paper Reading Meetup"/.test(lines[0]) && /Cue has no street address on file for "SGLang x NVIDIA Meetup"/.test(lines[1]), lines);
+check("... and a find with a city and a read without an area keeps 'its street address isn't stored'", T.sentFindFacts({ ...SENT[2], city: "San Francisco" }, now).some((l) => /is in San Francisco; its street address isn't stored/.test(l)));
+check("the claim read never takes Cue's paraphrase as support", /Words in a FACT marked "\(Cue's read: …\)" are Cue's own paraphrase and never support a claim; only the page's quoted words and its listed fields do/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
 check("the record note counts the read's fields as stored", T.storedFields(SENT[1]).have.includes("its date and time") && T.storedFields(SENT[1]).have.some((h) => /who it's for/.test(h)));
 check("only a v1 read in its stored shape is taken; anything else is no read", T.readOnFile(READS.sglang) !== null && T.readOnFile({ v: 2, facts: [] }) === null && T.readOnFile({ v: 1, facts: "x" }) === null && T.readOnFile(null) === null);
 const tc = readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8");

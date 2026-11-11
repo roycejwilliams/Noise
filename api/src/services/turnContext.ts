@@ -368,11 +368,24 @@ export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null
   } else if (!s.opportunityRead) {
     if (s.city) out.push(`"${s.name}" is in ${s.city}; its street address isn't stored.`);
     out.push(`Its page hasn't been read yet, so Cue has no start time or address for "${s.name}"${s.url ? `; the link is the place to check` : ""}.`);
+  } else {
+    // A read on file still says what it lacks (review of #458): it never carries a street address, and may carry no start or area.
+    const has = (k: string) => s.opportunityRead!.facts.some((f) => f.field === k);
+    if (s.city && !has("area")) out.push(`"${s.name}" is in ${s.city}; its street address isn't stored.`);
+    out.push(`Cue has no ${has("when") ? "" : "start time or "}street address on file for "${s.name}"${s.url ? `; the link is the place to check` : ""}.`);
   }
-  // The read made at send, the same record the send was written from (services/opportunityRead.ts renderRead): its page's facts back a
-  // reply's details (who it's for, format, hosts, logistics), its unknowns stay unknown, and only its supported benefits are named.
-  if (s.opportunityRead) out.push(...renderRead(s.name, s.opportunityRead).map((l) => `${l} (as read ${sentOnWords(new Date(s.opportunityRead!.readAt), zone)})`));
+  // The read made at send, the same record the send was written from (services/opportunityRead.ts renderRead): only the page's own
+  // words back a reply's details (who it's for, format, hosts), so each fact goes in as its quote, never Cue's paraphrase of it (review
+  // of #458: "(Cue's read: …)" must never back a claim). Its unknowns stay unknown, and only its supported benefits are named.
+  if (s.opportunityRead) out.push(...renderRead(s.name, quotedOnly(s.opportunityRead)).map((l) => `${l} (as read ${sentOnWords(new Date(s.opportunityRead!.readAt), zone)})`));
   return out;
+}
+
+// Pure: a read with each quoted fact's text set to its quote (no paraphrase rides into a FACT) and each benefit's reason set to the quote
+// of the fact it rests on. Structured fields (no quote: Luma's own) stay as they are.
+export function quotedOnly(r: OpportunityRead): OpportunityRead {
+  const quoteOf = new Map(r.facts.filter((f) => f.quote).map((f) => [f.text, f.quote as string]));
+  return { ...r, facts: r.facts.map((f) => (f.quote ? { ...f, text: f.quote } : f)), benefits: r.benefits.map((b) => ({ ...b, because: quoteOf.get(b.because) ?? b.because })) };
 }
 
 // Pure: a stored match.read when it's the shape services/opportunityRead.ts writes (v1, its facts a list); anything else is no read.
