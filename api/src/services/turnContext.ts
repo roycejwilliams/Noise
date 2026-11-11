@@ -20,6 +20,7 @@ import { type EventDetails } from "./eventDetails.js";
 import { DateTime } from "luxon";
 import { ASKS_ABOUT_FIND } from "./exchangeRecord.js";
 import { renderDetailsAsOf } from "./asOf.js";
+import { renderRead, type OpportunityRead } from "./opportunityRead.js";
 import { describeRead, readLinksLater, savedRead, type LinkRead } from "./linkReader.js";
 import { loadKit, type Kit } from "./memberKit.js";
 import type { RepliedTo } from "./inlineReply.js";
@@ -50,6 +51,9 @@ export type SentItem = {
   endsOn?: string | null;
   // Its city as stored with the send (the offer's match.city), for when no details were saved.
   city?: string | null;
+  // The one read of it made at send (services/opportunityRead.ts, kept as match.read): who it's for as the page says, its format, hosts,
+  // what's unknown and the benefits its facts support. A question about it is answered from this same record (Royce, 2026-11-11).
+  opportunityRead?: OpportunityRead | null;
 };
 
 export type TurnContext = {
@@ -255,6 +259,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: an
       had.reaction ??= item.reaction;
       had.endsOn ??= item.endsOn ?? null;
       had.city ??= item.city ?? null;
+      had.opportunityRead ??= item.opportunityRead ?? null;
     }
   };
   for (const r of revealed) {
@@ -276,6 +281,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: an
       checkedAt: m.checkedAt ?? null,
       endsOn: endsOnOf(m),
       city: m.city ?? m.details?.city ?? null,
+      opportunityRead: readOnFile(m.read),
     });
   }
   for (const r of recs) {
@@ -359,11 +365,20 @@ export function sentFindFacts(s: SentItem, now = new Date(), zone: string | null
     const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "address"].filter(Boolean);
     out.push(`Details on file for "${s.name}", which Cue sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`);
     if (!s.details.online && !s.details.venue && !s.details.address && !s.details.city && s.city) out.push(`"${s.name}" is in ${s.city}; ${approval ? "the exact address shows once the host approves their registration" : "its street address isn't stored"}.`);
-  } else {
+  } else if (!s.opportunityRead) {
     if (s.city) out.push(`"${s.name}" is in ${s.city}; its street address isn't stored.`);
     out.push(`Its page hasn't been read yet, so Cue has no start time or address for "${s.name}"${s.url ? `; the link is the place to check` : ""}.`);
   }
+  // The read made at send, the same record the send was written from (services/opportunityRead.ts renderRead): its page's facts back a
+  // reply's details (who it's for, format, hosts, logistics), its unknowns stay unknown, and only its supported benefits are named.
+  if (s.opportunityRead) out.push(...renderRead(s.name, s.opportunityRead).map((l) => `${l} (as read ${sentOnWords(new Date(s.opportunityRead!.readAt), zone)})`));
   return out;
+}
+
+// Pure: a stored match.read when it's the shape services/opportunityRead.ts writes (v1, its facts a list); anything else is no read.
+export function readOnFile(r: unknown): OpportunityRead | null {
+  const x = r as OpportunityRead | null | undefined;
+  return x && x.v === 1 && Array.isArray(x.facts) && Array.isArray(x.unknowns) && Array.isArray(x.benefits) && typeof x.readAt === "string" ? x : null;
 }
 
 // Pure: which of a find's fields are stored (what a reply may state) and which aren't (said plainly, with the link).
@@ -374,12 +389,15 @@ export function storedFields(s: SentItem): { have: string[]; missing: string[] }
   const have = ["the day Cue sent it"];
   const missing: string[] = [];
   (s.url ? have : missing).push("its link");
-  if (s.city || d?.city || has("city")) have.push("its city");
+  // The read made at send (opportunityRead): its fields count as stored too.
+  const read = (k: string) => !!s.opportunityRead?.facts.some((x) => x.field === k);
+  if (s.city || d?.city || has("city") || read("area")) have.push("its city");
   else missing.push("its city");
-  if (d?.startAt || has("start")) have.push("its date and time");
+  if (d?.startAt || has("start") || read("when")) have.push("its date and time");
   else missing.push("its date and time");
   if (d?.venue || d?.address || has("venue") || has("address")) have.push("its venue or address");
   else missing.push("its street address");
+  if (read("audience") || read("format") || read("happens") || read("host")) have.push("who it's for, what happens there and who hosts it, as its page says");
   return { have, missing };
 }
 
