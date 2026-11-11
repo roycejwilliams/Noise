@@ -217,7 +217,7 @@ check("the read sees their words only (the photo note is stripped before the mod
 const fresh = P.replyPreferenceFacts(await active(A, new Date()), new Date());
 P.setRuleEffectsForTests(null);
 check("a rule set in this message reaches this turn's reply, honestly: noted, not applied yet (its search area couldn't be set)", got.added.length === 1 && fresh.known.some((k) => /set in this message/.test(k) && /not applied yet/.test(k) && /Never say it changed/.test(k)));
-check("the turn waits for that read before the reply's facts (bounded), and the send confirms a vague ask", /const prefStored = prefCaptureP \? await Promise\.race\(\[prefCaptureP/.test(src("routes/sendblue.ts")) && src("routes/sendblue.ts").indexOf("const prefStored") < src("routes/sendblue.ts").indexOf("const replyFacts = await gatherReplyFacts") && /if \(ok\) import\("\.\.\/services\/memberPreferences\.js"\)\.then\(\(P\) => P\.confirmLessAsked\(user\.id\)\)/.test(src("routes/sendblue.ts")));
+check("the turn waits for that read before the reply's facts (bounded), and the send confirms a vague ask", /const prefStored = prefCaptureP \? await Promise\.race\(\[prefCaptureP/.test(src("routes/sendblue.ts")) && src("routes/sendblue.ts").indexOf("const prefStored") < src("routes/sendblue.ts").indexOf("const replyFacts = await gatherReplyFacts") && /if \(ok\) import\("\.\.\/services\/memberPreferences\.js"\)\.then\(\(P\) => P\.confirmLessAsked\(user\.id, undefined, p\.message\)\)/.test(src("routes/sendblue.ts")));
 
 // ---------------------------------------------------------------- the read before the reply failed: the learning read takes the rules
 {

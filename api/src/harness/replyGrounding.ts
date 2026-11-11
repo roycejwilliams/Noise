@@ -378,7 +378,7 @@ export async function gatherReplyFacts(
     // Marked asked only once this reply is actually sent (routes/sendblue.ts confirmLessAsked).
     P.noteLessAsk(userId, pf.askIds);
     // The search-area notice (retryAreaRules gave up) counts as told only once this reply is actually sent (confirmLessAsked).
-    P.noteAreaNotice(userId, pf.areaNoticeIds);
+    P.noteAreaNotice(userId, pf.areaNotices);
   }
   if (callFailure) {
     addFact(rf, "did_before", callFailure);
