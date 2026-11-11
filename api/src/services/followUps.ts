@@ -376,7 +376,7 @@ export function debriefWakeCloses(f: { type?: string; payload?: any } | null | u
 }
 // The wake's read for a debrief: closed with the reason (and its source rows dropped) when nothing says they meant to go. True when it
 // closed. An unreadable record never closes it: the decider and the send-time read go on as before.
-async function debriefWakeGate(userId: string, task: CoTask): Promise<boolean> {
+export async function debriefWakeGate(userId: string, task: CoTask): Promise<boolean> {
   const f = task.followup as Stored | null;
   if (f?.type !== "debrief") return false;
   const R = await import("../harness/proactiveRegistry.js");
