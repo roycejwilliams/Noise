@@ -511,7 +511,9 @@ export function captionNumbersBacked(caption: string, facts: string): { ok: bool
   if (/\bsold out\b/i.test(t) && !/\bsold out\b/i.test(facts)) problems.push(`says "sold out", and its page doesn't`);
   // A waitlist-only event (eventDetails.ts WAITLIST_FACT): no caption says or hints there are spots, or that Cue gets them off it.
   if (WAITLIST_ON_RECORD.test(facts)) {
-    const open = t.match(OPEN_SPOTS) ?? t.match(SCARCITY);
+    // Joining the waitlist itself ("you can sign up for the waitlist", "registration is open for the waitlist") is the honest offer.
+    const spotsTalk = t.replace(WAITLIST_JOIN, " ");
+    const open = spotsTalk.match(OPEN_SPOTS) ?? spotsTalk.match(SCARCITY);
     if (open) problems.push(`says "${open[0]}", and its page says waitlist only (no open spots)`);
     const off = t.match(OFF_THE_WAITLIST);
     if (off) problems.push(`says "${off[0]}", and Cue can only add them to the waitlist`);
@@ -519,7 +521,9 @@ export function captionNumbersBacked(caption: string, facts: string): { ok: bool
   return { ok: problems.length === 0, problems };
 }
 const WAITLIST_ON_RECORD = /\bwait ?list only\b/i;
-const OPEN_SPOTS = /\b(?:spots?|seats?|tickets?|places?|room|space)\s+(?:are\s+|is\s+)?(?:still\s+)?(?:open|left|available|remaining)\b|\b(?:still|plenty of|some)\s+(?:room|space|spots?|seats?|tickets?)\b|\bopen\s+(?:spots?|seats?)\b|\b(?:registration|rsvps?|signups?)\s+(?:is\s+|are\s+|'s\s+)?(?:still\s+)?open\b|\bopen for (?:registration|signups?|rsvps?)\b|\byou can (?:still )?(?:register|get in|grab a (?:spot|seat|ticket)|rsvp|sign up)\b|\b(?:not|isn't|is not) (?:full|sold out)\b/i;
+// Spot words only: "room" and "space" alone are the venue ("great space for demos", "plenty of room to breathe"), never availability.
+const OPEN_SPOTS = /\b(?:spots?|seats?|tickets?|places?)\s+(?:are\s+|is\s+)?(?:still\s+)?(?:open|left|available|remaining)\b|\b(?:still|plenty of|some)\s+(?:spots?|seats?|tickets?)\b|\bopen\s+(?:spots?|seats?)\b|\b(?:registration|rsvps?|signups?)\s+(?:is\s+|are\s+|'s\s+)?(?:still\s+)?open\b|\bopen for (?:registration|signups?|rsvps?)\b|\byou can (?:still )?(?:register|get in|grab a (?:spot|seat|ticket)|rsvp|sign up)\b|\b(?:not|isn't|is not) (?:full|sold out)\b/i;
+const WAITLIST_JOIN = /\b(?:register|sign(?:\s|-)?up|join|rsvp|get on|open)\b[^.!?\n]{0,30}?\b(?:for|on|to)\s+(?:the\s+)?wait ?list\b/gi;
 const OFF_THE_WAITLIST = /\b(?:get|move|bump|pull)\s+(?:you|them)\s+off\s+(?:the\s+)?wait ?list\b|\b(?:get|guarantee)\s+(?:you|them)\s+(?:a\s+)?(?:spot|seat|in)\b/i;
 
 // ---------------------------------------------------------------- B5: a task's on-file find
