@@ -13,6 +13,9 @@ const guard: [boolean, string][] = [
   [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "Noise", CAPTURE_USER_ISSUES: "true" }), "off in production even with the flag"],
   [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "co-test", CAPTURE_USER_ISSUES: "true" }), "off in production even named co-test"],
   [!captureEnabled({ CAPTURE_USER_ISSUES: "true" }), "off locally or anywhere without Railway's dev environment"],
+  [captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "cue-test", CAPTURE_USER_ISSUES: "true" }), "on for cue-test (the renamed service) in dev with the flag"],
+  [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "cue-test", CAPTURE_USER_ISSUES: "true" }), "off in production even named cue-test"],
+  [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "api", CAPTURE_USER_ISSUES: "true" }), "off for any other dev service"],
 ];
 const guardFailures = guard.filter(([ok]) => !ok);
 for (const [, label] of guardFailures) console.log(`FAIL dev-only guard: ${label}`);

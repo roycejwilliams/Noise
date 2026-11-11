@@ -866,7 +866,7 @@ export async function runMigrations(): Promise<void> {
   // services/issueReports.ts's captureEnabled() never lets prod write to it.
   // Same env check as captureEnabled, minus the CAPTURE_USER_ISSUES flag
   // itself (the table needs to exist before that flag is ever flipped on).
-  if (process.env.RAILWAY_ENVIRONMENT_NAME === "dev" && process.env.RAILWAY_SERVICE_NAME === "co-test") {
+  if (process.env.RAILWAY_ENVIRONMENT_NAME === "dev" && (await import("../devService.js")).isDevService(process.env.RAILWAY_SERVICE_NAME)) {
     await pool
       .query(
         `CREATE TABLE IF NOT EXISTS user_reported_issues (

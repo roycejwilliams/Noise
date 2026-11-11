@@ -154,6 +154,8 @@ check("open asks from earlier days are in the log the model reads", withAsks.inc
 check("never outside co-test", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "Noise", DEV_REVIEW: "true" } as any));
 check("not on co-test without the flag", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test" } as any));
 check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test", DEV_REVIEW: "true" } as any));
+check("on cue-test (the renamed service) with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "cue-test", DEV_REVIEW: "true" } as any));
+check("not on another dev service", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "api", DEV_REVIEW: "true" } as any));
 
 // Rejected events shown in the morning digest (2026-09-21).
 {
