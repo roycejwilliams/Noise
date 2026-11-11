@@ -1,0 +1,102 @@
+{
+  "hash": "7b05316ef1e28904",
+  "case": "continuous-follow-up",
+  "recorded_at": "2026-11-11T00:31:24.150Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other c...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue asked \"What pulls you toward food supply chains specifically?\" and the member answered: \"My grandfather farmed in Punjab and I watched how little he got for what he grew. I've spent ten years making other companies efficient and I want it to matter for people like him.\"\n\nCue's text:\n\"\"\"This is the real thing then. Not a market inefficiency you noticed in a deck, your grandfather's actual harvest, actual margin that never reached him.\n\nTen years of making companies efficient is not nothing to bring to that. You know where the waste sits and who usually eats the cost of it. That's a real edge over someone starting cold.\n\nWhat part of the chain were you picturing, the farmer's side where he was, or further down where the margin disappears.\"\"\"\n\nDoes the text build on his answer with something of Cue's own (a real observation, a position, or a question that follows from what he just said and moves it forward), WITHOUT paraphrasing his answer back to him, and without filling in what he didn't say (his childhood, what his grandfather felt, which part of the chain)? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"'your grandfather's actual harvest, actual margin that never reached him' just paraphrases his own words back to him\"}",
+      "usage": {
+        "input_tokens": 419,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 449,
+        "output_tokens_details": {
+          "thinking_tokens": 395
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgvCSA2zEhXZy5SSBjx2T",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"'your grandfather's actual harvest, actual margin that never reached him' just paraphrases his own words back to him\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 419,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 449,
+          "output_tokens_details": {
+            "thinking_tokens": 395
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "7b05316ef1e28904",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

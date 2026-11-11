@@ -1,7 +1,7 @@
 {
   "hash": "8f5fd4800f88cdbc",
   "case": "whats-ahead",
-  "recorded_at": "2026-11-10T03:42:30.810Z",
+  "recorded_at": "2026-11-11T00:26:16.121Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -54,7 +54,7 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgtZCpzqoBbgrsan7GS6k",
+        "id": "msg_011CgvC3ne1Qn2edNUCRK7aq",
         "type": "message",
         "role": "assistant",
         "content": [

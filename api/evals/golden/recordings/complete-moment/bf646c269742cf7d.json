@@ -1,7 +1,7 @@
 {
   "hash": "bf646c269742cf7d",
   "case": "complete-moment",
-  "recorded_at": "2026-11-10T03:49:52.790Z",
+  "recorded_at": "2026-11-11T00:31:35.345Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They're sharing that the board meeting went well and they got full budget approval, then mentioning they're exhausted and going to sleep\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"Meeting went great and budget was approved, so follow their lead and celebrate rather than probe for problems\", \"why\": \"board meeting nerves from earlier\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approving full budget after nervousness about the meeting\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": null}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "{\"reason\": \"They're sharing that the board meeting went well and they're relieved and tired\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're relieved and exhausted after a big win, so Cue should keep this light and let them rest\", \"why\": \"board meeting nerves from earlier\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approving full budget\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": null}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 5608,
         "cache_creation_input_tokens": 0,
@@ -47,9 +47,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 588,
+        "output_tokens": 449,
         "output_tokens_details": {
-          "thinking_tokens": 129
+          "thinking_tokens": 24
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -57,18 +57,18 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgtZm4zMmRb4DjGtxUirw",
+        "id": "msg_011CgvCT7J5NFJxm574xu1Vw",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EpAGCsQCCBMYAipAQPnxyFFgBHDZk6XjHzTD4DCFkUclLrHnt9dEX5SR6YghF1ROorVjBIA3Ae9xQIZg7nyOlR7ObeKpwmuinKyhCzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB3KjK1wbCAToIBBAAGgwC2ooDTzcFQ60EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBF0d/1To11PKsEaHlob9ONm4S1TQc/HNX4Z70wMImfzSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwmiVoMFYQ49ZEfQYoaDHRBfxTbE9clYfzQ9yIwCLUixE0M9dHouzwlsxs5TXgPrxG2rAZsFTNvUgw/zydCCuthQpXetmKf74DTpduYKvgCGuNTDOdktE+JOIbX9ltmr9CFaZ1vnFw1aUFUaefwygYMruWQlyF8yTMq/qkYdK0D7VcAWGeUeH1WFfGThaXPj4VBWgJ1C3+d2HnFDSe03vZ28Kzg4sXbnjFl0z5RiHX4xde1oWcksRhntk6xjTl/WR0kGl5BgTwHWRDS5cixJVZPkkVimSMI9YptZPLxQa56DlVyQnON6Q0ONqUy1dBw8pAFQAv6dLQpeeXGDP1ycf/EIaExXiv2wlEBVmvZl1Vc9rm80Rebv6N3csLOyNNx8H+/nr6k2Lf1KP3yc1liU1skHUNVXmJIk65754+JAb4JfHCUy+CbDt9rERqpQUyYFnTpMrYhyDNF+Rt6PRZ/BkMsfMAYpAaFFzna+QbAy2q/bvKCkuip+CwvB1BlDca2XV1XXQTGoL5HQr1RMr/ECb1NrnxRWk6e7b2a39tLUxQVPWRVrxZ+md27sWG9yK1w1whdbVh9OB/jW3V46uv+7R4bVg208ezOTRgB"
+            "signature": "EuADCsQCCBMYAipAtKmufsIECr3APLSeFNm2qy46S+PMjKYidzkAW3qjnNdtCLw5Q+JO3xnmzIVYem8AAkHTOP2EGFQi8UJLebRm/TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB5O7O1wbCAToIBBAAGgwC2ooDTzcFQ60EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBF0d/1To11PKsEaHlob9ONm4S1TQc/HNX4Z70wMImfzSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxzT3cWguuOsM2q4WkaDDJbhAizZxWibZ3TdyIwOdTdf4Bp5D0Xa15Fd1j/KUUpuFQNUIJP0dAt99ECYXMo8rfSiFbnNBUNzljndmA2KkmxGT2BKThPvx9LdB6aM82bk4bI+Zb6KsRlxE9NFjeWxV/0vnp+XadZWcM5IVp6OMBEzUnHWNTweIMsP2tX7q8J8nTWqKVE3cpmGAE="
           },
           {
             "type": "text",
-            "text": "{\"reason\": \"They're sharing that the board meeting went well and they got full budget approval, then mentioning they're exhausted and going to sleep\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"Meeting went great and budget was approved, so follow their lead and celebrate rather than probe for problems\", \"why\": \"board meeting nerves from earlier\"}], \"emotion\": {\"emotion\": \"relieved/proud\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approving full budget after nervousness about the meeting\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": null}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "{\"reason\": \"They're sharing that the board meeting went well and they're relieved and tired\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"sharing\", \"topic\": \"board meeting outcome\", \"pushback\": null, \"lesson\": null, \"dots\": [{\"kind\": \"shape\", \"link\": \"They're relieved and exhausted after a big win, so Cue should keep this light and let them rest\", \"why\": \"board meeting nerves from earlier\"}], \"emotion\": {\"emotion\": \"relieved\", \"intensity\": \"medium\", \"valence\": \"positive\", \"about\": \"board approving full budget\", \"target\": \"life\", \"felt_by\": \"member\", \"framing\": \"own\", \"kind\": null}, \"says_okay\": true, \"seeking\": \"none\", \"feedback\": [], \"ack\": \"🥂\", \"scope\": null, \"message_kind\": \"share\", \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"current_situation\"], \"missing\": [\"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -83,9 +83,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 588,
+          "output_tokens": 449,
           "output_tokens_details": {
-            "thinking_tokens": 129
+            "thinking_tokens": 24
           },
           "service_tier": "standard",
           "inference_geo": "global",

@@ -1,7 +1,7 @@
 {
   "hash": "e70cd1242354d29b",
   "case": "whats-ahead",
-  "recorded_at": "2026-11-10T03:42:29.628Z",
+  "recorded_at": "2026-11-11T00:26:15.101Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -44,9 +44,9 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 130,
+        "output_tokens": 233,
         "output_tokens_details": {
-          "thinking_tokens": 127
+          "thinking_tokens": 230
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -54,14 +54,14 @@
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011CgtZCjD5m7UQrhFSbXJ9L",
+        "id": "msg_011CgvC3epimX4fa8BUDxDbV",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "CAQS9QcKEAgTGAI4AUIIdGhpbmtpbmcSDLV5Domx+XHBNdkS3RoMEQaOSBp2HFeWzv3RIjC7w6VF2xWuphIN2Uqa61+E4zVwNUwcZHx7IGpqgneY1K9wk1o8Si4N7CYq5X+8Ctoqkgf9GDMWcho0RwxUYrrpzOUsQbFEYp+u9zvNEvcgnTGkytKUNI1cryBYAtXdv88Tu13iTTV/MkVM2faZ1xbYThU2doU2KPE9aW49IUkjzm3U4oz4Fbu/TAa+p7ZZ2fv/hctBJisJYlRMD1F9cUJ2UzfjG1OFDJYSOvuqNDpCbd9wW+TKGLwvkmpD3sMn7ZZupCZDevGT2PJqPyB1wb5b+tLBGPvMkvFL+/k+5EQad61BQUr0TEC0TtI8+z7JDHcgHDJ2y5lZu1vsdvOhSNSD/6ssMbfrm7iqnOeJdXsNVwLMoJKW8NLT4J3LSSoBOELn0Z18yx7oIPn2zBJEuRHbhBFiDN+S4IrLUImIjrbp+OVBajzf5N67RM7MqL2gXicSAUaV2x/8zH57hW7LsVq+pVzauNsyVCcKYCPy3Hl02jGFizdn+XgN9zmdbe8UZKJQs4qFD9I3Lubszp55VHE9o1FzFz2Jt9H+YqJzuZLeKNDnyytDGSX66BbosplkRrlwn/kmR/39ksBUiHo0/eekHn0c2gVx1IpcteCPxb6SOB537FFgJtMcT+2L4lGfpl7tWe7X1O8swAO7s9HIkvwg2+8TCjpWWoK+vNBsEThblCbaykROylQeqX4lbSB2SXIZlpqVv2StAyRcbiHbaA3dQMA4HB8bkbgx4krlnTJM2I/++Mg+NSOiB+M/m+cyj2kIY0N7KJYGTb+4wIgWfKJC0M/fDFUmTRizRRYBvtzzE/dvBlEMOz5mCTjRe0lmcaeuVRAGQjUKfIvhI09FuJ3Orr/HO6lqpCtbSikSGSGv6uX38CVu9iXMq9XOohnR1AZR+UiNbs6+KcbkdLroBVlBuEBMAvRi0AGJSELrJmEUIqqYbIaXO6uUuRX+PP1T1OW64vw7pOey+DTC4aGDE//M8Ek9TN9XFvcaXfNrCEOAdkZQ7FSY+AMLcYdn+c62YKbAPPVbwTldI8dXKyTm3ObS9U4rQMwkxM86B6UheLaYewCW8FRnTRZ6BiRXcwnefJWpBbQNnNV51/mRU4dwZkp6u9FlD1+DqMXQ1i2D6FWoD2D91QnEenDjJdpHliggakUsH2WcxyIMaW4nqOkyn+l/EGag67OW+6fAWhq6hOv9Xff9PF4sBYhZa2yAwmmYYI9r9oWvUpbDPmOrAJLcfdc71Jp6nkwSQ8gI0ObDuHmwEkAmK1PKi9FT7StdAutf7OMeynTIChgB"
+            "signature": "CAQSmgoKEAgTGAI4AUIIdGhpbmtpbmcSDLSQIbXXRrnoUkXlzRoMQlGxjVGxi0UphQzCIjDfiYZxMdFz3xCC+bCeQNRnUMV9aGE/ytJ4a8AGcg2MLKR8KftBuO3by6TCAJFEvj8qtwl/yDDP4coWmYrLDJtyjicoGUL9NIytdn8cwQwL72WCBFNfPSYr1OrRtMbPaD6xxUcIBoDHxSEr/1uQCbBIlHTixeGAO9Atb5rNQGSTnT0UbBJULS/1CchVpwvfLJ++QFP3pJaw0668cz8zkT2CQPE8qiKsy4vNmvJmZshh3tGDquPcaI/XOTQyeyMZLn0xUDJ3oau7R2Qf83lxAy23KGagAILecHUoWenhjcGPqX3J/hjV1AFE8v367icQo+g8MjaV4cAqxmjj4v2+Kxm2Tsbb5o4oW9tVPnsqews4Rim9Njchnoqsg53KIeUvS5TwQXyhRs2MuBMYJlP6RWndeoXgBlK9aCRMZILiemrIXN7EBO1n5Wzzg6370JrS4bFMH+QN9BSraDflGDwj/OklUl8iKGB6lhB2yXCw78kVt6ODNOnRsPxuPfqy154fC9+DDAsmcJEz1D2yLedqAoTLKaYcfeAWaG7agnkuIVlLil8RquYpBTLvms7yBG8aw+klh7rqXvhMzBaJGa1TEKDuFbzMkB1cGoThtA1VdYKvshtyLXjhKsEdYwSZmu798BYo8hK3Kc6vdFL7sG340PXSHBZzkUTnVnk8nlqbsC1nCXPQLqwJ2TqInHGJvOwoEQLXFp0ijH+xve2XsYcIwQ55z1NPLloZoyMNmZR32hgvVX2OY3d9NzhmmGeUmOb5e0dBmZQ8HAwkxLutIFo1Fr4RFd5dmm4lXLk7jUeZHklNsLD/olMMfRYH6VYx9/jCx+7jr3zNCp84jzx9+Q+8mgKYfTH0LgZ/SwmhxEGax5yQsfM1hD3KyyKM4GiiGEI6ksdedWxJSh148CYRK0CIWh3uB7v1afq+/vPKsDyvdrzvm/WXEb0AL/rdiNJzgUdpA1dHWc2RUDEH/kaLm2DuF046m4yuRQDxa8QvUobwW33D06STVyTcGmSn3euQItbfNcsyhBb0WMmlvxkkktZj0k4dPFSJ84chY7y6t/ZdLfctGfmTT7k8I1XvwsHRi41ktLzqsBPQgEmuXWOUQQyvPXe4sWA6q6HvBbOrQ9DI2f+YSpH12r4HRQYC2wJGYmYfGPJPkwWeVmnYf6jdxBglIJK0TORTJJStDiI1kfE2F0KJGDnNoEfNX7rdg2y7pC7sMq6XByRmjk1ngP1P4HPGJNz3GCQsrq2Zfn2ZpszhQCVlfMy1ICvvp3Ep7T2Cp8gPdsnxOQEDaIUpG2cGFM+lSSoOGECUSQDQiQl2nH8uSW8SvMSxvILVHQijFZgEpdz8p3Y5zBtqDwUXz3FSE5Z/XREO+EzigNkuqYgxiJZsZK4y47MVCC8KU2YDFMVSw4EphP+TNTJgc3i02oLILEErP74ydqM7Iuif/nRvKlGx1LEBvjngzxFk3GfYWzhL7ECiFrNd9f1ofuUHoX6dMujx/MpjpfhWBvD7azHXYJg2wv6kt59J6jgpbYqZ8up6/EM7Blk/qNIIFUtfDoo3AFmQRy91uqbZaB7fsaupGLWxp8dHML7cUwE78TGb19mg201pRhhzCI0SVlZRzrmjEfkCQHhrs/Zg1z1fkvGf6O/i0buc6g/8y8iT3pX3jPutRVr1kPJBXuPDAfyB4fYcGAE="
           },
           {
             "type": "text",
@@ -80,9 +80,9 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 130,
+          "output_tokens": 233,
           "output_tokens_details": {
-            "thinking_tokens": 127
+            "thinking_tokens": 230
           },
           "service_tier": "standard",
           "inference_geo": "global",

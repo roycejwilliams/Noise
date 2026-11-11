@@ -1,0 +1,102 @@
+{
+  "hash": "7a89dd679d009072",
+  "case": "share-heavy-news",
+  "recorded_at": "2026-11-11T00:29:59.566Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue. C...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member is in a hospital waiting room; their dad was admitted last night with a suspected heart problem and they're waiting for the doctor. They also have an open ask with Cue for an investor dinner venue.\n\nCue's text:\n\"\"\"This is the kind of news that stops everything else. I'm glad you're there with him.\n\nWaiting for the doctor is its own kind of hard. How's your dad doing right now, is he stable?\"\"\"\n\nDoes the text stay with what they shared (meeting the feeling first, the way a friend who was paying attention would), WITHOUT pivoting to plans or the dinner, presuming how they feel, asking for news they just said they don't have yet, or offering stock comfort that fits anyone? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"asks 'is he stable?' which requests news they don't have yet since they're still waiting for the doctor\"}",
+      "usage": {
+        "input_tokens": 314,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 101,
+        "output_tokens_details": {
+          "thinking_tokens": 52
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgvCLEiN9sRDtm6AG5kVd",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EscECsQCCBMYAipAYlEg/cT6IhPhzOBG7m/WowrlKoj6aXQQzaFVmsurCAqpMCSxkPYjGSxJluWfEXs8UkZsjuQK32RSrEYwcknYBzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBh+7O1wbCAToIBBAAGgwC2ooDTzcFiskEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDR2XEWOD/VVlw2PjZN4Sgv67fp6caIrZ7nZxj+ojkGDyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyHzZk/WogZTrYXkYYaDLPUQMyckqPTZvitSiIwjEMwdbXOGClkNb0PdhFYEVVkVTnEi6/UAYRaQdChym18mux2HdPtlgTeqRGFn0ScKq8BXFTrRgpSnyL4eW9bAkdXlUbdxBpk9AIdmu2TgrgLdR76B9rp/gIXhDaZ/7x/10PchNvMOZF8TREl4aaR9ALmv6ts70/idKNm5EDglsB0gKw5MNaOYL4FD9UvBSfNub2+PqVLUWZWdZCH6K5jFK+O/uaClomUwCx5RhfpuxBaOq3LgbZvbmBvUCdeL1WmrYiq8o01NJmVSeBv5QYavF4+7J0NEjI48ghJIZ0viV2+8RgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"asks 'is he stable?' which requests news they don't have yet since they're still waiting for the doctor\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 314,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 101,
+          "output_tokens_details": {
+            "thinking_tokens": 52
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "7a89dd679d009072",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

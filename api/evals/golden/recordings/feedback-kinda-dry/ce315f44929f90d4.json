@@ -1,0 +1,102 @@
+{
+  "hash": "ce315f44929f90d4",
+  "case": "feedback-kinda-dry",
+  "recorded_at": "2026-11-11T00:30:16.301Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered onl...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Last night the member shared: \"My daughter had her first piano recital tonight. She was so nervous she almost walked off, then she sat down and played the whole thing without a single mistake\". Cue answered only \"Sounds like a nice evening.\" Now they texted \"you're kind of dry, you know that?\".\n\nCue's text:\n\"\"\"Fair. That moment deserves more than \"nice evening.\"\n\nHer almost walking off and then sitting down and playing it clean, that's the whole thing right there. Seven years old and she already knows what it feels like to be scared and do it anyway. That sticks with a kid.\n\nHow are you doing with it, still buzzing from watching her pull that off?\"\"\"\n\nDoes the text own it in a few words at most and then give the reply the recital story deserved, with something of Cue's own about it (not their words handed back), WITHOUT explaining its tone or how it works, apologizing at length, or quoting its own earlier line? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Opens with just 'Fair.' then adds original insight ('she already knows what it feels like to be scared and do it anyway') without quoting or explaining itself.\"}",
+      "usage": {
+        "input_tokens": 380,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 336,
+        "output_tokens_details": {
+          "thinking_tokens": 267
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgvCMJ3ZH6EwY4mB23bfe",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErMJCsQCCBMYAipAS5sOd33O0WYFLX0krf+l5sYVUSR+66QmW2P/43pRon07uyuAE4NKFqTTvBxypTsw+61mdld86DsxGNAwTM2g6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBl+7O1wbCAToIBBAAGgwC2ooDTzcFqyIEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCJ5M4Jw5TMP6kpzNZwkCHYleSXkxZ3DJ+70nqlmEa6WyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgz7qxL9kCotrcbouFEaDId57KD3Ckg5jMlpTiIwKHe72h3lpENWl0cuBXuQE44ucniyqHijY90t3F8kGJV4/hlTQEZ84cfpNPVpsz3FKpsGLd9MUC9gKPDLlBGoZBsxD9uhNb+QibORtMAM2GKM7D0cjsVTof23FQQ50csVSoWmaaFo5OG0SB34f6q0x9RK4wQd57xHPpszOMKjxKdmU/G8qZI4aT5bzqbSAk+gCkgnCW83ZG7TT6IEvDQOlUd0Cr+gTIjh/3gc+fAYxUZGFA08EGtGzUKMjqOvMqoGb6DnNNTrm56ZaWPEy3B417UoHiUS3oIT4ONhn7fnC5G7lKk3PlMpcK/deygOAjrTggEbGk3elSX20kCIJPo+HHNcYcgVYqqnn2hL1EIjz/J65vNBSv2qa0wthS3VieYru3Yh4mvR/8Ed3ztOpUzb5kw8CicR3/2Fcxy2s/YeQ1SHgRS85W5Y8k5DAGf+SHTGS2jXe+3kSZpSZsrqpMaQXPS8ZzLqqYo7xyF0Yc+NgVgSg9VCLOXB7A22qsPKrKC0l7VItvlaKXKEVoqe37wrjRHQmIQMf1BWFMjUcJIon3lUkNflGC2eoW5pLni9KnDsRq1PSkWlJdceSNvvth4TBcdGrQCPyiq80TmUdXY8T2ZB54DMj0GgkhzAFgY8O9Bw3smmZ6YcS8mf88+UDvjAGGjthDkLSY3wCFdKS465QK6ehcZDdIPgnBepd8qlRFFJSnCwPU1ld05lf9v9bGTTmo43wj2G9lUUcqmCU5PR9uois65Cuf1DqdutEAxOvme4+kt1lVDVNoIvsUNac5mG03c8bxEb/KhnemY/CZK0Wwlc6pzfCQx1yKJX8m/8cZZysWA24Wa+7mE3M6zPDJoUoxJXD1zaIukqsEcNqod8+f6B88WKL0qYyGcd+m1rRrpf+QWTgKhDeVFrDMi+BDQkqP394UuK4w2B/EWnmQ1aNyHZtjigQjyyDMZ+zJK7N9J05lRQiavFK7PethqBlSztw/0oy62FT65xzee6aUAxVG5f4tSMi/m51QZuDQOHxl60nztzmkwH+oiRz/Di+3tm6NxrcBTTsqs+pVrg7b4lSvyS05sKn7xC3HzFBV6bNweyEL8ILaXUycbmXTvlbpvVY67v06aUpZowv979IkZpGAE="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Opens with just 'Fair.' then adds original insight ('she already knows what it feels like to be scared and do it anyway') without quoting or explaining itself.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 380,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 336,
+          "output_tokens_details": {
+            "thinking_tokens": 267
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "ce315f44929f90d4",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
