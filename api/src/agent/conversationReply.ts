@@ -601,6 +601,9 @@ ${TOOL_TURN_RULES(input.isVoice)}
       const { recordDecision } = await import("../harness/core.js");
       await recordDecision({ layer: 3, decision: "reply.timeout", userId: input.userId, outcome: "skip", action: state.sent ? "after_send" : "before_send", proposal: { message: input.resolvedContent.slice(0, 200), capMs: REPLY_CALL_TIMEOUT_MS } }).catch(() => {});
     }
+  } finally {
+    // The model run is over, however it ended (a crash included: review of #459): no late line can go after this (agent/loopTools.ts).
+    endTurn();
   }
 
   // Unlike a plain generateText completion (which always returns text), a
@@ -614,8 +617,6 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // (replyGrounding.ts send_held).
   // Stopped after two refused sends that weren't the breaker (the outbound filter, a failed send): not held, so the member still
   // gets the plain-text reply or the fallback line, never silence for a reply Co wrote (2026-10-12 audit).
-  // The model run is over: no late line can go after this (agent/loopTools.ts; review of #459), whatever goes next.
-  endTurn();
   if (state.sendStopped && !state.sendsHeld) state.sendStopped = false;
   if (!state.sent && state.sendStopped) {
     console.error(`conversationReply: sends to ${input.userId} are held; stopped without retrying`);

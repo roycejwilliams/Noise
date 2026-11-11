@@ -162,7 +162,10 @@ for (const empty of [null, "", "(empty)", "\"\""]) {
 {
   const { readFileSync } = await import("node:fs");
   const cr = readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
-  check("the reply ends the turn right after the model run, before any plain-text or fallback send; a retry runs with lateLineOff", /endTurn\(\);\n\s*if \(state\.sendStopped && !state\.sendsHeld\) state\.sendStopped = false;/.test(cr) && /lateLineOff: \(opts\.attempt \?\? 1\) > 1/.test(cr));
+  // Review of #459 (final round): a model run that throws (not a timeout) still ends the turn: endTurn() is in the finally around it,
+  // and nowhere else, so no path past the run leaves the timer armed.
+  const run = cr.slice(cr.indexOf("agentRun = await runAgent(true);") - 40, cr.indexOf("Unlike a plain generateText completion"));
+  check("the reply ends the turn in a finally around the model run (a crash, a timeout or a normal end), before any plain-text or fallback send; a retry runs with lateLineOff", /\} finally \{\n(?:\s*\/\/[^\n]*\n)*\s*endTurn\(\);\n\s*\}/.test(run) && (cr.match(/endTurn\(\);/g) ?? []).length === 1 && /lateLineOff: \(opts\.attempt \?\? 1\) > 1/.test(cr));
   check("the fallback line counts as a send in flight", /state\.sendsInFlight \+= 1;\n\s*const sent = await input\.sendCoReply\(\{ phone: input\.phoneNumber, message: fallback/.test(cr));
 }
 // ---------------------------------------------------------------- the check itself (pure)
