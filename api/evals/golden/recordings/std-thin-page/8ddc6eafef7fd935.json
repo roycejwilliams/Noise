@@ -1,7 +1,7 @@
 {
   "hash": "8ddc6eafef7fd935",
   "case": "std-thin-page",
-  "recorded_at": "2026-11-11T21:45:54.544Z",
+  "recorded_at": "2026-11-11T22:12:46.224Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -2083,18 +2083,18 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use searchEvents {\"what\":\"founder dinner or engineering meetup for hiring founding engineer\",\"when\":\"this month\",\"city\":\"San Francisco\",\"why\":\"Jordan wants something this month that'd help find a founding engineer\"}]",
+      "text": "[tool_use searchEvents {\"what\":\"founder dinner, small founder gathering\",\"when\":\"this month, October 2026\",\"city\":\"San Francisco\",\"why\":\"Jordan asked for a founder dinner this month to help find a founding engineer\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 4533,
-        "cache_read_input_tokens": 31903,
+        "cache_creation_input_tokens": 7540,
+        "cache_read_input_tokens": 28896,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 4533,
+          "ephemeral_5m_input_tokens": 7540,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 246,
+        "output_tokens": 285,
         "output_tokens_details": {
-          "thinking_tokens": 88
+          "thinking_tokens": 127
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -2102,24 +2102,24 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011CgwsdKtBgKhG47p1c1Dm3",
+        "id": "msg_011Cgwug6vPWUsfwWk2fbw1C",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "Er8FCs0CCBMYAipAwUHiceeP0fz1ge3eqYyYeCpRkEuUGNQk12S2+WqnSHpb77zj9ZTuqmVj5GxzDjC0pRrn/gp5D5VJulhUB9fFSTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBkcTT1wbCAUMIBxAAGhUBWOABYEsBDY4C+i0DTzcFx+cEJq0gBDIEEnHPJToErdu/DkIEtY8pHEoEofccrlA6WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiC1ymnMgxlVkGFlgX9Asv4mbYAOX7xhwzBc4/UHLm9gSSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzchvQs5iUNEmufz0gaDDRbNi8LmkIh8y8LEyIwqMBeJ392xauRd6Zm7PhXzkBMkJIjvF26K3yVG7mvxo2xpwvt7TodlE4VLXOPQLyVKp4CvCH3nH1toE1CT4VLJJREdf8eeqvjmr5IWya1aueMmXiAhgZenzpZxmFgS2KPwF1QGj7xERM3PZ/JDM614N+/tPzv1alXwoNOVZxoitJ91bmeTQ5v+4K4FhPxZOItLHU5Yg5vGJN2pBcE90RWKVw66EXPSqoQJI63KouNSeUFJmlbrt6SHYgIFhFI9yiiVimpT9mbcOOnpdj2foVyOfKXW2267SMmDBeMQb+TYfFnAnNRgveDu6nb73p6TreajEX6ij4QcJPrWS40SL30EAgES/KXmd+tqIpQVBcNTFteD/krJtq8877Y0UULcd86pwdTKGH/AHchqMjh0WhX/BECPvVOYUb4ocbyYmWAx3LXEHgtDuGoxPcroiAcabH0hhgB"
+            "signature": "EscGCs0CCBMYAipAUErSXy0vLZvdjcbcKz0LlMUJ//e+JXPl+DKURCfJ59JSOaXd2l+XlgQ/ZXb7x0EwO6xg8+1/fN9n9zi8VIiTPzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB3dDT1wbCAUMIBxAAGhUBWOABYEsBDY4C+i0DTzcFx+cEJq0gBDIEEnHPJToErdu/DkIEtY8pHEoEofccrlA6WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiC1ymnMgxlVkGFlgX9Asv4mbYAOX7xhwzBc4/UHLm9gSSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgwCahxAP6gy5wW4Ld4aDDP8z11EMFcjSiG+uCIwq3NXxu+pQVmOLHEA7I0Aj93Kr/ZGwD9+PTHc7pmVJ0mjBOrHxvctmdXguFpOj4AzKqYDmhIfBNmQvTuvevJWuCGUPTdtnbJc2WWZ/hpUjtWXmlLR71o+5JlbgAMDRJxP+JGLfGlgJsdD4Gi2D+1jdYKPEH9ox6QTUvhQ9bExGc+lczWA/t/Zke19bQ1ULE1roTI67amdmqHDKgh8CDx3N7xp9VEuzBm9VT4n1n4Qx+wUm7Bya660RbHFtNDsFt3eSsXQXaKZYm0+k23wopJa1quZzWkNovHPI/jkBoijCTlGuoHTZup3M0TFWYf0WKGt8btsLENW4TmaqFZuSeIr2isDlqdTzQytOG60t0v64KUXxIjT+xRe72JfBSEta3Cy8+0Wy5E/idy4fZxvfAHRs0JM9QdVzNMKDYON+AT/sLJkq7+skvBvk2eQBBW1CTu+KFmCDND8KXFBrnqQ1XkfFFV2ZgIRLm6K012Mvj+54jUUbm2O/jY/MubkrW7xayvwgbJLnERy5Bnoj/FTw2UhDqnhIs624qvUh6DhytZHWjjCIHZ9DyFY4WSkfBtErVY2xqbmPkxiTCTQAeW1qTsmmg+R+wkBCFZp8lWiB7GzkZBMXA7efqUrCvQYAQ=="
           },
           {
             "type": "tool_use",
-            "id": "toolu_01N5mP7tezYCDkeooTnWdwHa",
+            "id": "toolu_01SiqJ7oWsPSjpWr4x13KqpQ",
             "name": "searchEvents",
             "input": {
-              "what": "founder dinner or engineering meetup for hiring founding engineer",
-              "when": "this month",
+              "what": "founder dinner, small founder gathering",
+              "when": "this month, October 2026",
               "city": "San Francisco",
-              "why": "Jordan wants something this month that'd help find a founding engineer"
+              "why": "Jordan asked for a founder dinner this month to help find a founding engineer"
             },
             "caller": {
               "type": "direct"
@@ -2132,15 +2132,15 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 4533,
-          "cache_read_input_tokens": 31903,
+          "cache_creation_input_tokens": 7540,
+          "cache_read_input_tokens": 28896,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 4533,
+            "ephemeral_5m_input_tokens": 7540,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 246,
+          "output_tokens": 285,
           "output_tokens_details": {
-            "thinking_tokens": 88
+            "thinking_tokens": 127
           },
           "service_tier": "standard",
           "inference_geo": "global",

@@ -1,7 +1,7 @@
 {
   "hash": "70a6b2e567795cf9",
   "case": "checkin-nothing",
-  "recorded_at": "2026-11-11T21:39:40.043Z",
+  "recorded_at": "2026-11-11T22:12:32.008Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -2083,18 +2083,18 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"Hey. All good here, nothing on the fire right now. What's on your mind?\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Hey. Nothing pressing on my end, just here if something comes up.\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 36449,
+        "cache_creation_input_tokens": 36449,
+        "cache_read_input_tokens": 0,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 36449,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 114,
+        "output_tokens": 70,
         "output_tokens_details": {
-          "thinking_tokens": 40
+          "thinking_tokens": 0
         },
         "service_tier": "standard",
         "inference_geo": "global",
@@ -2102,21 +2102,16 @@
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cgws9oeFy9yqmi4UGK18R",
+        "id": "msg_011CgwufCrnmxgULznpmhdhK",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "EpwECs0CCBMYAipAaQ3KLOtHE+ZZrwBY8vriu9DForhs9K1eEwtDtV9oJ5YafZ1Fr6Hyxr3WUIxkMyaWOdApm4Jn/gD3r5SVQ0EHpjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBm8HT1wbCAUMIBxAAGhUBWOABLSUBvd8C+i0DTzcFMyMEJq0gBDIEEnHPJToEOE2s9EIEtY8pHEoEofccrlA6WgTZBeFWYAJoAXAD2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDQSAiuGjo4Ww0dA7CwkZdNR2lLr//FZSg8KTa5wpOYMyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzMAnuPDl/jLhM54S4aDNMJb2Y+fg9wGIC2eCIw45Gc8PtgGgyZC/nvVcIi3BxmEMPLqjJtBlZX6ndlO7PoSbmndE6u6pYiQ9uGDjH/Knx6JRn90M1fGslKz98dlzpLXJ8/hkUGef6V114G4mOlbKUq2KEo11sqQBX1IgPTerM2oOYpqgqGdmk0rgzSyajncdVxCAJNI87PN4EbjXVouuAy99OOtte+Dr+n1XW7gYQ6OAGr/kofov3klRY7/xB6ryACaF5CMROAhnI7GAE="
-          },
-          {
             "type": "tool_use",
-            "id": "toolu_014dUwNkPxVUEa3hA1umH4Bf",
+            "id": "toolu_017RsPsk6un2M1fCqA5xAFK9",
             "name": "sendReply",
             "input": {
-              "message": "Hey. All good here, nothing on the fire right now. What's on your mind?"
+              "message": "Hey. Nothing pressing on my end, just here if something comes up."
             },
             "caller": {
               "type": "direct"
@@ -2129,15 +2124,15 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 36449,
+          "cache_creation_input_tokens": 36449,
+          "cache_read_input_tokens": 0,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 36449,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 114,
+          "output_tokens": 70,
           "output_tokens_details": {
-            "thinking_tokens": 40
+            "thinking_tokens": 0
           },
           "service_tier": "standard",
           "inference_geo": "global",

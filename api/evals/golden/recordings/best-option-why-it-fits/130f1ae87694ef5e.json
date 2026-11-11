@@ -1,0 +1,102 @@
+{
+  "hash": "130f1ae87694ef5e",
+  "case": "best-option-why-it-fits",
+  "recorded_at": "2026-11-11T22:13:42.621Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member asked for the details of tonight's SGLang x NVIDIA meetup (hosted by NVIDIA, SGLang and Modal; drinks and talks with engineers working on inference and tooling; no venue listed) and why it fits them ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member asked for the details of tonight's SGLang x NVIDIA meetup (hosted by NVIDIA, SGLang and Modal; drinks and talks with engineers working on inference and tooling; no venue listed) and why it fits them (they want a founding engineer).\n\nCue's text:\n\"\"\"https://lu.ma/sglang-nvidia-test\nIt's hosted by NVIDIA, SGLang and Modal, tonight 5:30 to 8:30, drinks and talks with engineers working on inference and tooling.\n\nNo exact venue on the page yet, and who actually shows up isn't something I can promise.\"\"\"\n\nDoes the reply give the details and name which kind of benefit the event offers from its own facts (learning from people working on inference, a chance to meet an engineer to build with, or both, labelled), with its limit (who comes isn't known), rather than only restating the member's own goal?\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"only states event facts and limit ('who actually shows up isn't something I can promise') without labeling which benefit—learning vs. meeting someone to build with—applies to their founding engineer goal\"}",
+      "usage": {
+        "input_tokens": 360,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 311,
+        "output_tokens_details": {
+          "thinking_tokens": 234
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwukDQB7v2CJ1SqhJbR7",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "Eq4JCsQCCBMYAipAFk+4Lv1SPw5QyqbB4Roe37sPNX4xa3ULHR0C19h6rJrXNJKQZQSr44pmKwAVbNW/zueDaPRq3uVv1oLWMImWazIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBldHT1wbCAToIBBAAGgwC2ooDTzcFdqIEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiB/gL+wG2EdhU5o3V95hZlyPhaU36QSy8GwRZi1tNSUyyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgxPBqQeM903FKYjvAEaDFBMbbNYfF8ORwQ0CiIwTIBikJQcbXGKkuHkBDBz5M+ihqoEtQWJLzeQLFv0HxdllcrUAnFPijJ92EC2TwZfKpYGEiEr05oBnqmB3zvRYFrYbfeYRm1eOyQ7L/+XdDONhj8voM7A0eli2TSSfd/SMGzFICfhlhlTd/4+pYLjBmZOuBLWKII2SOdVa22hUSoeHyd+5TWt8s9Ot1PmGpRFtozEYNM2VD/CsdxC+xE9P8cksyNpeA2MDz+g+5DcnTWpoxOVcL2E7DsTumM526PAlKx3CGMt0g8m3nySDzy+iWmsjHaC7SIxzRb8KZRMYis5Ms5JttmStUQDI4Hthh1puRPN8RecsICOLlF5eLwMk4/R+cv2dCeXiucdyNhj51xB4SmtZgxFApu2NFppNgub92nvz2XjPo7SvnnbMrnN5lP2Kw1uaEdZtRQKa9ET6gxhkmfjgpWsMoaCORsQiXTnzlByOZwyUaXFuJT5NdM9qnmLvWZOhAeVAh5wdMF8vVpHY+TCRVhtNj1n82sP+hx5zCUztWEEM5L56n2pP0oFCL4tdhonbe3gBxEa+XfYNxF5GIlEMslU4Nlxr3Oa5YPXGzPhrE65BfWEkLYRdi1C3K8dhO+laAOMsJVLPSPqwo9zHvgJ6X+0XrlgCZEvOu8wPawX91LySYLrgVJgYgkSiiNJfiiftw5yJL6OAK6c4ZcNAzMB5GPTR5rCI8CobY5gmOz06gdkYRXHRofXw9fO4jLXbEA7+koY2HdcPX6ZexvFT6OF8sFT78hIGyKI9umvhTHISUbyhgRIWyjukF8rNTBkGmlbq9un3KQTkwJwrMTZceFRwGE4BS4T34MSo2OH3Qxwv3lhq6N0i651ttS5+n/TiunXe/HCVImpo/pHmkIqfFVPL4H4dmio5yEtH9fruqW1WoUlK19BQbLCbKajyYmBgHoQgol5O75vvCTfjFUSbHR5rgUJajZgFB6T9s5f4P7Wh3uU6mMQHe8jsLxBiPvnGoZHKc6FJE4sv4RLSlubNmrtEoZnKddm3DoEJ/T0oNPtExrWtkNXkeY2tPZQ6GTBbCNOLY3YnSr0+1pxmKC18LhQRQ75eE1NrX8F7zvjpnCX4ww+cWp3Zoy5qg7YX18y598X8H1xPxgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"only states event facts and limit ('who actually shows up isn't something I can promise') without labeling which benefit—learning vs. meeting someone to build with—applies to their founding engineer goal\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 360,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 311,
+          "output_tokens_details": {
+            "thinking_tokens": 234
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "130f1ae87694ef5e",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}

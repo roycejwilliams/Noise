@@ -1,0 +1,102 @@
+{
+  "hash": "ac5a7a1d2114925d",
+  "case": "std-thin-page",
+  "recorded_at": "2026-11-11T22:12:57.178Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: The member asked: \"Is there a founder dinner this month that would actually help me find a founding engineer?\". Cue's search found one page: \"Founders Supper\" (https://example.test/founders-supper), Wed Oct 21,...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: The member asked: \"Is there a founder dinner this month that would actually help me find a founding engineer?\". Cue's search found one page: \"Founders Supper\" (https://example.test/founders-supper), Wed Oct 21, 7pm, SoMa; it says only \"15-20 founders, dinner and conversation\"; nothing about format, who the founders are, their stage, whether anyone is hiring, or cost.\n\nCue's text:\n\"\"\"https://example.test/founders-supper\nWant me to keep looking for something more pointed, like a room where engineers show up specifically (a technical founder meetup, an infra/dev-tools event)?\"\"\"\n\nDoes Cue either make a narrowed claim (what the page does say, and plainly that the deciding thing for an engineer hunt, who is in the room, isn't on it) or decline to recommend it, WITHOUT inventing a benefit (engineers attending, intimacy, curation, hiring talk) or overselling it as a fit? Reading the whole exchange from the member's side, can they understand what it is, how it helps them, its limits and the next step without having to interrogate Cue? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"no\", \"reason\": \"Cue sends only the link and asks to keep looking, without stating what the page says ('15-20 founders, dinner and conversation') or flagging that who's in the room isn't listed, so the member can't judge fit or limits without clicking through.\"}",
+      "usage": {
+        "input_tokens": 446,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 222,
+        "output_tokens_details": {
+          "thinking_tokens": 130
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011CgwugwhHpHwzUA5b5Naek",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EtIGCsQCCBMYAipAMP/i0Q6pCvWnVDgGe07jXr/lRJf4Hj++rHeuJqpLJQ6NRmSwnNJJr0Cvq+bTpDmR5TgW7iptkkd3zaD9vqDS6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB6NDT1wbCAToIBBAAGgwC2ooDTzcFtjMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiB9uX1kbV0swZuOReSJEEXoy/REcctNGZhpEU5K6d+ajSIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzwcdweYdrRCACCxKsaDGS1NCfHPu4LATrmnCIwIuqhCj43FnXIkct1lkw24xj38yM9RNhzaKnfkaygl4IlXgcNNXGkC2NrSHNzEJdOKroDqhEtti38aJU9MsJvOzv8Q8LYoLe4JH3Lvq9byb52ZR0m88oui2frgh4YN3TGFsOJKRhBXGeOuiJqm8t/HtBkiDGBYitho/jfRh1BD/YooPwENfEMGG64E39mYNuHn7ore4zOVtDiv7esebPX59fyQS1UMLadA2ZFvWWzBJUjcGkDNtbr8793CXv+iqZ5RaqVkqIYGkBi/LDMbAcR6ECME6pj4uEB5Hq08KOecCUtW9r8WbucgwbRkYZw4B8OooXTNO4uT+PSCQS2VV9QBNKTRHOpQDdtBlWH6DJCxXSSx08jqgZFJSOAuIkuMVDhalRJxcmofHhAhu3y/qpN34sYop0QsPsrYzxKbAxeFFkaQtzPCyXzvNaj38CwbMeHlLe+hmZLAMNsFOpOly9HH3AnP5DX3mhJ3D/o1XbPM9ryDw7pBdgJ4muMZE2KNvM4XFROA//sqq0hqE3WD/qQC/rDcPLIF3cdmOZIyW4xCAPeHkaQG2IQ8AZk789ugRTCPVoqH06qgMLYAV7Jn6FDXMqtkeExmcZEhovHgT7PuyvI1VwD9CM6fZpEEqYICz3F7xk6kPynk4S0GgaO9hgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"no\", \"reason\": \"Cue sends only the link and asks to keep looking, without stating what the page says ('15-20 founders, dinner and conversation') or flagging that who's in the room isn't listed, so the member can't judge fit or limits without clicking through.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 446,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 222,
+          "output_tokens_details": {
+            "thinking_tokens": 130
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ],
+  "structure": {
+    "v": "be0153bcbe53",
+    "hash": "ac5a7a1d2114925d",
+    "wording": {},
+    "guard": {},
+    "format": []
+  }
+}
