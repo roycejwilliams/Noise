@@ -76,6 +76,7 @@ const STRIP_0607: G = { draft: DRAFT_0607, final: HONEST_0607, outcome: "strippe
 const REDRAFT_0607 = "Tonight 5:30-8:30pm, hosted by NVIDIA, SGLang and Modal: drinks and talks with engineers working on inference and tooling. The page didn't list an exact venue when I read it, so check it before you head out.\n\nWhy it fits: it's mainly a room to learn from people doing inference work, and maybe meet an engineer to build with. That second part depends on who comes, which I can't know.\n\nhttps://lu.ma/sglang-nvidia";
 {
   const t = turn(ASK_WHY, (d) => (d === DRAFT_0607 ? STRIP_0607 : { draft: d, final: d, outcome: "as_drafted", checks: [] }));
+  await t.shareLink("https://lu.ma/sglang-nvidia");
   const r1 = await t.send(DRAFT_0607);
   check("06:07: details the check stripped to the honest line aren't replaced by it: one whole redraft", r1.ok === false && /Write the whole reply again/.test(r1.error) && /never put a promise or a check-in in its place/.test(r1.error) && t.sends.length === 0, r1);
   await t.send(REDRAFT_0607);

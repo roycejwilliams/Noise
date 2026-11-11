@@ -386,7 +386,11 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   G.addMemberWorld(none, base({ searching: NOTHING, exchange: QUIET }));
   const noneId = none.facts.find((f) => M.WORLD_FACT.test(f.text))!.id;
   check("no line may claim work their world doesn't list", !claim("Still looking for a rooftop", none, noneId).pass);
-  check("with nothing running, 'nothing is running' citing their world passes", claim("Nothing's running for you right now", none, noneId).pass);
+  // Asked what's running, the true "nothing is running" stands on their world; on a check-in it never goes (2026-11-11, checkin-nothing:
+  // a check-in never reports Cue's own state, harness/replyGrounding.ts).
+  const askedSrc = { message: "is anything running for me?", recentConversation: "" };
+  check("with nothing running, 'nothing is running' citing their world passes when they asked", G.claimChecks([{ text: "Nothing's running for you right now", type: "work_status", supported: true, factId: noneId, quote: null }], none, askedSrc)[0].pass);
+  check("...and fails on a check-in", !claim("Nothing's running for you right now", none, noneId).pass);
   const allowed = [...SP.NARRATION_RULES.map((x) => x.why)];
   check("every narration rule the world line may pass still exists by name", [...M.WORLD_STATUS_WHYS].every((why) => allowed.includes(why)));
 }
