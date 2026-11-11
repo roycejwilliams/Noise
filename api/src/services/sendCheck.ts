@@ -513,7 +513,7 @@ export function captionNumbersBacked(caption: string, facts: string): { ok: bool
   if (WAITLIST_ON_RECORD.test(facts)) {
     // Joining the waitlist itself ("you can sign up for the waitlist", "registration is open for the waitlist") is the honest offer.
     const spotsTalk = t.replace(WAITLIST_JOIN, " ");
-    const open = spotsTalk.match(OPEN_SPOTS) ?? spotsTalk.match(SCARCITY);
+    const open = spotsTalk.match(OPEN_SPOTS) ?? spotsTalk.match(SCARCITY) ?? spotsTalk.match(CAPACITY_LEFT);
     if (open) problems.push(`says "${open[0]}", and its page says waitlist only (no open spots)`);
     const off = t.match(OFF_THE_WAITLIST);
     if (off) problems.push(`says "${off[0]}", and Cue can only add them to the waitlist`);
@@ -525,6 +525,8 @@ const WAITLIST_ON_RECORD = /\bwait ?list only\b/i;
 const OPEN_SPOTS = /\b(?:spots?|seats?|tickets?|places?)\s+(?:are\s+|is\s+)?(?:still\s+)?(?:open|left|available|remaining)\b|\b(?:still|plenty of|some)\s+(?:spots?|seats?|tickets?)\b|\bopen\s+(?:spots?|seats?)\b|\b(?:registration|rsvps?|signups?)\s+(?:is\s+|are\s+|'s\s+)?(?:still\s+)?open\b|\bopen for (?:registration|signups?|rsvps?)\b|\byou can (?:still )?(?:register|get in|grab a (?:spot|seat|ticket)|rsvp|sign up)\b|\b(?:not|isn't|is not) (?:full|sold out)\b/i;
 // The gap never spans a spot word ("register now, spots are open for the waitlist" keeps its spots claim), and "open" only in the
 // exact phrase "open for the waitlist", never after a spot word ("spots are open for the waitlist crowd"; review of #452).
+// Room left as a number ("room for 20 more", "20 more", "20 spots"; final review of #452). "a 20-minute walk" isn't one.
+const CAPACITY_LEFT = /\broom for\s+\d[\d,]*\b|\b\d[\d,]*\s+more\b|\b\d[\d,]*\s+(?:open\s+)?(?:spots?|seats?|tickets?|places?)\b/i;
 const WAITLIST_JOIN = /\b(?:register|sign(?:\s|-)?up|join|rsvp|get on)\b(?:(?!\b(?:spots?|seats?|tickets?|places?)\b)[^.!?\n]){0,30}?\b(?:for|on|to)\s+(?:the\s+)?wait ?list\b|(?<!\b(?:spots?|seats?|tickets?|places?)\s+(?:are\s+|is\s+)?(?:still\s+)?)\bopen for the wait ?list\b/gi;
 const OFF_THE_WAITLIST = /\b(?:get|move|bump|pull)\s+(?:you|them)\s+off\s+(?:the\s+)?wait ?list\b|\b(?:get|guarantee)\s+(?:you|them)\s+(?:a\s+)?(?:spot|seat|in)\b/i;
 
