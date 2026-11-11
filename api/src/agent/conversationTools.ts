@@ -450,7 +450,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], knownShown: false, knownChanged: false, processorLineSent: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, pastLinkedFirst: false, moveNudged: false, findsReads: 0, workSinceSend: false, sendsInFlight: 0, extraSendsRefused: 0 };
   // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
   let turnLoop: LoopState | null = null;
   // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
@@ -506,6 +506,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // set off a second reply (2026-10-01 code review).
   const logDelivered = (content: string) =>
     writeMemory(ctx.userId, "text_exchange", content).catch((err: any) => console.error("conversationTools: logging a sent text failed (it did send):", err?.message ?? err));
+  // The past finds their message asks for again that this text names with no link gone this turn (agent/findGuards.ts unlinkedPastFinds).
+  const pastUnlinked = (text: string) => {
+    const referents = ctx.turn?.referents ?? (ctx.dryRun ? ctx.dryRunReferents ?? [] : []);
+    return referents.length ? unlinkedPastFinds(text, ctx.resolvedContent ?? "", referents.map((x: any) => ({ name: String(x.name ?? ""), url: x.url ?? null })), [...state.sentMessages, ...state.pendingLinks, ...(turnLoop?.shared ?? [])]) : [];
+  };
   const flushLinks = async () => {
     const queued = state.pendingLinks.splice(0, state.pendingLinks.length);
     // Never the same link twice in one turn, however often it's asked for.
@@ -603,8 +608,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         // A past find they're asking for again, named with no link (Fix 4, 2026-11-10): the same once-a-turn redraft, toward its link.
         if (canRedraft && !state.findsNudged) {
-          const referents = ctx.turn?.referents ?? (ctx.dryRun ? ctx.dryRunReferents ?? [] : []);
-          const past = referents.length ? unlinkedPastFinds(draft, ctx.resolvedContent ?? "", referents.map((x: any) => ({ name: String(x.name ?? ""), url: x.url ?? null })), [...state.sentMessages, ...state.pendingLinks, ...(turnLoop?.shared ?? [])]) : [];
+          const past = pastUnlinked(draft);
           if (past.length) {
             state.findsNudged = true;
             if (!ctx.dryRun) {
@@ -660,6 +664,21 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // What Cue knows was shown this turn (whatCoKnows): the processor line (approved disclosure) is its last paragraph, word for word,
         // added here after the check, once a turn. Never on a turn that called correctWhatCoKnows (a correction or removal turn), applied or not.
         if (state.knownShown && !state.knownChanged && !state.processorLineSent) message = (await import("../services/whatCoKnows.js")).withProcessorLine(message);
+        // No redraft can follow (the plain text sent after the loop ended, the last step or the last seconds): a past find they asked for
+        // again that this names with no link gets its link first, as its own text, then this as its caption (2026-11-10 quick_wine: the
+        // plain-text fallback named "The Cellar on Fell" and the link never went). Only a link on file, never when they said a link was
+        // wrong (unlinkedPastFinds), never twice (flushLinks), once a turn, never on a voice note. No model call.
+        if (!canRedraft && !ctx.isVoice && !state.pastLinkedFirst) {
+          const onFile = pastUnlinked(message).filter((p) => ctx.facts?.text().includes(p.url));
+          if (onFile.length) {
+            state.pastLinkedFirst = true;
+            state.pendingLinks.push(...onFile.map((p) => p.url));
+            await flushLinks();
+            const went = onFile.filter((p) => state.sentMessages.includes(p.url));
+            for (const p of went) ctx.facts?.add("did_this_turn", `Sent the link ${p.url} as its own message.`);
+            if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "reply.finds_guard", userId: ctx.userId, outcome: went.length ? "act" : "skip", action: "linked_sent_first", proposal: { draft: message.slice(0, 300), links: went.length } }).catch(() => {});
+          }
+        }
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
         // Texted in beats: each paragraph its own message (services/beats.ts).
         // A voice note stays one clip.
