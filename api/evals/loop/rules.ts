@@ -48,8 +48,10 @@ check("web queries run in parallel and the budget counts queries, not calls", /q
 check("each search checks its results' pages at the same time", /const pages = await Promise\.all\(raws\.map\(\(raw\) => pickPage/.test(src("services/taskWeb.ts")));
 check("tools stop at the time budget and say to answer with what's there", /Out of time for this turn: share what you have and answer them/.test(lt) && L.LOOP_BUDGET.seconds === 75);
 check("the reply's step limit is the loop's budget", /stepCountIs\(LOOP_BUDGET\.steps\)/.test(src("agent/conversationReply.ts")));
-// (Royce, 2026-10-17: never a stock line like "on it"; evals/reply/usesItsFinds.ts tests it.)
-check("the first search can send a short holding line of its own, once, never a stock one", /if \(!line\?\.trim\(\) \|\| loop\.holdSent \|\| state\.sent \|\| stockLine\(line, theirWords\(\)\)\) return;/.test(lt));
+// (Royce, 2026-11-11: no "looking" text when a search starts, the tapback is the acknowledgement; one optional late line only.
+// evals/reply/lateLine.ts drives it.)
+check("no search tool asks for a line while it searches; the loop guide no longer mentions one", !/whileLooking/.test(lt.replace(/\/\/[^\n]*/g, "")) && !/whileLooking/.test(L.LOOP_GUIDE));
+check("the late line is armed by a search and checked before it goes", (lt.match(/armLateLine\(\);/g) ?? []).length >= 4 && /if \(problem \|\| !draft \|\| !lateLineOpen\(\)\) return;/.test(lt));
 const sb = src("routes/sendblue.ts");
 check("the reply gets the guide when they want something found, and the working notes", /if \(decision\.wantsRecommendation && hasText\) addInstruction\(replyFacts, LOOP_GUIDE\);/.test(sb) && /loadBrief\(user\.id\)\.then\(describeNotes\)/.test(sb) && /if \(timeline\) addFact\(replyFacts, "known", timeline\.fact\)/.test(sb) && /if \(notes\) addFact\(replyFacts, "ongoing", notes\)/.test(sb));
 
