@@ -3420,7 +3420,9 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
 
   // Where their finds come from, said once (Royce, 2026-10-15; in Cue's own words since 2026-11-11): the composer was given the note
   // (whereFor above) and its caption or closing checked for it; it's marked said once delivered.
-  const whereSaid = composed && !opts.dryRun ? composed.included.map((b) => b.where).find(Boolean) ?? null : null;
+  // Only when the clause (or the keep-or-switch closing) is really in it (bundleComposer.ts whereWent).
+  const whereSaid = composed && !opts.dryRun ? (await import("./bundleComposer.js")).whereWent(composed) : null;
+  const whereLine = whereSaid ? (whereSaid.kind === "moved" ? composed!.closing : composed!.perItem[composed!.included.findIndex((b) => b.where)]?.messages.slice(-1)[0]) ?? null : null;
 
   // Does it belong now (harness/momentFit.ts, Royce 2026-11-07): an optional check-in is judged against their latest texts and call
   // (the stamped exchange the draft is written from, and the latest call, always in view). Code guards the verdict: wait re-queues it
@@ -3765,7 +3767,7 @@ async function dispatchForUserInScope(registry: ProactiveRegistry, userId: strin
   }
   // Co's record of what it did (services/coFacts.ts).
   if (result.delivered.length) await recordProactiveText(userId, c.type, result.delivered.join(" "), c.id);
-  if (whereSaid && result.delivered.length) {
+  if (whereSaid && whereLine && result.delivered.includes(whereLine)) {
     await import("../services/wantPlace.js").then((W) => W.markNoted(userId, whereSaid.key)).catch((err: any) => console.error("proactive: marking where their finds come from as said failed (non-fatal):", err?.message ?? err));
   }
   // The stopped-looking line, told once it was delivered (services/askRetire.ts).

@@ -157,5 +157,28 @@ const days = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
   check("an embedding read that fails: the old spread, never nothing", down.length === 40);
 }
 
+// ---------------------------------------------------------------- final review
+{
+  check("placeSaid: any comma part, or its main word", B.placeSaid("A dinner in the Mission, looked there for this one", "Mission District, San Francisco") && B.placeSaid("Looked around the Bay for this", "Bay Area") && B.placeSaid("in San Francisco", "Mission District, San Francisco"));
+  check("placeSaid: a regional name it doesn't know isn't counted (and never fails the bundle)", !B.placeSaid("Looked around the East Bay", "Oakland"));
+  const item = { candidate: { id: "c1" } as any, item: { facts: {}, rules: { maxSentences: 3, maxChars: 300 }, url: "https://x.example/e", grounding: "", name: "Builders Night", fromProfile: true, shortNotice: false } as any, pick: null, again: false };
+  const inferredW = { key: "ask:a", place: "Oakland", kind: "inferred" as const };
+  const inp = { firstName: "Jordan", items: [{ ...item, where: inferredW }], set: null, leadWhy: null, memberBlock: null, feeling: null, thread: "", recent: "", threadLive: false } as any;
+  const c = "Builders Night, around the East Bay.";
+  const stub = { calls: 0, model: async () => (stub.calls++, JSON.stringify({ opening: null, items: [{ n: 1, caption: c }], closing: null })) };
+  const r: any = await B.composeBundle(inp, { model: stub.model });
+  check("a caption the place check can't read goes after one redraft, never failing the bundle", "messages" in r && r.messages[1] === c && stub.calls === 2, r);
+  check("... and the search isn't marked as told (it's said on a later find)", B.whereWent(r) === null);
+  const ok: any = { included: [{ ...item, where: inferredW }], perItem: [{ candidate: item.candidate, messages: ["https://x.example/e", "Builders Night, looked around Oakland."] }], closing: null };
+  check("marked as told only when the caption carrying the clause went", B.whereWent(ok)?.kind === "inferred");
+  const movedW = { key: "ask:b", place: "SF", kind: "moved" as const, home: "New York" };
+  check("a move is marked asked only when the keep-or-switch closing went", B.whereWent({ included: [{ ...item, where: movedW }], perItem: [{ candidate: item.candidate, messages: ["x"] }], closing: null } as any) === null && B.whereWent({ included: [{ ...item, where: movedW }], perItem: [{ candidate: item.candidate, messages: ["x"] }], closing: "Keep the SF search or switch it to NYC?" } as any)?.kind === "moved");
+  const today = "2026-11-11";
+  check("tripFrom: a place only mentioned isn't a trip", WH.tripFrom({ place: "NYC", quote: "Investors in NYC keep asking for decks", from: null, until: null }, "Investors in NYC keep asking for decks", today) === null);
+  for (const q of ["I'm in NYC", "we're in Austin till Friday", "visiting Boston this week", "heading to NYC Thu-Sun", "in Denver this weekend"]) check(`tripFrom: "${q}" is being there`, !!WH.tripFrom({ place: q.match(/NYC|Austin|Boston|Denver/)![0], quote: q, from: null, until: null }, q, today), q);
+  const local = new Date(2026, 10, 12);
+  check("tripRowCurrent reads a DATE by its own calendar day (not through UTC)", WH.tripRowCurrent({ place: "NYC", quote: "I'm in NYC", read_at: NOW, window_start: local, window_end: new Date(2026, 10, 15) }, "2026-11-12")?.place === "NYC" && WH.tripRowCurrent({ place: "NYC", quote: "I'm in NYC", read_at: NOW, window_start: local, window_end: new Date(2026, 10, 15) }, "2026-11-11") === null);
+}
+
 console.log(`whereabouts: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

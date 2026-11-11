@@ -38,6 +38,19 @@ export type PickWhy = { whyMember: string; whyNow: string } | null;
 // where: say where it searched, once (services/wantPlace.ts whereNoteFor).
 export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; againWhy?: string | null; tierPick?: boolean; where?: import("../services/wantPlace.js").WhereNote | null };
 
+// Pure: whether the composed message actually says where it looked (the caption, for an inferred place) or asks keep-or-switch (the
+// closing, after a move): only then is the search marked as told (proactive.ts).
+export function whereWent(c: Pick<Composed, "included" | "perItem" | "closing">): import("../services/wantPlace.js").WhereNote | null {
+  const idx = c.included.findIndex((b) => b.where);
+  if (idx < 0) return null;
+  const w = c.included[idx].where!;
+  if (w.kind === "inferred") {
+    const caption = c.perItem[idx]?.messages[c.perItem[idx].messages.length - 1] ?? "";
+    return placeSaid(caption, w.place) ? w : null;
+  }
+  return c.closing && placeSaid(c.closing, w.place) && placeSaid(c.closing, w.home) ? w : null;
+}
+
 // Pure: the note a thing carries about where Cue searched for it (Royce, 2026-11-11). Cue phrases it; the note only says what's true.
 export function whereNote(w: import("../services/wantPlace.js").WhereNote | null | undefined): string {
   if (!w) return "";
@@ -265,16 +278,25 @@ const GENERIC_PEOPLE = new Set("someone people folk person other others friend n
 
 // Pure: the caption names the place (its first word, or a short form: "SF" for San Francisco, "NYC" for New York).
 const SHORT_FORMS: Record<string, string[]> = { "san francisco": ["sf", "san fran", "the city"], "new york": ["nyc", "ny", "new york city", "manhattan", "brooklyn"], "los angeles": ["la", "l.a."], sacramento: ["sac"], washington: ["dc", "d.c."] };
+// Any comma part of the place counts, and a part's main word ("Mission District, San Francisco" is said by "the Mission"; "Bay Area" by
+// "around the Bay"). A regional name for a city ("East Bay" for Oakland) isn't known here: that check never fails a bundle (composeBundle
+// drops it after the first redraft).
+const AREA_WORDS = new Set(["district", "area", "county", "city", "region", "neighborhood", "valley"]);
 export function placeSaid(text: string, place: string): boolean {
-  const t = ` ${text.toLowerCase().replace(/[^a-z0-9. ]+/g, " ")} `;
-  const p = place.toLowerCase().split(",")[0].trim();
-  const forms = [p, ...(SHORT_FORMS[p] ?? []), ...Object.entries(SHORT_FORMS).filter(([, v]) => v.includes(p)).map(([k]) => k)];
-  return forms.some((f) => t.includes(` ${f} `) || t.includes(` ${f}.`) || t.includes(` ${f},`) || t.includes(` ${f}?`) || t.includes(` ${f}'`));
+  const t = ` ${text.toLowerCase().replace(/[^a-z0-9. ]+/g, " ").replace(/\s+/g, " ")} `;
+  const parts = place.toLowerCase().split(",").map((x) => x.trim()).filter(Boolean);
+  const forms = parts.flatMap((p) => {
+    const main = p.split(/\s+/).filter((w) => !AREA_WORDS.has(w));
+    return [p, ...(main.length && main.join(" ") !== p ? [main.join(" ")] : []), ...(SHORT_FORMS[p] ?? []), ...Object.entries(SHORT_FORMS).filter(([, v]) => v.includes(p)).map(([k]) => k)];
+  });
+  return forms.some((f) => f.length >= 2 && [" ", ".", ",", "?", "'"].some((end) => t.includes(` ${f}${end}`)));
 }
 
 export type Checked = { captions: Map<number, string>; problems: { at: "opening" | "closing" | number | "bundle"; why: string }[] };
 // Pure: every part of the draft against its rules. Caption numbers are 1-based, matching THE THINGS.
-export function checkComposed(d: Draft, i: ComposeInput): Checked {
+// o.lenient: past the first redraft, the where-it-looked checks no longer hold the bundle (a missing clause never fails it; the search
+// just isn't marked as told, so it's said on a later find).
+export function checkComposed(d: Draft, i: ComposeInput, o: { lenient?: boolean } = {}): Checked {
   const problems: Checked["problems"] = [];
   const captions = new Map<number, string>();
   const allFacts = Object.assign({}, ...i.items.map((b) => b.item.facts));
@@ -301,7 +323,7 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if (URGENT_APPLY.test(c) && !b.item.applyRoute) problems.push({ at: n, why: `thing ${n}'s caption pushes them to apply or sign up now, and no way in with a state that makes now matter was read; say how it works from its facts, or leave that out` });
     const pasted = goalPasted(c, b.item.record ?? "", [i.memberBlock ?? "", b.item.grounding].join("\n"));
     if (pasted.length) problems.push({ at: n, why: `thing ${n}'s caption says they could meet or find ${pasted.map((w) => `"${w}"`).join(", ")} there, and its facts never mention that: say what its page supports (who it's for, what happens), and the limit` });
-    if (b.where?.kind === "inferred" && !placeSaid(c, b.where.place)) problems.push({ at: n, why: `thing ${n}'s caption doesn't say where Cue looked (around ${b.where.place}, since they didn't name a place); add it as a short clause` });
+    if (!o.lenient && b.where?.kind === "inferred" && !placeSaid(c, b.where.place)) problems.push({ at: n, why: `thing ${n}'s caption doesn't say where Cue looked (around ${b.where.place}, since they didn't name a place); add it as a short clause` });
     if (PRESUMED_GOING.test(c)) problems.push({ at: n, why: `thing ${n}'s caption presumes they're going; nothing says they are (a request or a registration isn't going): say it as "if you go"` });
     if (GOAL_RESTATED.test(c)) problems.push({ at: n, why: `thing ${n}'s caption gives their goal back as the reason; say what the thing offers toward it, from its facts` });
     captions.set(n, c);
@@ -335,7 +357,7 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
   }
   // A moved search's question is the closing, and names both places.
   const moved = i.items.map((b) => b.where).find((w) => w?.kind === "moved") as Extract<import("../services/wantPlace.js").WhereNote, { kind: "moved" }> | undefined;
-  if (moved && (!d.closing || !placeSaid(d.closing, moved.place) || !placeSaid(d.closing, moved.home))) problems.push({ at: "closing", why: `they moved to ${moved.home}: the closing asks once whether to keep this search on ${moved.place} or switch it to ${moved.home}` });
+  if (!o.lenient && moved && (!d.closing || !placeSaid(d.closing, moved.place) || !placeSaid(d.closing, moved.home))) problems.push({ at: "closing", why: `they moved to ${moved.home}: the closing asks once whether to keep this search on ${moved.place} or switch it to ${moved.home}` });
   if (d.closing) {
     const q = tidy(d.closing);
     if (!/\?\s*$/.test(q) || (q.match(/\?/g) ?? []).length > 1) problems.push({ at: "closing", why: "the closing must be one question" });
@@ -420,7 +442,7 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
       last = raw.slice(0, 800);
       continue;
     }
-    const checked = checkComposed(d, now);
+    const checked = checkComposed(d, now, { lenient: calls >= 2 });
     const blocking = checked.problems.filter((p) => p.at !== "opening" && p.at !== "closing");
     const finalCall = calls >= BUNDLE_LIMITS.calls;
     if (blocking.length || (!finalCall && checked.problems.length)) {
